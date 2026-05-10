@@ -167,19 +167,36 @@ impl PlatformClient for GitHubClient {
     }
     
     fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
-        let output = std::process::Command::new("gh")
-            .args(&["repo", "delete", &format!("{}/{}", owner, repo), "--yes"])
-            .output();
-        
-        match output {
-            Ok(out) if out.status.success() => {
+        // Native API call — no longer requires `gh` to be installed.
+        // Permissions: requires the token to have the `delete_repo` scope.
+        let url = format!("https://api.github.com/repos/{}/{}", owner, repo);
+        let resp = reqwest::blocking::Client::new()
+            .delete(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "torii-cli")
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
+
+        match resp.status().as_u16() {
+            204 => {
                 println!("✅ Repository deleted from GitHub");
                 Ok(())
             }
-            _ => {
-                Err(ToriiError::InvalidConfig(
-                    "Failed to delete repository. Install GitHub CLI (gh)".to_string()
-                ))
+            403 => Err(ToriiError::InvalidConfig(format!(
+                "GitHub refused the delete (HTTP 403). Token needs the `delete_repo` scope; \
+                 add it at https://github.com/settings/tokens or use a fine-grained token \
+                 with `Administration: write` on `{}/{}`.", owner, repo
+            ))),
+            404 => Err(ToriiError::InvalidConfig(format!(
+                "GitHub returned 404 for `{}/{}` — repo doesn't exist or token can't see it.",
+                owner, repo
+            ))),
+            other => {
+                let msg = resp.text().unwrap_or_default();
+                Err(ToriiError::InvalidConfig(format!(
+                    "GitHub delete failed (HTTP {}): {}", other, msg
+                )))
             }
         }
     }
@@ -375,6 +392,9 @@ impl PlatformClient for GitLabClient {
         // path → id via the groups API. Personal projects omit it.
         let client = reqwest::blocking::Client::new();
         if let Some(ns) = namespace {
+            // GitLab namespaces can be groups (org-style) OR users (personal).
+            // Try /groups/{ns} first; on 404 fall back to /users?username={ns}
+            // because groups/<username> always 404s.
             let ns_encoded = crate::url::encode(ns);
             let group_url = format!("{}/groups/{}", self.base_url, ns_encoded);
             let group_resp = client
@@ -382,17 +402,44 @@ impl PlatformClient for GitLabClient {
                 .header("PRIVATE-TOKEN", token)
                 .send()
                 .map_err(|e| ToriiError::InvalidConfig(format!("GitLab group lookup failed: {}", e)))?;
-            if !group_resp.status().is_success() {
+
+            let ns_id = if group_resp.status().is_success() {
+                let group: serde_json::Value = group_resp.json()
+                    .map_err(|e| ToriiError::InvalidConfig(format!("GitLab group parse: {}", e)))?;
+                group["id"].as_i64().ok_or_else(|| ToriiError::InvalidConfig(
+                    format!("GitLab group `{}` returned no id", ns)
+                ))?
+            } else if group_resp.status().as_u16() == 404 {
+                // Try as a user. /users?username=… returns an array.
+                let user_url = format!("{}/users?username={}", self.base_url, ns_encoded);
+                let user_resp = client
+                    .get(&user_url)
+                    .header("PRIVATE-TOKEN", token)
+                    .send()
+                    .map_err(|e| ToriiError::InvalidConfig(format!("GitLab user lookup failed: {}", e)))?;
+                if !user_resp.status().is_success() {
+                    return Err(ToriiError::InvalidConfig(format!(
+                        "GitLab namespace `{}` is neither a group nor a user", ns
+                    )));
+                }
+                let users: serde_json::Value = user_resp.json()
+                    .map_err(|e| ToriiError::InvalidConfig(format!("GitLab user parse: {}", e)))?;
+                let user = users.as_array()
+                    .and_then(|a| a.first())
+                    .ok_or_else(|| ToriiError::InvalidConfig(
+                        format!("GitLab namespace `{}` not found", ns)
+                    ))?;
+                user["namespace_id"].as_i64()
+                    .or_else(|| user["id"].as_i64())
+                    .ok_or_else(|| ToriiError::InvalidConfig(
+                        format!("GitLab user `{}` returned no namespace_id", ns)
+                    ))?
+            } else {
                 let err = group_resp.text().unwrap_or_default();
                 return Err(ToriiError::InvalidConfig(format!(
-                    "GitLab group `{}` not found or inaccessible: {}", ns, err
+                    "GitLab namespace `{}` lookup failed: {}", ns, err
                 )));
-            }
-            let group: serde_json::Value = group_resp.json()
-                .map_err(|e| ToriiError::InvalidConfig(format!("GitLab group parse: {}", e)))?;
-            let ns_id = group["id"].as_i64().ok_or_else(|| ToriiError::InvalidConfig(
-                format!("GitLab group `{}` returned no id", ns)
-            ))?;
+            };
             body["namespace_id"] = serde_json::json!(ns_id);
         }
 

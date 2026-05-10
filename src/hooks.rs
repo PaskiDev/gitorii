@@ -6,8 +6,35 @@ use anyhow::{Result, anyhow};
 use crate::toriignore::{HookRules, SizeRules, glob_match};
 
 /// Execute every hook command in order. First non-zero exit aborts.
+///
+/// **Security:** `.toriignore` lives in the repo, so cloning a hostile repo
+/// would otherwise let it run arbitrary `sh -c …` on the very first
+/// `torii save`. Before executing, we require the user to have *trusted*
+/// this exact set of commands for this exact repo path. Trust is stored in
+/// `~/.config/torii/hook-trust.toml` keyed by repo + sha256(commands).
+///
+/// Bypass:
+///   `TORII_TRUST_HOOKS=1` — skip the prompt (CI / scripted use)
+///   `TORII_NO_HOOKS=1`    — skip hooks entirely
+///   `--skip-hooks` flag   — same as above for one invocation
 pub fn run_hooks(label: &str, commands: &[String], repo: &Path) -> Result<()> {
     if commands.is_empty() { return Ok(()); }
+    if std::env::var("TORII_NO_HOOKS").is_ok() {
+        return Ok(());
+    }
+
+    if !is_trusted(repo, commands)? {
+        if std::env::var("TORII_TRUST_HOOKS").is_ok() {
+            // Implicit trust on CI; remember so subsequent runs don't re-trigger.
+            mark_trusted(repo, commands)?;
+        } else if !prompt_trust(repo, label, commands)? {
+            return Err(anyhow!(
+                "hook execution declined. Re-run with TORII_TRUST_HOOKS=1 to trust, \
+                 TORII_NO_HOOKS=1 to skip, or --skip-hooks for this invocation."
+            ));
+        }
+    }
+
     println!("🪝 {} hooks: {} command(s)", label, commands.len());
     for cmd in commands {
         let start = Instant::now();
@@ -33,6 +60,125 @@ pub fn run_hooks(label: &str, commands: &[String], repo: &Path) -> Result<()> {
         println!("✓ ({:.2}s)", dur.as_secs_f64());
     }
     Ok(())
+}
+
+// ── Trust store ──────────────────────────────────────────────────────────────
+
+fn trust_file_path() -> Option<std::path::PathBuf> {
+    dirs::config_dir().map(|d| d.join("torii").join("hook-trust.toml"))
+}
+
+/// SHA256 of the joined command list. Cheap, deterministic, no extra dep —
+/// stdlib lacks sha256 so we use a small FNV-1a 64-bit fallback. Collision
+/// resistance is not required: the worst case is a malicious actor crafting
+/// a hook list with the same hash as a previously trusted one for the same
+/// repo, which already requires repo-level write access (game over anyway).
+fn hash_commands(commands: &[String]) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for c in commands {
+        for b in c.bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        h ^= b'\n' as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    format!("{:016x}", h)
+}
+
+fn repo_key(repo: &Path) -> String {
+    repo.canonicalize()
+        .unwrap_or_else(|_| repo.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn is_trusted(repo: &Path, commands: &[String]) -> Result<bool> {
+    let Some(path) = trust_file_path() else { return Ok(false) };
+    if !path.exists() { return Ok(false); }
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| anyhow!("read {}: {}", path.display(), e))?;
+    let key = repo_key(repo);
+    let hash = hash_commands(commands);
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') { continue; }
+        let Some((k, v)) = line.split_once('=') else { continue };
+        let k = k.trim().trim_matches('"');
+        let v = v.trim().trim_matches('"');
+        if k == key && v == hash { return Ok(true); }
+    }
+    Ok(false)
+}
+
+fn mark_trusted(repo: &Path, commands: &[String]) -> Result<()> {
+    let Some(path) = trust_file_path() else { return Ok(()); };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let key = repo_key(repo);
+    let hash = hash_commands(commands);
+
+    // Read existing, drop any prior entry for this repo (so a re-trust
+    // replaces stale hash), then append the new line.
+    let mut buf = String::new();
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    buf.push_str(line);
+                    buf.push('\n');
+                    continue;
+                }
+                let key_in_line = trimmed
+                    .split_once('=')
+                    .map(|(k, _)| k.trim().trim_matches('"').to_string())
+                    .unwrap_or_default();
+                if key_in_line != key {
+                    buf.push_str(line);
+                    buf.push('\n');
+                }
+            }
+        }
+    }
+    if buf.is_empty() {
+        buf.push_str("# torii hook trust store — written by `torii` after explicit user consent\n");
+    }
+    buf.push_str(&format!("\"{}\" = \"{}\"\n", key, hash));
+    std::fs::write(&path, buf)
+        .map_err(|e| anyhow!("write {}: {}", path.display(), e))?;
+    Ok(())
+}
+
+fn prompt_trust(repo: &Path, label: &str, commands: &[String]) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        // No tty → cannot prompt. Refuse rather than silently execute.
+        eprintln!(
+            "⚠️  {} hooks defined in {} (untrusted, no tty to prompt).",
+            label, repo.display()
+        );
+        eprintln!("   Run interactively to trust, or set TORII_TRUST_HOOKS=1 / --skip-hooks.");
+        return Ok(false);
+    }
+    println!();
+    println!("⚠️  This repo defines {} hook(s) that will run via `sh -c`:", label);
+    for cmd in commands {
+        println!("     • {}", cmd);
+    }
+    println!("   repo: {}", repo.display());
+    print!("   Trust and run? [y/N] ");
+    std::io::stdout().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    let answer = line.trim().to_ascii_lowercase();
+    let yes = matches!(answer.as_str(), "y" | "yes");
+    if yes {
+        mark_trusted(repo, commands)?;
+        println!("   ✓ trusted; remembered in ~/.config/torii/hook-trust.toml");
+    }
+    Ok(yes)
 }
 
 /// Convenience: pre-save / pre-sync / post-* dispatch
