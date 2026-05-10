@@ -45,6 +45,55 @@ subject_max_length = 72
 # require_trailers = ["Signed-off-by:"]
 "#;
 
+/// True when the string looks like something `git clone` would accept as
+/// a URL or local path, distinguishing it from a platform shorthand
+/// (`github`, `gitlab`, …) used in `torii clone <plat> <user/repo>`.
+///
+/// Accepted shapes:
+///   http://… https://… git://… ssh://… ftp(s)://… file://…
+///   git@host:owner/repo.git           (scp-like SSH)
+///   user@host:owner/repo.git          (any scp-like)
+///   /absolute/path/to/repo            (Unix abs)
+///   ./relative/path  ../sibling       (relative explicit)
+///   C:\… or C:/…                      (Windows abs)
+fn looks_like_clone_url(s: &str) -> bool {
+    // Explicit scheme — anything before `://` and at least one alphanum.
+    if let Some(idx) = s.find("://") {
+        if idx > 0 && s[..idx].chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+            return true;
+        }
+    }
+    // Local paths.
+    if s.starts_with('/') || s.starts_with("./") || s.starts_with("../") {
+        return true;
+    }
+    // Windows drive (C:\ or C:/).
+    let bytes = s.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'/' || bytes[2] == b'\\')
+    {
+        return true;
+    }
+    // scp-like: <user>@<host>:<path>. Requires '@' before ':' with both
+    // sides non-empty. Excludes IPv6-ish patterns.
+    if let Some(at) = s.find('@') {
+        if at > 0 {
+            if let Some(colon) = s[at + 1..].find(':') {
+                let host = &s[at + 1..at + 1 + colon];
+                let path = &s[at + 1 + colon + 1..];
+                if !host.is_empty() && !path.is_empty()
+                    && !host.contains('/') && !host.contains('\\')
+                {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 fn parse_account_type(s: &str) -> Result<AccountType> {
     match s.to_lowercase().as_str() {
         "user" | "u" => Ok(AccountType::User),
@@ -1536,7 +1585,16 @@ impl Cli {
                 //   torii clone <url> [<path>]
                 // The trailing path arg silently used to be ignored, surprising
                 // users coming from `git clone <url> <path>`.
-                let url = if !args.is_empty() {
+                //
+                // Disambiguation: if `source` already looks like a URL/path
+                // (http(s)://, git://, ssh://, file://, /abs, ./rel,
+                // user@host:path), treat the first positional `args[0]` as
+                // the destination — NOT as user/repo. Without this guard,
+                // `torii clone file:///tmp/foo dest` errored with
+                // "Unknown platform 'file:///tmp/foo'".
+                let source_is_url = looks_like_clone_url(source);
+
+                let url = if !args.is_empty() && !source_is_url {
                     // Shorthand: torii clone <platform> <user/repo>
                     let platform = source;
                     let user_repo = &args[0];
@@ -1573,45 +1631,30 @@ impl Cli {
                     } else {
                         format!("https://{}/{}.git", https_host, user_repo)
                     }
-                } else if source.starts_with("http") || source.starts_with("git@") {
+                } else if looks_like_clone_url(source) {
                     source.clone()
                 } else {
                     anyhow::bail!(
-                        "Usage:\n  torii clone <platform> <user/repo>        e.g. torii clone github user/repo\n  torii clone <platform> <user/repo> --protocol https\n  torii clone <url>                          e.g. torii clone https://github.com/user/repo.git"
+                        "Usage:\n  torii clone <platform> <user/repo>        e.g. torii clone github user/repo\n  torii clone <platform> <user/repo> --protocol https\n  torii clone <url>                          e.g. torii clone https://github.com/user/repo.git\n  torii clone <local-path-or-file:///url>    e.g. torii clone /tmp/source.git"
                     )
                 };
 
                 // Resolve destination. Precedence:
                 //   1. -d / --directory flag
                 //   2. trailing positional arg (git-style):
-                //        torii clone <plat> <user/repo> <path>
-                //        torii clone <url> <path>
+                //        torii clone <plat> <user/repo> <path>   → args[1]
+                //        torii clone <url> <path>                → args[0]
                 //   3. derive from URL (default)
-                let positional_dest: Option<&str> = if !args.is_empty() {
-                    // Shorthand form: args[0] is user/repo, args[1] is dest
+                let positional_dest: Option<&str> = if source_is_url {
+                    // URL form: first positional after the URL is the dest.
+                    args.first().map(|s| s.as_str())
+                } else if !args.is_empty() {
+                    // Shorthand: args[0] is user/repo, args[1] is dest.
                     args.get(1).map(|s| s.as_str())
                 } else {
-                    // URL form: source is the URL, args[0] would be dest
-                    // but `args` is empty here by definition. The full-URL
-                    // codepath below handles its own positional dest.
                     None
                 };
-                let url_form_dest: Option<&str> = if args.is_empty()
-                    && (source.starts_with("http") || source.starts_with("git@"))
-                {
-                    // Caller may have typed `torii clone <url> <path>`.
-                    // clap captured <url> as `source`; <path>, if present,
-                    // didn't fit any positional and would have errored
-                    // earlier — so this branch only fires when the user
-                    // used `-d`. Kept for symmetry / future expansion.
-                    None
-                } else {
-                    None
-                };
-                let target_dir = directory
-                    .as_deref()
-                    .or(positional_dest)
-                    .or(url_form_dest);
+                let target_dir = directory.as_deref().or(positional_dest);
                 GitRepo::clone_repo(&url, target_dir)?;
 
                 let dir_name = target_dir.unwrap_or_else(|| {
