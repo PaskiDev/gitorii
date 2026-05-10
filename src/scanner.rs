@@ -29,6 +29,19 @@ fn mask(value: &str) -> String {
     )
 }
 
+/// Skip blobs larger than this when scanning. Secrets virtually never live in
+/// huge files (lockfiles, generated assets) and reading a 500MB blob to
+/// memory blows up OOM during `scan --history` on big repos. Override with
+/// the env var `TORII_SCAN_MAX_BYTES`.
+const DEFAULT_MAX_BLOB_BYTES: usize = 5 * 1024 * 1024;
+
+fn max_blob_bytes() -> usize {
+    std::env::var("TORII_SCAN_MAX_BYTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_MAX_BLOB_BYTES)
+}
+
 const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Private key (PEM)",
@@ -291,6 +304,7 @@ pub fn scan_staged_with_custom(
         if is_example_file(file_path) || should_skip_file(file_path) { continue; }
         let entry = match index.get_path(p, 0) { Some(e) => e, None => continue };
         let blob = match repo.find_blob(entry.id) { Ok(b) => b, Err(_) => continue };
+        if blob.size() > max_blob_bytes() { continue; }
         let content = String::from_utf8_lossy(blob.content()).to_string();
 
         for (i, line) in content.lines().enumerate() {
@@ -364,7 +378,10 @@ pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
         let content = match entry {
             Some(e) => {
                 match repo.find_blob(e.id) {
-                    Ok(blob) => String::from_utf8_lossy(blob.content()).to_string(),
+                    Ok(blob) => {
+                        if blob.size() > max_blob_bytes() { continue; }
+                        String::from_utf8_lossy(blob.content()).to_string()
+                    }
                     Err(_) => continue,
                 }
             }
@@ -467,7 +484,10 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
             let entry = commit_tree.get_path(std::path::Path::new(file_path));
             let content = match entry {
                 Ok(e) => match repo.find_blob(e.id()) {
-                    Ok(blob) => String::from_utf8_lossy(blob.content()).to_string(),
+                    Ok(blob) => {
+                        if blob.size() > max_blob_bytes() { continue; }
+                        String::from_utf8_lossy(blob.content()).to_string()
+                    }
                     Err(_) => continue,
                 },
                 Err(_) => continue,
