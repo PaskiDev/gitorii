@@ -5,9 +5,16 @@ pick one up.
 
 ## Bugs
 
-### `torii sync` fails with "corrupted loose reference file: FETCH_HEAD"
+### ~~`torii sync` fails with "corrupted loose reference file: FETCH_HEAD"~~ — fixed in 0.6.2
 
-Discovered: 2026-05-05.
+Discovered: 2026-05-05. Fixed: 2026-05-10.
+
+Resolution: `core::pull` now stat's `FETCH_HEAD` after fetch and treats a
+0-byte / missing file as "nothing to pull" (same outcome as
+`is_up_to_date()`), instead of letting libgit2 abort on
+`find_reference("FETCH_HEAD")`.
+
+Original report:
 
 After a fresh `torii remote link <platform> <namespace>/<repo>` followed
 by `torii sync`, the command aborts with:
