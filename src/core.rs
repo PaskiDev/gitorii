@@ -242,6 +242,13 @@ impl GitRepo {
 
         remote.fetch(&[&branch], Some(&mut fetch_options), None)?;
 
+        // Empty / freshly-created remotes leave FETCH_HEAD as a 0-byte file
+        // and libgit2 then refuses to parse it as a reference. Treat that
+        // as "nothing to pull" — same outcome as up-to-date.
+        let fetch_head_path = self.repo.path().join("FETCH_HEAD");
+        if fetch_head_path.metadata().map(|m| m.len() == 0).unwrap_or(true) {
+            return Ok(());
+        }
         let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
         let fetch_commit = self.repo.reference_to_annotated_commit(&fetch_head)?;
 
