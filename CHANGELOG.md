@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-05-10
+
+### Fixed
+- **`torii sync --push` no longer reports false success** when libgit2 returns Ok with zero refs ever acknowledged by the server. Common with very large pushes over SSH (3GB+ to GitLab). Errors out with a clear diagnostic suggesting HTTPS+token instead. `sideband_progress` callback wired so `remote: …` server messages reach stderr verbatim.
+- **`torii sync --verify` queries the live remote**, not the cached `refs/remotes/origin/*`. Previous behaviour reported "in sync" against an empty remote right after a silently-failed push. Now opens a real connection and lists the actual refs; surfaces "no such ref on remote" when the branch isn't there at all.
+- **`torii clone <plat> <user/repo> <path>`** honours the trailing path arg (was silently ignored). Same for `torii clone <url> <path>`. Precedence: `--directory` > positional > derive-from-URL.
+- **Empty-clone HEAD points at config'd default branch** (`git.default_branch`, default `main`) instead of libgit2's `master` fallback. Previously, cloning an empty repo whose remote default was `main` left `.git/HEAD` at `refs/heads/master`, breaking the next `torii sync --pull`.
+- **`torii clone` accepts `file://`, `git://`, `ssh://`, local paths, Windows drives, and scp-form URLs** via a unified `looks_like_clone_url` parser. Previously `torii clone file:///tmp/src dest` errored "Unknown platform 'file:///tmp/src'".
+
 ## [0.6.2] - 2026-05-10
 
 ### Added
