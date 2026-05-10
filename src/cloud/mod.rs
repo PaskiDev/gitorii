@@ -80,8 +80,11 @@ pub(crate) fn check_status(resp: Response) -> Result<Response> {
 
 fn short_body(body: &str) -> String {
     let trimmed = body.trim();
-    if trimmed.len() > 200 {
-        format!("{}…", &trimmed[..200])
+    // Cap by chars (not bytes) so multi-byte UTF-8 server messages don't
+    // panic on the slice. 200 chars ≈ enough to debug an API rejection.
+    if trimmed.chars().count() > 200 {
+        let head: String = trimmed.chars().take(200).collect();
+        format!("{}…", head)
     } else {
         trimmed.to_string()
     }

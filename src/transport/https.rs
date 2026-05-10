@@ -11,6 +11,7 @@
 
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use git2::transport::{Service, SmartSubtransport, SmartSubtransportStream, Transport};
 use git2::{Error, Remote};
@@ -18,6 +19,14 @@ use reqwest::blocking::{Client, Response};
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, USER_AGENT};
 
 const UA: &str = concat!("torii/", env!("CARGO_PKG_VERSION"));
+
+fn http_timeout() -> Duration {
+    let secs = std::env::var("TORII_HTTP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(300); // 5 min default
+    Duration::from_secs(secs)
+}
 
 pub fn factory(remote: &Remote<'_>) -> Result<Transport, Error> {
     Transport::smart(remote, true, HttpsSubtransport::new())
@@ -31,6 +40,12 @@ impl HttpsSubtransport {
     fn new() -> Self {
         let client = Client::builder()
             .user_agent(UA)
+            // Timeouts so a hung server doesn't freeze torii forever.
+            // connect: 10s — a server we can't reach in 10s is down.
+            // request: 5min — large pack uploads/downloads need slack;
+            //                 callers can override with TORII_HTTP_TIMEOUT_SECS.
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(http_timeout())
             .build()
             .expect("reqwest client");
         Self { client }
