@@ -610,9 +610,62 @@ impl GitRepo {
             git2::Cred::default()
         });
 
+        // ── Progress reporting ─────────────────────────────────────────────
+        // Without these callbacks a clone of a huge repo (servo, chromium)
+        // looked frozen — no output for minutes while tens of MB streamed.
+        // Now we print pack progress (objects/bytes) and pass through
+        // server sideband messages ("Compressing objects: N% …").
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::time::Instant;
+
+        let last_print = RefCell::new(Instant::now());
+        callbacks.transfer_progress(move |stats| {
+            // Throttle: redraw at most ~10 fps. Cheap and avoids flooding.
+            let mut last = last_print.borrow_mut();
+            let done = stats.received_objects() == stats.total_objects()
+                && stats.indexed_objects() == stats.total_objects();
+            if !done && last.elapsed().as_millis() < 100 {
+                return true;
+            }
+            *last = Instant::now();
+
+            let total = stats.total_objects().max(1);
+            let recv = stats.received_objects();
+            let idx = stats.indexed_objects();
+            let pct = recv * 100 / total;
+            let mb = stats.received_bytes() as f64 / (1024.0 * 1024.0);
+            // \r overwrites the line in place; final newline emitted on done.
+            print!(
+                "\r📥 {pct}%  {recv}/{total} objects  {idx} indexed  {mb:.1} MB",
+            );
+            std::io::stdout().flush().ok();
+            if done {
+                println!();
+            }
+            true
+        });
+        callbacks.sideband_progress(|line| {
+            // Server-side messages like "remote: Counting objects: …".
+            // libgit2 hands them already prefixed with carriage returns,
+            // so just write verbatim.
+            std::io::stderr().write_all(line).ok();
+            true
+        });
+
         let mut fetch_opts = git2::FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
+        // Allow shallow clones via env var (no CLI flag yet, but unblocks
+        // huge repos like servo/chromium today). 0 / unset = full history.
+        if let Ok(d) = std::env::var("TORII_CLONE_DEPTH") {
+            if let Ok(depth) = d.parse::<i32>() {
+                if depth > 0 {
+                    fetch_opts.depth(depth);
+                }
+            }
+        }
 
+        println!("🔄 Cloning {url} → {target}");
         git2::build::RepoBuilder::new()
             .fetch_options(fetch_opts)
             .clone(url, std::path::Path::new(&target))?;
