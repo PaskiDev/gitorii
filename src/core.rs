@@ -229,13 +229,100 @@ impl GitRepo {
         callbacks
     }
 
+    /// Attach progress reporters to an existing `RemoteCallbacks`. Covers:
+    ///   - transfer_progress: pack receive + indexing + delta resolution
+    ///   - sideband_progress: server messages like "Counting objects: …"
+    /// Reused by clone / fetch / pull so every long-running op gives the
+    /// same visual feedback. Throttled to ~10 fps.
+    pub fn attach_fetch_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::time::Instant;
+
+        let last_print = RefCell::new(Instant::now());
+        callbacks.transfer_progress(move |stats| {
+            let mut last = last_print.borrow_mut();
+            let total = stats.total_objects();
+            let recv = stats.received_objects();
+            let idx = stats.indexed_objects();
+            let total_deltas = stats.total_deltas();
+            let idx_deltas = stats.indexed_deltas();
+            let receiving_done = total > 0 && recv == total && idx == total;
+            let deltas_done = total_deltas == 0 || idx_deltas == total_deltas;
+            let done = receiving_done && deltas_done;
+
+            if !done && last.elapsed().as_millis() < 100 {
+                return true;
+            }
+            *last = Instant::now();
+
+            let mb = stats.received_bytes() as f64 / (1024.0 * 1024.0);
+            // Two phases: receiving objects, then resolving deltas.
+            // libgit2 reports both via the same callback, so emit whichever
+            // is currently advancing.
+            if total_deltas > 0 && recv == total {
+                let pct = if total_deltas > 0 { idx_deltas * 100 / total_deltas } else { 100 };
+                print!(
+                    "\r🧩 Resolving deltas {pct}%  {idx_deltas}/{total_deltas}                       "
+                );
+            } else {
+                let pct = if total > 0 { recv * 100 / total } else { 0 };
+                print!(
+                    "\r📥 {pct}%  {recv}/{total} objects  {idx} indexed  {mb:.1} MB       ",
+                );
+            }
+            std::io::stdout().flush().ok();
+            if done {
+                println!();
+            }
+            true
+        });
+        callbacks.sideband_progress(|line| {
+            std::io::stderr().write_all(line).ok();
+            true
+        });
+    }
+
+    /// Attach progress reporters for push (different libgit2 callback set).
+    ///   - push_transfer_progress: pack upload
+    ///   - sideband_progress: server messages
+    /// Throttled to ~10 fps.
+    pub fn attach_push_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
+        use std::cell::RefCell;
+        use std::io::Write;
+        use std::time::Instant;
+
+        let last_print = RefCell::new(Instant::now());
+        callbacks.push_transfer_progress(move |current, total, bytes| {
+            let mut last = last_print.borrow_mut();
+            let done = total > 0 && current == total;
+            if !done && last.elapsed().as_millis() < 100 {
+                return;
+            }
+            *last = Instant::now();
+
+            let pct = if total > 0 { current * 100 / total } else { 0 };
+            let mb = bytes as f64 / (1024.0 * 1024.0);
+            print!("\r📤 {pct}%  {current}/{total} objects  {mb:.1} MB       ");
+            std::io::stdout().flush().ok();
+            if done {
+                println!();
+            }
+        });
+        callbacks.sideband_progress(|line| {
+            std::io::stderr().write_all(line).ok();
+            true
+        });
+    }
+
     /// Pull from remote (fetch + fast-forward merge of current branch)
     pub fn pull(&self) -> Result<()> {
         let branch = self.get_current_branch()?;
         let mut remote = self.repo.find_remote("origin")?;
 
         let remote_url = remote.url().unwrap_or("").to_string();
-        let callbacks = Self::auth_callbacks_for(&remote_url);
+        let mut callbacks = Self::auth_callbacks_for(&remote_url);
+        Self::attach_fetch_progress(&mut callbacks);
 
         let mut fetch_options = git2::FetchOptions::new();
         fetch_options.remote_callbacks(callbacks);
@@ -312,14 +399,8 @@ impl GitRepo {
             Ok(())
         });
 
-        // Surface server-side error messages (sideband). libgit2 hands them
-        // raw; print to stderr so users see "remote: …" even when the push
-        // itself returned Ok.
-        callbacks.sideband_progress(|line| {
-            use std::io::Write;
-            std::io::stderr().write_all(line).ok();
-            true
-        });
+        // Live pack-upload progress + server sideband. Same look as fetch.
+        Self::attach_push_progress(&mut callbacks);
 
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(callbacks);

@@ -536,7 +536,9 @@ impl GitRepo {
     /// Switch to a branch
     pub fn switch_branch(&self, name: &str) -> Result<()> {
         let obj = self.repository().revparse_single(&format!("refs/heads/{}", name))?;
-        self.repository().checkout_tree(&obj, None)?;
+        let mut builder = git2::build::CheckoutBuilder::new();
+        attach_checkout_progress(&mut builder);
+        self.repository().checkout_tree(&obj, Some(&mut builder))?;
         self.repository().set_head(&format!("refs/heads/{}", name))?;
         Ok(())
     }
@@ -610,48 +612,7 @@ impl GitRepo {
             git2::Cred::default()
         });
 
-        // ── Progress reporting ─────────────────────────────────────────────
-        // Without these callbacks a clone of a huge repo (servo, chromium)
-        // looked frozen — no output for minutes while tens of MB streamed.
-        // Now we print pack progress (objects/bytes) and pass through
-        // server sideband messages ("Compressing objects: N% …").
-        use std::cell::RefCell;
-        use std::io::Write;
-        use std::time::Instant;
-
-        let last_print = RefCell::new(Instant::now());
-        callbacks.transfer_progress(move |stats| {
-            // Throttle: redraw at most ~10 fps. Cheap and avoids flooding.
-            let mut last = last_print.borrow_mut();
-            let done = stats.received_objects() == stats.total_objects()
-                && stats.indexed_objects() == stats.total_objects();
-            if !done && last.elapsed().as_millis() < 100 {
-                return true;
-            }
-            *last = Instant::now();
-
-            let total = stats.total_objects().max(1);
-            let recv = stats.received_objects();
-            let idx = stats.indexed_objects();
-            let pct = recv * 100 / total;
-            let mb = stats.received_bytes() as f64 / (1024.0 * 1024.0);
-            // \r overwrites the line in place; final newline emitted on done.
-            print!(
-                "\r📥 {pct}%  {recv}/{total} objects  {idx} indexed  {mb:.1} MB",
-            );
-            std::io::stdout().flush().ok();
-            if done {
-                println!();
-            }
-            true
-        });
-        callbacks.sideband_progress(|line| {
-            // Server-side messages like "remote: Counting objects: …".
-            // libgit2 hands them already prefixed with carriage returns,
-            // so just write verbatim.
-            std::io::stderr().write_all(line).ok();
-            true
-        });
+        crate::core::GitRepo::attach_fetch_progress(&mut callbacks);
 
         let mut fetch_opts = git2::FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
@@ -957,7 +918,8 @@ impl GitRepo {
         let mut remote = self.repo.find_remote("origin")
             .map_err(|e| crate::error::ToriiError::Git(e))?;
         let remote_url = remote.url().unwrap_or("").to_string();
-        let callbacks = GitRepo::auth_callbacks_for(&remote_url);
+        let mut callbacks = GitRepo::auth_callbacks_for(&remote_url);
+        GitRepo::attach_fetch_progress(&mut callbacks);
         let mut fetch_options = git2::FetchOptions::new();
         fetch_options.remote_callbacks(callbacks);
         remote.fetch(&[] as &[&str], Some(&mut fetch_options), None)
@@ -1475,4 +1437,33 @@ fn report_rebase_outcome(repo_path: &std::path::Path, status: std::process::Exit
         return;
     }
     println!("✅ Rebase complete");
+}
+
+/// Live checkout progress (file count + path). Used by branch switches and
+/// other working-tree updates. Throttled to ~10 fps.
+fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
+    use std::cell::RefCell;
+    use std::io::Write;
+    use std::time::Instant;
+
+    let last_print = RefCell::new(Instant::now());
+    builder.progress(move |path, completed, total| {
+        let mut last = last_print.borrow_mut();
+        let done = total > 0 && completed >= total;
+        if !done && last.elapsed().as_millis() < 100 {
+            return;
+        }
+        *last = Instant::now();
+
+        let pct = if total > 0 { completed * 100 / total } else { 0 };
+        let name = path
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        print!("\r🔀 {pct}%  {completed}/{total} files  {name:<40}");
+        std::io::stdout().flush().ok();
+        if done {
+            println!();
+        }
+    });
 }
