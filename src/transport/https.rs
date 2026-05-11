@@ -275,8 +275,34 @@ fn env_var_name_for(host: &str) -> Option<&'static str> {
 /// the most portable form across GitHub, GitLab, Codeberg, Gitea, Forgejo.
 fn resolve_auth(url: &str) -> Option<String> {
     let host = host_of(url)?;
-    let token = env_token_for(&host).or_else(|| std::env::var("TORII_HTTPS_TOKEN").ok())?;
+    // Token precedence: per-host env > generic env > torii config
+    // (~/.config/torii/config.toml [auth]). The config path was previously
+    // ignored by this transport, so users who ran
+    //   torii config set auth.github_token ghp_...
+    // got "no auth" anyway. The config tokens were only honoured by
+    // libgit2's old built-in transports we no longer use.
+    let token = env_token_for(&host)
+        .or_else(|| std::env::var("TORII_HTTPS_TOKEN").ok())
+        .or_else(|| config_token_for(&host))?;
     Some(basic_auth("x-access-token", &token))
+}
+
+fn config_token_for(host: &str) -> Option<String> {
+    let cfg = crate::config::ToriiConfig::load_global().ok()?;
+    let token = if host.contains("github.") {
+        cfg.auth.github_token
+    } else if host.contains("gitlab.") {
+        cfg.auth.gitlab_token
+    } else if host.contains("codeberg.") {
+        cfg.auth.codeberg_token
+    } else if host.contains("gitea.") {
+        cfg.auth.gitea_token
+    } else if host.contains("forgejo.") {
+        cfg.auth.forgejo_token
+    } else {
+        None
+    };
+    token.filter(|s| !s.is_empty())
 }
 
 fn host_of(url: &str) -> Option<String> {
