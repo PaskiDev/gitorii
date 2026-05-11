@@ -1013,6 +1013,21 @@ NAME bare.")]
         #[arg(long)]
         force: bool,
     },
+
+    /// Remove a local remote alias from .git/config — does NOT touch the
+    /// platform. Inverse of `link`.
+    #[command(after_help = "Examples:
+  torii remote unlink origin           Drop the default origin alias
+  torii remote unlink upstream         Drop a custom-named remote
+  torii remote unlink old --yes        Skip confirmation prompt")]
+    Unlink {
+        /// Name of the local remote alias to remove (e.g. origin, upstream)
+        name: String,
+
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2105,6 +2120,35 @@ impl Cli {
                             inner.remote(name, &resolved_url)?;
                             println!("🔗 Linked remote '{}' → {}", name, resolved_url);
                         }
+                    }
+                    RemoteCommands::Unlink { name, yes } => {
+                        let git_repo = GitRepo::open(".")?;
+                        let inner = git_repo.repository();
+                        let remote = inner.find_remote(name).map_err(|_| anyhow::anyhow!(
+                            "No local remote named '{}'. Run `torii remote local` to list.",
+                            name
+                        ))?;
+                        let url = remote.url().unwrap_or("(no url)").to_string();
+                        drop(remote);
+
+                        if !*yes {
+                            use std::io::{BufRead, Write};
+                            println!("⚠️  Drop local alias '{}' → {}?", name, url);
+                            println!("   (Does NOT touch the remote on the platform.)");
+                            print!("   Confirm [y/N]: ");
+                            std::io::stdout().flush().ok();
+                            let mut line = String::new();
+                            std::io::stdin().lock().read_line(&mut line)?;
+                            let ans = line.trim().to_ascii_lowercase();
+                            if !matches!(ans.as_str(), "y" | "yes") {
+                                println!("Aborted.");
+                                return Ok(());
+                            }
+                        }
+
+                        inner.remote_delete(name)
+                            .map_err(|e| anyhow::anyhow!("delete remote '{}': {}", name, e))?;
+                        println!("🔗 Unlinked local remote '{}' (platform untouched)", name);
                     }
                     RemoteCommands::List { platform } => {
                         let client = get_platform_client(platform)?;
