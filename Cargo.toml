@@ -1,6 +1,6 @@
 [package]
 name = "gitorii"
-version = "0.6.5"
+version = "0.6.6"
 edition = "2021"
 authors = ["Paski <paski@paski.dev>"]
 description = "A human-first Git client with simplified commands, snapshots, multi-platform mirrors and built-in secret scanning"

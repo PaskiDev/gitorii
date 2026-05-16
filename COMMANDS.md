@@ -364,6 +364,23 @@ torii config reset                              # Reset to defaults
 
 ---
 
+## `torii auth`
+
+Manage the gitorii.com API key used by cloud features (CI transpile, etc.). The key is stored locally at `~/.config/torii/auth.toml` (chmod 600). `TORII_API_KEY` env var overrides the stored key for the current process.
+
+```bash
+torii auth login                       # prompt for an API key and save it
+torii auth login --key gitorii_sk_…    # save a key non-interactively
+torii auth status                      # show org / plan / seats tied to the key
+torii auth whoami                      # alias of status
+torii auth logout                      # forget the local key
+torii auth login --endpoint http://localhost:8080   # self-hosted / dev backend
+```
+
+Generate a key in the dashboard: <https://gitorii.com/dashboard/api-keys>.
+
+---
+
 ## `torii remote`
 
 Create and manage remote repositories via platform APIs (requires auth token configured).
@@ -394,9 +411,115 @@ torii remote delete github,gitlab <owner> <name> --yes
 
 ---
 
+## `torii workspace`
+
+Group several repositories under a logical "workspace" and run common operations across all of them at once. Workspace definitions are stored in `~/.config/torii/workspaces.toml`.
+
+```bash
+torii workspace add work ~/repos/api          # add a repo to a workspace
+torii workspace add work ~/repos/frontend     # add another repo to the same workspace
+torii workspace list                          # list all workspaces and their repos
+torii workspace status work                   # status across every repo in the workspace
+torii workspace save work -m "wip"            # commit (staged) across all repos
+torii workspace save work -am "wip"           # stage all + commit across all repos
+torii workspace sync work                     # pull + push every repo
+torii workspace sync work --force             # force-push every repo
+torii workspace remove work ~/repos/api       # remove a single repo from the workspace
+torii workspace delete work                   # delete the workspace entirely (repos stay on disk)
+```
+
+---
+
+## `torii pr`
+
+Manage pull requests / merge requests against the platform configured for the current repository (GitHub, GitLab, Codeberg, etc.). Requires the corresponding `auth.<platform>_token` to be set via `torii config set`.
+
+```bash
+torii pr list                                  # list open PRs
+torii pr list --state closed                   # list closed PRs
+torii pr list --state merged                   # list merged PRs
+torii pr list --state all                      # list every PR
+torii pr create -t "feat: login" -b main       # create a PR (head = current branch)
+torii pr create -t "feat: login" --head feat/x # explicit head branch
+torii pr create -t "wip" --draft               # create as draft
+torii pr create -t "fix" -d "long description" # with description body
+torii pr merge 42                              # merge PR #42 (merge commit)
+torii pr merge 42 --method squash              # squash merge
+torii pr merge 42 --method rebase              # rebase merge
+torii pr close 42                              # close without merging
+torii pr checkout 42                           # checkout the branch of PR #42
+torii pr open 42                               # open PR #42 in the browser
+```
+
+---
+
+## `torii issue`
+
+Manage issues on the platform configured for the current repository. Same auth requirements as `torii pr`.
+
+```bash
+torii issue list                               # list open issues
+torii issue list --state closed                # list closed issues
+torii issue list --state all                   # list every issue
+torii issue create -t "bug: crash on save"     # create a minimal issue
+torii issue create -t "title" -d "description" # with description body
+torii issue close 42                           # close issue #42
+torii issue comment 42 -m "Fixed in v0.6.6"   # add a comment
+```
+
+---
+
+## `torii ignore`
+
+Manage `.toriignore` rules without hand-editing the file. Paths default to the public `.toriignore` (committed). Secret regex rules default to `.toriignore.local` (machine-private — never committed) because the mere existence of a rule for, say, an internal token format can aid recon if the public repo leaks.
+
+```bash
+torii ignore add 'build/'                          # add path to public .toriignore
+torii ignore add --local 'internal/billing/'       # add path to .toriignore.local
+torii ignore secret 'AKIA[0-9A-Z]{16}' --name AWS  # add secret regex (defaults to .local)
+torii ignore secret '<pattern>' --public           # put regex in the committed .toriignore
+torii ignore list                                  # show effective rules (public + local merged)
+```
+
+---
+
+## `torii tui`
+
+Launch the interactive terminal UI. Shows repository status, log, branch list, file navigation, snapshots, mirrors, PRs, issues and more — all keyboard-driven. Useful for browsing without remembering subcommands.
+
+```bash
+torii tui
+```
+
+---
+
 ## `.toriignore`
 
-Works like `.gitignore` but syncs to `.git/info/exclude` automatically on every `torii open`. Patterns are respected by all git operations without committing ignore rules to the repo.
+Extends `.gitignore` with optional `[sections]` for secrets, size limits and hooks. Path patterns sync to `.git/info/exclude` automatically so they are respected by every git operation without leaking ignore rules into the repo.
+
+```ini
+# path patterns (default section, .gitignore syntax)
+build/
+*.log
+
+[secrets]
+# regex rules used by `torii scan` / pre-save checks
+name = "AWS access key" ; pattern = "AKIA[0-9A-Z]{16}"
+
+[size]
+# hard / soft limits applied on save
+max  = "10MB"   ; warn = "1MB"
+exclude = ["fixtures/*.bin"]
+
+[hooks]
+pre-save  = ["cargo fmt --check"]
+pre-sync  = ["cargo test --quiet"]
+post-save = ["echo done"]
+```
+
+A companion `.toriignore.local` is auto-excluded from git and machine-private. Use it for rules whose mere existence would aid recon if the public repo leaks (proprietary secret formats, internal paths, etc). When both files exist, public + local are merged at load time (local wins on size limits).
+
+Hooks are gated by a one-time trust prompt; see [SECURITY.md](SECURITY.md) for the threat model. Use `torii ignore` to edit rules without touching the files by hand.
 
 ---
 
