@@ -268,7 +268,48 @@ torii config edit
 torii config reset
 ```
 
-Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `snapshot.auto_enabled`, `ui.colors`, `ui.emoji`, `ui.verbose`.
+Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `auth.gitea_token`, `auth.forgejo_token`, `auth.codeberg_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `mirror.autofetch_enabled`, `snapshot.auto_enabled`, `snapshot.auto_interval_minutes`, `ui.colors`, `ui.emoji`, `ui.verbose`, `ui.date_format`.
+
+### Auth (gitorii.com cloud)
+
+Separate from the per-platform `auth.<platform>_token` keys above. `torii auth` manages the API key for gitorii.com cloud features (CI transpile, etc.), stored at `~/.config/torii/auth.toml` (chmod 600).
+
+```bash
+torii auth login                    # prompt for API key and save
+torii auth login --key gitorii_sk_… # save non-interactively
+torii auth status                   # show org / plan / seats
+torii auth whoami                   # alias of status
+torii auth logout                   # forget the local key
+```
+
+Override per-process with `TORII_API_KEY=gitorii_sk_…`. Generate keys at <https://gitorii.com/dashboard/api-keys>.
+
+### Pull requests
+
+Works against the platform of the current repo (GitHub, GitLab, Codeberg, etc.). Requires `auth.<platform>_token` to be set.
+
+```bash
+torii pr list                                  # list open PRs
+torii pr list --state closed|merged|all
+torii pr create -t "feat: login" -b main       # create PR (head = current branch)
+torii pr create -t "wip" --draft               # create as draft
+torii pr merge 42                              # merge with merge commit
+torii pr merge 42 --method squash|rebase
+torii pr close 42                              # close without merging
+torii pr checkout 42                           # checkout PR branch locally
+torii pr open 42                               # open in browser
+```
+
+### Issues
+
+```bash
+torii issue list                               # open issues
+torii issue list --state closed|all
+torii issue create -t "bug: crash"             # create issue
+torii issue create -t "title" -d "description"
+torii issue close 42
+torii issue comment 42 -m "Fixed in v0.6.6"
+```
 
 ### Other
 

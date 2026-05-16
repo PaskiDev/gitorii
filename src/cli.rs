@@ -123,16 +123,34 @@ fn parse_protocol(s: Option<&String>) -> Protocol {
 #[derive(Parser)]
 #[command(name = "torii")]
 #[command(version, about = "A modern git client with simplified commands")]
-#[command(after_help = "Examples:
-  torii init                          Initialize a new repo
-  torii save -am \"feat: add login\"    Stage all and commit
-  torii sync                          Pull and push
-  torii sync main                     Integrate main into current branch
-  torii branch feature/auth -c        Create and switch to branch
-  torii clone github user/repo        Clone from GitHub
-  torii log --oneline --graph         Show compact history graph
-  torii snapshot stash                Stash work in progress
-  torii mirror sync                   Push to all configured mirrors
+#[command(after_help = "Examples — daily flow:
+  torii status                          Show current state
+  torii save -am \"feat: add login\"      Stage all and commit
+  torii sync                            Pull and push
+  torii sync main                       Integrate main into current branch
+  torii diff --staged                   Review what will be committed
+
+Branch & history:
+  torii branch feature/auth -c          Create and switch to branch
+  torii log --oneline --graph           Compact history graph
+  torii history rebase main             Rebase current branch onto main
+  torii history scan                    Scan staged files for secrets
+
+Repos, remotes & identity:
+  torii init                            Initialize a new repo
+  torii clone github user/repo          Clone from GitHub
+  torii mirror sync                     Push to all configured mirrors
+  torii config set user.name \"Alice\"    Set git identity (name)
+  torii auth login github               Authenticate with GitHub
+
+Release & collaboration:
+  torii tag create v1.0.0 -m \"Release\"  Create annotated tag
+  torii pr create                       Open a pull request
+  torii snapshot stash                  Stash work in progress
+  torii workspace status                Status across all workspace repos
+
+Interactive UI:
+  torii tui                             Launch terminal UI
 
 Run 'torii <command> --help' for detailed usage of any command.")]
 pub struct Cli {
