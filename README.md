@@ -18,6 +18,21 @@ curl --proto '=https' --tlsv1.2 -LsSf https://github.com/paskidev/gitorii/releas
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/paskidev/gitorii/releases/latest/download/gitorii-installer.ps1 | iex"
 ```
 
+> **If the installer URL above 404s** (the wrapper script isn't generated yet
+> as of 0.6.7), grab the raw binary directly from the GitLab Generic Package
+> Registry — they're produced by CI on every tag and live forever at:
+>
+> - <https://gitlab.com/paskidev/gitorii/-/releases>  (release page with assets)
+> - Direct: `https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.6.7/torii-linux-x86_64`
+>
+> ```bash
+> curl -L "https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.6.7/torii-linux-x86_64" \
+>   -o ~/.local/bin/torii && chmod +x ~/.local/bin/torii
+> ```
+>
+> Replace `v0.6.7` with the latest tag (see <https://gitlab.com/paskidev/gitorii/-/tags>).
+> Aliases: `torii-linux-aarch64`, `torii-windows-x86_64.exe`.
+
 **Via `cargo binstall`** (fetches prebuilt binary):
 
 ```bash
@@ -27,43 +42,82 @@ cargo binstall gitorii
 **From source via cargo** (compiles locally):
 
 ```bash
-cargo install gitorii
+cargo install gitorii --locked
 ```
+
+> Note `--locked` — respects the committed `Cargo.lock` so you build the exact
+> dep graph the maintainer tested with. See **Known issue** below if you hit a
+> rustc ICE or SIGSEGV.
 
 > **Building from source needs only a C compiler** (`gcc` or `clang`).
 > No `perl`, no `openssl-dev`, no `libssh2-dev`, no `pkg-config`.
 > Since 0.6.0, gitorii uses pure-Rust HTTPS (`rustls`) and SSH (`russh`)
 > transports instead of libcurl/libssh2/openssl.
 
-### Known issue: `rustc 1.95.0` ICE
+### Known issue: rustc ICE / SIGSEGV when compiling from source
 
-`rustc 1.95.0` (April 2026 release) regressed in mono-item partitioning and
-ICEs while compiling the transitive crypto chain pulled in by `russh`'s
-default `rsa` feature (`rsa 0.10-rc` → `crypto-bigint 0.7-rc` →
-`elliptic-curve 0.14-rc`). Symptoms during `cargo install gitorii`:
+`cargo install gitorii` can fail in two distinct ways depending on your
+toolchain. Both are upstream bugs triggered by the transitive crypto chain
+that `russh` pulls in (`rsa 0.10-rc` → `crypto-bigint 0.7-rc` →
+`elliptic-curve 0.14-rc`). **Neither is a gitorii bug.**
 
-- `thread 'rustc' panicked … called Option::unwrap() on a None value`
-- `error: rustc interrupted by SIGSEGV`
-- Build aborts halfway through compiling `crypto-bigint`, `syn`, `pem-rfc7468`,
-  `serde_json` or similar.
+**1. `rustc 1.95.0` ICE in mono-item partitioning.** Symptom:
 
-This is **not a gitorii bug** — it's a regression in `rustc` itself. The crate
-ships a `rust-toolchain.toml` pinning the build to `1.94.0`, which `rustup`
-honours automatically. If `cargo install gitorii` still ICEs:
+```
+thread 'rustc' panicked at compiler/rustc_span/src/symbol.rs:2760
+called `Option::unwrap()` on a `None` value
+```
 
-1. **Use the prebuilt installer** (top of this section) — no Rust compiler
-   needed.
-2. **Or install a working rustc via `rustup`** and let the toolchain file kick
-   in:
-   ```bash
-   rustup install 1.94.0
-   cargo install gitorii
-   ```
-3. **Or use a distro-shipped older rustc** (Debian stable, Ubuntu 24.04, etc.)
-   — anything `<= 1.94` works.
+The crate ships a `rust-toolchain.toml` pinning the build to `1.94.0`, which
+`rustup` honours automatically when invoked from inside the unpacked crate
+directory. If you have `rustup`, you may need nothing more than:
 
-Upstream tracking: `rust-lang/rust` (compiler) and `warp-tech/russh` (crypto
-default features). The pin will be removed once a fixed stable rustc lands.
+```bash
+rustup install 1.94.0
+cargo install gitorii --locked
+```
+
+If `rustup` isn't picking up the pin (some shells / cargo configurations
+override it), force the toolchain explicitly:
+
+```bash
+cargo +1.94.0 install gitorii --locked
+```
+
+**2. `SIGSEGV` in LLVM codegen / stack overflow.** Symptom:
+
+```
+error: rustc interrupted by SIGSEGV, printing backtrace
+... LlvmCodegenBackend ... compile_codegen_unit ...
+help: you can increase rustc's stack size by setting RUST_MIN_STACK=16777216
+```
+
+This bites independent of rustc version when generics monomorphisation goes
+deep enough to overflow rustc's 8 MB default thread stack, or when too many
+rustcs in parallel exhaust system RAM (each codegen worker can spike to
+3–5 GB). The fix is to raise the per-thread stack and cap parallelism:
+
+```bash
+RUST_MIN_STACK=16777216 \
+  cargo +1.94.0 install gitorii --locked -j 2
+```
+
+For maximum stability (no parallelism), use `-j 1` — slower but bulletproof.
+
+**3. Fallback: prebuilt binary** — skip the compiler entirely. The installer
+URL at the top of this section is wired to GitHub Releases but the wrapper
+script isn't generated yet (as of 0.6.7). Until then, grab the binary
+directly from the GitLab Generic Package Registry:
+
+```bash
+curl -L "https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.6.7/torii-linux-x86_64" \
+  -o ~/.local/bin/torii && chmod +x ~/.local/bin/torii
+```
+
+Upstream tracking: `rust-lang/rust` (compiler ICE), `warp-tech/russh` (crypto
+RC defaults), and our own backlog (cargo-dist for proper installer scripts).
+The `rust-toolchain.toml` pin and this section will be removed once a fixed
+stable rustc lands and we've validated it against the dep tree.
 
 ## Quick start
 

@@ -23,8 +23,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`COMMANDS.md` adds an "Identity rewrite details" subsection** under `torii history` covering snapshot behaviour, timestamp preservation, GPG-signature invalidation, mailmap format, and the `--force` push needed after rewriting shared branches.
 - **`README.md` History section** gains the new commands and a one-paragraph caveat block.
 
+### Build / toolchain
+- **`.github/workflows/release.yml` pins `dtolnay/rust-toolchain@1.94.0`** for the `cargo publish` job (was `@stable`). Without this the CI's verify-build step would ICE on rustc 1.95.0 against the russh→rsa-rc chain and the publish would never reach crates.io. Also passes `--locked`, `RUST_MIN_STACK=16777216` and `CARGO_BUILD_JOBS=2` to mirror the README workarounds for the codegen-pressure path. Revert to `@stable` once upstream rustc fixes the regression.
+
+### Documentation
+- **README "Install" expanded** with a fallback to the GitLab Generic Package Registry direct URL (`gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/<tag>/torii-<arch>`). The `gitorii-installer.sh` wrapper referenced in the top install snippet doesn't exist yet — no CI generates it — so users currently hitting the 404 have an explicit working path. `cargo install gitorii --locked` is the new from-source recommendation.
+- **README "Known issue" rewritten** to separate the two failure modes (rustc 1.95 ICE vs. LLVM codegen SIGSEGV / stack overflow) and give the concrete flags that resolve each one: `cargo +1.94.0 install gitorii --locked` for the ICE, plus `RUST_MIN_STACK=16777216 ... -j 2` for the codegen path. Adds a third "skip the compiler entirely" path with the GitLab binary URL.
+
 ### Known limitations
 - **GPG-signed commits**: signatures invalidate after rewrite because they're computed over the original author. Re-sign manually (or set up a key and re-run `torii save --amend` on each commit) — automatic re-signing during rewrite is not yet wired.
+- **`gitorii-installer.sh` doesn't exist yet** — README mentions GitHub Releases but no CI generates the wrapper script. Tracked for follow-up (cargo-dist or equivalent). Direct binary download from GitLab works in the meantime; see Install section.
 
 ## [0.6.6] - 2026-05-16
 
