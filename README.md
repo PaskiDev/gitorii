@@ -174,7 +174,20 @@ torii history rebase HEAD~5 --todo-file plan.txt
 torii history rebase --continue
 torii history rebase --abort
 torii history rebase --skip
+
+torii history reauthor --old "Old <a@x>" --new "New <b@y>"   # rename author in history
+torii history reauthor --old oldname --new "New <b@y>"        # match by name only
+torii history reauthor --old a@x --new "New <b@y>" --committer  # also committer
+torii history reauthor ... --since v0.6.0 --dry-run           # preview a range
+torii history mailmap apply                                    # batch via .mailmap
+torii history mailmap apply --file other.mailmap --dry-run
 ```
+
+`reauthor` and `mailmap apply` take a safety snapshot before rewriting
+(revert with `torii snapshot restore <id>`), preserve timestamps,
+rewrite annotated-tag taggers to match, and abort on pending operations
+or dirty working trees. GPG signatures invalidate after rewrite —
+re-sign manually if needed.
 
 ### Security scanner
 

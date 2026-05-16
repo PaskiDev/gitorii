@@ -21,6 +21,7 @@ mod ssh;
 mod tag;
 mod commit_scan;
 mod graph;
+mod history_reauthor;
 mod toriignore;
 mod transport;
 mod updater;
