@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - 2026-05-16
 
+### Fixed
+- **No more `choose HTTP client (ureq or reqwest)` panic on first command per cache window.** `update-informer 1.3.0` made the HTTP backend feature non-optional; the previous `features = ["crates"]` declaration was enough to compile but landed on a stub that panics at runtime. Now pulls `ureq` (rustls-backed, no extra system deps) alongside `crates`. Reproduced via `torii mirror add gitlab user paskidev gitorii --primary` on a fresh cache.
+
 ### Documentation
 - **`torii --help` now groups examples by intent** instead of listing nine random one-liners. Five thematic blocks (daily flow / branch & history / repos & identity / release & collaboration / interactive UI) cover the top-level surface and surface previously-hidden commands like `torii status`, `torii diff --staged`, `torii config set`, `torii history rebase`, `torii history scan`, `torii auth login`, `torii tag create`, `torii pr create`, `torii workspace status`, `torii tui`.
 - **`COMMANDS.md` gains six previously-undocumented sections**: `torii auth`, `torii workspace`, `torii pr`, `torii issue`, `torii ignore`, `torii tui`. Every example is sourced verbatim from the `after_help` of the matching subcommand so reference and CLI stay in lockstep.
