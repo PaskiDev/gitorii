@@ -303,10 +303,55 @@ torii history rewrite "<start-date>" "<end-date>"  # Rewrite commit dates
 torii history remove-file <file>                   # Purge file from all commits
 torii history clean                                # GC + expire reflog
 
+# Identity rewrite (reauthor / mailmap)
+torii history reauthor --old "Old <a@x>" --new "New <b@y>"
+torii history reauthor --old oldname    --new "New <b@y>"   # match by name only
+torii history reauthor --old a@x        --new "New <b@y>"   # match by email only
+torii history reauthor ... --committer                       # also rewrite committer
+torii history reauthor ... --since v0.6.0                    # limit to a range
+torii history reauthor ... --dry-run                         # preview, no changes
+torii history reauthor ... --no-snapshot                     # skip safety snapshot
+torii history reauthor ... --allow-dirty                     # allow uncommitted changes
+
+torii history mailmap apply                                  # apply .mailmap at repo root
+torii history mailmap apply --file other.mailmap             # alternative path
+torii history mailmap apply --since v0.6.0 --dry-run         # preview a range
+
 # Inspection (also exposed as flags)
 torii log --reflog                     # HEAD movement history
 torii sync --verify                    # Compare local vs remote HEAD
 ```
+
+### Identity rewrite details
+
+`reauthor` and `mailmap apply` share the same engine:
+
+- A **safety snapshot** is taken before rewriting (unless `--no-snapshot`).
+  Revert with `torii snapshot restore <id>`.
+- **Annotated tags** get a new tagger that matches the rewrite (always — the
+  point of reauthor is identity reconciliation, leaving a stale tagger would
+  contradict that intent).
+- **Commit/author timestamps are preserved.** Only *who* changes, never
+  *when*. Use `torii history rewrite` to change dates.
+- **GPG signatures invalidate** after rewrite — they're computed over the
+  old author. Re-sign manually after the rewrite if your repo enforces
+  signed commits (`git.sign_commits = true`).
+- **Aborts on pending operations** (merge/rebase/cherry-pick in flight) and
+  on a dirty working tree (override with `--allow-dirty`).
+- **`--since <rev>`** limits the walk: only commits reachable from HEAD that
+  are *not* reachable from `<rev>` are touched.
+
+Mailmap format follows [git's standard](https://git-scm.com/docs/gitmailmap):
+
+```text
+Proper Name <commit@email.xx>
+<proper@email.xx> <commit@email.xx>
+Proper Name <proper@email.xx> <commit@email.xx>
+Proper Name <proper@email.xx> Commit Name <commit@email.xx>
+```
+
+After rewriting, history is diverged from the remote — push with
+`torii sync --push --force` (and coordinate with collaborators).
 
 ### Secret scanner patterns
 

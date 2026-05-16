@@ -1119,6 +1119,107 @@ enum HistoryCommands {
         #[arg(long, value_name = "PATH")]
         to: Option<PathBuf>,
     },
+
+    /// Rewrite author (and optionally committer) identity across history.
+    ///
+    /// Match a single `--old` identity and replace with `--new`. Use this for
+    /// one-off renames; for batch rewrites driven by a file see
+    /// `torii history mailmap apply`.
+    #[command(after_help = "Examples:
+  torii history reauthor --old \"outsider <x@y.com>\" --new \"Pasqual <paski@paski.dev>\"
+  torii history reauthor --old outsider --new \"Pasqual <paski@paski.dev>\"           # match by name only
+  torii history reauthor --old x@y.com --new \"Pasqual <paski@paski.dev>\"            # match by email only
+  torii history reauthor --old ... --new ... --committer        # also rewrite committer
+  torii history reauthor --old ... --new ... --since v0.6.0     # only commits since v0.6.0
+  torii history reauthor --old ... --new ... --dry-run          # preview, no changes
+  torii history reauthor --old ... --new ... --no-snapshot      # skip safety snapshot
+  torii history reauthor --old ... --new ... --allow-dirty      # allow uncommitted changes
+
+History is rewritten in-place. Annotated tags get a new tagger that matches
+the rewrite. A safety snapshot is taken by default (revert with
+'torii snapshot restore <id>'). If commits are signed, signatures invalidate
+— re-sign manually after the rewrite or document the rotation.")]
+    Reauthor {
+        /// Identity to match. Accepts "Name <email>", a bare name, or a bare email.
+        #[arg(long)]
+        old: String,
+
+        /// Replacement identity. Must be in "Name <email>" form.
+        #[arg(long)]
+        new: String,
+
+        /// Limit rewrite to commits since this revision (exclusive).
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+
+        /// Preview the rewrite without touching the repo.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the safety snapshot taken before rewriting.
+        #[arg(long)]
+        no_snapshot: bool,
+
+        /// Also rewrite the committer (default: only author).
+        #[arg(long)]
+        committer: bool,
+
+        /// Proceed even if the working tree has uncommitted changes.
+        #[arg(long)]
+        allow_dirty: bool,
+    },
+
+    /// Apply a `.mailmap` file (standard git format) across history.
+    ///
+    /// See <https://git-scm.com/docs/gitmailmap> for the format. Use this for
+    /// batch identity reconciliation; for a single rename use
+    /// `torii history reauthor`.
+    #[command(after_help = "Examples:
+  torii history mailmap apply                          Apply repo .mailmap
+  torii history mailmap apply --file other.mailmap     Apply a different file
+  torii history mailmap apply --since v0.6.0           Limit to a range
+  torii history mailmap apply --dry-run                Preview, no changes
+  torii history mailmap apply --no-snapshot            Skip safety snapshot
+
+Mailmap supports four line forms:
+  Proper Name <commit@email>
+  <proper@email> <commit@email>
+  Proper Name <proper@email> <commit@email>
+  Proper Name <proper@email> Commit Name <commit@email>")]
+    Mailmap {
+        #[command(subcommand)]
+        action: MailmapCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum MailmapCommands {
+    /// Apply rewrites from a `.mailmap` file to every reachable commit.
+    Apply {
+        /// Mailmap file path (default: `.mailmap` at repo root).
+        #[arg(long, value_name = "FILE")]
+        file: Option<PathBuf>,
+
+        /// Limit rewrite to commits since this revision (exclusive).
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+
+        /// Preview the rewrite without touching the repo.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the safety snapshot taken before rewriting.
+        #[arg(long)]
+        no_snapshot: bool,
+
+        /// Also rewrite the committer (default: only author).
+        #[arg(long)]
+        committer: bool,
+
+        /// Proceed even if the working tree has uncommitted changes.
+        #[arg(long)]
+        allow_dirty: bool,
+    },
 }
 
 
@@ -2242,6 +2343,67 @@ impl Cli {
                     HistoryCommands::Fsck { show, restore, to } => {
                         run_fsck(show.as_deref(), restore.as_deref(), to.as_deref())?;
                     }
+                    HistoryCommands::Reauthor {
+                        old,
+                        new,
+                        since,
+                        dry_run,
+                        no_snapshot,
+                        committer,
+                        allow_dirty,
+                    } => {
+                        use crate::history_reauthor;
+                        let old_m = history_reauthor::OldMatcher::parse_loose(old)?;
+                        let new_id = history_reauthor::Identity::parse_full(new)?;
+                        let opts = history_reauthor::Options {
+                            since: since.clone(),
+                            dry_run: *dry_run,
+                            no_snapshot: *no_snapshot,
+                            committer: *committer,
+                            allow_dirty: *allow_dirty,
+                        };
+                        let stats = history_reauthor::reauthor(
+                            std::path::Path::new("."),
+                            old_m,
+                            new_id,
+                            &opts,
+                        )?;
+                        history_reauthor::print_summary(&stats, *dry_run);
+                    }
+                    HistoryCommands::Mailmap { action } => match action {
+                        MailmapCommands::Apply {
+                            file,
+                            since,
+                            dry_run,
+                            no_snapshot,
+                            committer,
+                            allow_dirty,
+                        } => {
+                            use crate::history_reauthor;
+                            let mailmap_path = file
+                                .clone()
+                                .unwrap_or_else(|| PathBuf::from(".mailmap"));
+                            if !mailmap_path.exists() {
+                                anyhow::bail!(
+                                    "mailmap file not found: {}",
+                                    mailmap_path.display()
+                                );
+                            }
+                            let opts = history_reauthor::Options {
+                                since: since.clone(),
+                                dry_run: *dry_run,
+                                no_snapshot: *no_snapshot,
+                                committer: *committer,
+                                allow_dirty: *allow_dirty,
+                            };
+                            let stats = history_reauthor::mailmap_apply(
+                                std::path::Path::new("."),
+                                &mailmap_path,
+                                &opts,
+                            )?;
+                            history_reauthor::print_summary(&stats, *dry_run);
+                        }
+                    },
                 }
             }
 

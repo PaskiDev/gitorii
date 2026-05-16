@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-05-16
+
+### Added
+- **`torii history reauthor --old <id> --new <id>`** — rewrite author identity across reachable history with a single CLI pair. Auto-detects the `--old` format: `"Name <email>"` for full match, a bare email for email-only match, or a bare name for name-only match. The replacement `--new` must always be `"Name <email>"`. Flags: `--committer` (also rewrite committer; default off), `--since <rev>` (limit to a range), `--dry-run` (preview without writing), `--no-snapshot` (skip the automatic safety snapshot), `--allow-dirty` (proceed past uncommitted changes).
+- **`torii history mailmap apply [--file <path>]`** — batch identity rewrite driven by a [standard git `.mailmap`](https://git-scm.com/docs/gitmailmap) at the repo root (or any path). Supports all four mailmap line shapes: `Name <commit-email>`, `<proper-email> <commit-email>`, `Name <proper-email> <commit-email>`, `Name <proper-email> Commit Name <commit-email>`. Shares every flag with `reauthor` (`--since`, `--dry-run`, `--no-snapshot`, `--committer`, `--allow-dirty`).
+- **Shared behaviour for both commands**:
+  - Safety snapshot (`pre-reauthor-<timestamp>`) taken automatically; revert with `torii snapshot restore <id>`.
+  - Annotated-tag taggers are rewritten to match the new identity (not preserved) so tag metadata stays consistent with the rewritten commit.
+  - Original author/committer timestamps preserved — only *who* changes, never *when*. Use `torii history rewrite` for dates.
+  - Refuses to run if the repository has a pending merge/rebase/cherry-pick or a dirty working tree (override with `--allow-dirty`).
+  - HEAD and local branches re-point at the new OIDs; lightweight tags retarget; annotated tags get rebuilt.
+
+### Documentation
+- **`COMMANDS.md` adds an "Identity rewrite details" subsection** under `torii history` covering snapshot behaviour, timestamp preservation, GPG-signature invalidation, mailmap format, and the `--force` push needed after rewriting shared branches.
+- **`README.md` History section** gains the new commands and a one-paragraph caveat block.
+
+### Known limitations
+- **GPG-signed commits**: signatures invalidate after rewrite because they're computed over the original author. Re-sign manually (or set up a key and re-run `torii save --amend` on each commit) — automatic re-signing during rewrite is not yet wired.
+
 ## [0.6.6] - 2026-05-16
 
 ### Build / toolchain
