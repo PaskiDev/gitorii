@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.6.6] - 2026-05-16
 
+### Build / toolchain
+- **Pin build toolchain to `rustc 1.94.0` via `rust-toolchain.toml`** to work around a `rustc 1.95.0` ICE in mono-item partitioning. The regression hits the transitive crypto chain (`russh` → `rsa 0.10-rc` → `crypto-bigint 0.7-rc` → `elliptic-curve 0.14-rc`) and surfaces as `Option::unwrap() on a None value` inside the compiler or as SIGSEGV mid-compile. Honoured automatically by `rustup` users — distro-shipped rustc see README "Known issue" for manual workarounds. To be removed when a fixed stable lands.
+- **Declare MSRV `rust-version = "1.85"`** in `Cargo.toml`, matching `russh`'s declared minimum. Stops cargo from attempting older toolchains where the transitive deps don't build at all.
+
 ### Fixed
 - **No more `choose HTTP client (ureq or reqwest)` panic on first command per cache window.** `update-informer 1.3.0` made the HTTP backend feature non-optional; the previous `features = ["crates"]` declaration was enough to compile but landed on a stub that panics at runtime. Now pulls `ureq` (rustls-backed, no extra system deps) alongside `crates`. Reproduced via `torii mirror add gitlab user paskidev gitorii --primary` on a fresh cache.
 

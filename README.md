@@ -35,6 +35,36 @@ cargo install gitorii
 > Since 0.6.0, gitorii uses pure-Rust HTTPS (`rustls`) and SSH (`russh`)
 > transports instead of libcurl/libssh2/openssl.
 
+### Known issue: `rustc 1.95.0` ICE
+
+`rustc 1.95.0` (April 2026 release) regressed in mono-item partitioning and
+ICEs while compiling the transitive crypto chain pulled in by `russh`'s
+default `rsa` feature (`rsa 0.10-rc` → `crypto-bigint 0.7-rc` →
+`elliptic-curve 0.14-rc`). Symptoms during `cargo install gitorii`:
+
+- `thread 'rustc' panicked … called Option::unwrap() on a None value`
+- `error: rustc interrupted by SIGSEGV`
+- Build aborts halfway through compiling `crypto-bigint`, `syn`, `pem-rfc7468`,
+  `serde_json` or similar.
+
+This is **not a gitorii bug** — it's a regression in `rustc` itself. The crate
+ships a `rust-toolchain.toml` pinning the build to `1.94.0`, which `rustup`
+honours automatically. If `cargo install gitorii` still ICEs:
+
+1. **Use the prebuilt installer** (top of this section) — no Rust compiler
+   needed.
+2. **Or install a working rustc via `rustup`** and let the toolchain file kick
+   in:
+   ```bash
+   rustup install 1.94.0
+   cargo install gitorii
+   ```
+3. **Or use a distro-shipped older rustc** (Debian stable, Ubuntu 24.04, etc.)
+   — anything `<= 1.94` works.
+
+Upstream tracking: `rust-lang/rust` (compiler) and `warp-tech/russh` (crypto
+default features). The pin will be removed once a fixed stable rustc lands.
+
 ## Quick start
 
 ```bash
