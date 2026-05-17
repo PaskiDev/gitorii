@@ -80,12 +80,9 @@ pub struct GitHubPrClient {
 
 impl GitHubPrClient {
     pub fn new() -> Result<Self> {
-        let config = ToriiConfig::load_global().unwrap_or_default();
-        let token = std::env::var("GITHUB_TOKEN").ok()
-            .or_else(|| std::env::var("GH_TOKEN").ok())
-            .or(config.auth.github_token)
+        let token = crate::auth::resolve_token("github", ".").value
             .ok_or_else(|| ToriiError::InvalidConfig(
-                "GitHub token not found. Run: torii config set auth.github_token YOUR_TOKEN".to_string()
+                "GitHub token not found. Run: torii auth set github YOUR_TOKEN".to_string()
             ))?;
         Ok(Self { token })
     }
@@ -262,11 +259,9 @@ pub struct GitLabPrClient {
 
 impl GitLabPrClient {
     pub fn new() -> Result<Self> {
-        let config = ToriiConfig::load_global().unwrap_or_default();
-        let token = std::env::var("GITLAB_TOKEN").ok()
-            .or(config.auth.gitlab_token)
+        let token = crate::auth::resolve_token("gitlab", ".").value
             .ok_or_else(|| ToriiError::InvalidConfig(
-                "GitLab token not found. Run: torii config set auth.gitlab_token YOUR_TOKEN".to_string()
+                "GitLab token not found. Run: torii auth set gitlab YOUR_TOKEN".to_string()
             ))?;
         let base_url = std::env::var("GITLAB_URL")
             .unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string());

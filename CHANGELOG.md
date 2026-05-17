@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-17
+
+**Headline:** credential management gets a coherent home. `torii auth` now manages every secret torii uses (cloud key + platform tokens). The old split (`torii auth login` for cloud, `torii config set auth.X_token` for platforms) was confusing and had three real bugs.
+
+### Fixed
+
+- **`torii config set auth.X_token … --local` had no effect at runtime.** The local store was never read by transport/PR/issue/remote code — they all called `ToriiConfig::load_global()`, which ignores `<repo>/.torii/config.toml`. Tokens set with `--local` got persisted but never resolved when pushing or hitting platform APIs. Fixed by centralising every token read through `crate::auth::resolve_token`, which checks env > local > global in that order.
+- **`torii config set … --local` was duplicating the global config into the local file.** `ToriiConfig::load_local()` merges global+local and returns the result; the dispatcher then called `save_local()` on the *merged* config, writing every global setting (including tokens) into the local file. From that moment on the local clone shadowed any subsequent global change. Auth state now lives in a separate `auth.toml` and the new `load_local_raw` returns local-only without merging.
+- **Mixed precedence between commands.** `pr` and `issue` honoured env vars (`GITHUB_TOKEN`, `GITLAB_TOKEN`), but the HTTPS transport that actually does the pushing did not. So `cargo install`-style CI setups would create PRs fine but fail to push. Single resolver, same precedence everywhere.
+
+### Added
+
+- **`torii auth` becomes the single entry point for credentials.**
+  - `torii auth set <provider> <token>` (provider: `github`, `gitlab`, `gitea`, `forgejo`, `codeberg`, `bitbucket`, `sourcehut`, `cargo`). Use `-` as the token to read from stdin (CI-safe).
+  - `torii auth get <provider>` prints the resolved token, masked (`ghp_xxxx****`). `--unsafe-show` for the raw value.
+  - `torii auth list` shows every provider with masked value and source (env / local / global / not set).
+  - `torii auth remove <provider>` deletes from global; `--local` for the per-repo store.
+  - `torii auth doctor` prints exactly where each provider's token is being resolved from — the missing tool when "torii doesn't use my token" hits. Also surfaces a stale legacy `[auth]` block if it lingers in `config.toml`.
+- **`torii publish`** — thin wrapper over `cargo publish` that injects `auth.cargo` automatically. No more `.env` juggling. Flags `--dry-run / --no-verify / --allow-dirty / --token <X>` pass through.
+- **New env vars recognised**: `BITBUCKET_TOKEN`, `SOURCEHUT_TOKEN` / `SRHT_TOKEN`, `GL_TOKEN`. Already-supported ones (`GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `CODEBERG_TOKEN`, `CARGO_REGISTRY_TOKEN`, `TORII_HTTPS_TOKEN`) now apply uniformly across every code path.
+
+### Changed
+
+- **Storage moved**: platform tokens migrate from `~/.config/torii/config.toml [auth]` to `~/.config/torii/auth.toml [tokens]`. Auto-migration: the first time `auth` is consulted, it reads the legacy `[auth]` block, rewrites it into the new file, and `torii auth doctor` reminds you the legacy section can be deleted from `config.toml`. No data loss; old configs keep working until you clean them up.
+- **`torii config set auth.<provider>_token …`** still works but is now a deprecated alias that redirects to `torii auth set <provider> …` and prints a one-line hint. Scheduled removal: 0.8.
+- **All error messages and `-h` examples** updated to point at `torii auth set` instead of `torii config set auth.X_token`.
+
+### Storage format
+
+`~/.config/torii/auth.toml` (chmod 600) now uses two sections:
+
+```toml
+[cloud]
+key = "gitorii_sk_…"
+endpoint = "https://api.gitorii.com"
+
+[tokens]
+github = "ghp_…"
+gitlab = "glpat-…"
+cargo = "cio_…"
+```
+
+Both the old top-level `key = …` format and the legacy `config.toml [auth]` are still parsed for backwards-compat.
+
+### Out of scope
+
+- `cargo-dist` installer setup — still deferred to 0.7.2.
+- GPG re-sign in `torii history reauthor` — same.
+
 ## [0.7.0] - 2026-05-17
 
 **Headline:** ~93 % porcelain coverage. 0.6.9 covered the structural gaps (worktrees, submodules, subtrees); 0.7.0 finishes the surface area with the eight commands a vanilla `git` user expects to find. Also pulls the existing names into plainer English where it didn't break git habits.
