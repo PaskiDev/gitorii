@@ -275,12 +275,10 @@ fn env_var_name_for(host: &str) -> Option<&'static str> {
 /// the most portable form across GitHub, GitLab, Codeberg, Gitea, Forgejo.
 fn resolve_auth(url: &str) -> Option<String> {
     let host = host_of(url)?;
-    // Token precedence: per-host env > generic env > torii config
-    // (~/.config/torii/config.toml [auth]). The config path was previously
-    // ignored by this transport, so users who ran
-    //   torii config set auth.github_token ghp_...
-    // got "no auth" anyway. The config tokens were only honoured by
-    // libgit2's old built-in transports we no longer use.
+    // Token precedence is now centralised in `crate::auth::resolve_token`:
+    //   per-host env var > generic TORII_HTTPS_TOKEN > local repo store
+    //   > global store (~/.config/torii/auth.toml).
+    // Set with:  torii auth set <provider> <token>  (since 0.7.1)
     let token = env_token_for(&host)
         .or_else(|| std::env::var("TORII_HTTPS_TOKEN").ok())
         .or_else(|| config_token_for(&host))?;
@@ -288,21 +286,25 @@ fn resolve_auth(url: &str) -> Option<String> {
 }
 
 fn config_token_for(host: &str) -> Option<String> {
-    let cfg = crate::config::ToriiConfig::load_global().ok()?;
-    let token = if host.contains("github.") {
-        cfg.auth.github_token
+    let provider = if host.contains("github.") {
+        "github"
     } else if host.contains("gitlab.") {
-        cfg.auth.gitlab_token
+        "gitlab"
     } else if host.contains("codeberg.") {
-        cfg.auth.codeberg_token
+        "codeberg"
     } else if host.contains("gitea.") {
-        cfg.auth.gitea_token
+        "gitea"
     } else if host.contains("forgejo.") {
-        cfg.auth.forgejo_token
+        "forgejo"
+    } else if host.contains("bitbucket.") {
+        "bitbucket"
     } else {
-        None
+        return None;
     };
-    token.filter(|s| !s.is_empty())
+    // Go through the unified resolver so local-repo overrides and env
+    // var precedence are honoured here too — used to be a direct config
+    // read that ignored both.
+    crate::auth::resolve_token(provider, ".").value
 }
 
 fn host_of(url: &str) -> Option<String> {

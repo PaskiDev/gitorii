@@ -414,18 +414,68 @@ torii config reset                              # Reset to defaults
 
 ## `torii auth`
 
-Manage the gitorii.com API key used by cloud features (CI transpile, etc.). The key is stored locally at `~/.config/torii/auth.toml` (chmod 600). `TORII_API_KEY` env var overrides the stored key for the current process.
+One home for **every credential torii uses** — the gitorii.com cloud API key *and* the per-platform tokens (github, gitlab, gitea, forgejo, codeberg, bitbucket, sourcehut, cargo). Stored at `~/.config/torii/auth.toml` (chmod 600) for global, `<repo>/.torii/auth.toml` for per-repo.
+
+### Cloud (gitorii.com)
 
 ```bash
-torii auth login                       # prompt for an API key and save it
-torii auth login --key gitorii_sk_…    # save a key non-interactively
-torii auth status                      # show org / plan / seats tied to the key
+torii auth login                       # prompt for the gitorii.com API key
+torii auth login --key gitorii_sk_…    # save non-interactively
+torii auth status                      # org / plan / seats tied to the key
 torii auth whoami                      # alias of status
 torii auth logout                      # forget the local key
 torii auth login --endpoint http://localhost:8080   # self-hosted / dev backend
 ```
 
-Generate a key in the dashboard: <https://gitorii.com/dashboard/api-keys>.
+Generate a key at <https://gitorii.com/dashboard/api-keys>. Env var `TORII_API_KEY` overrides per-process.
+
+### Platform tokens
+
+```bash
+torii auth set github ghp_xxx              # save a GitHub token globally
+torii auth set cargo cio_xxx               # crates.io token (used by torii publish)
+torii auth set gitlab glpat-xxx --local    # per-repo override (.torii/auth.toml)
+torii auth set <provider> -                # read from stdin (CI-safe, no shell history)
+torii auth list                            # every provider's state, masked
+torii auth get github                      # one provider, masked
+torii auth get github --unsafe-show        # raw value (rarely what you want)
+torii auth remove gitea                    # drop a stored token
+torii auth doctor                          # diagnose where each token comes from
+```
+
+Supported providers: `github`, `gitlab`, `gitea`, `forgejo`, `codeberg`, `bitbucket`, `sourcehut`, `cargo`.
+
+### Resolution order
+
+When torii needs a token (push, PR/issue API, `torii publish`, etc.), it checks **in this order** and stops at the first hit:
+
+1. **Provider-specific env var**: `GITHUB_TOKEN` / `GH_TOKEN`, `GITLAB_TOKEN`, `GITEA_TOKEN`, `FORGEJO_TOKEN`, `CODEBERG_TOKEN`, `BITBUCKET_TOKEN`, `SOURCEHUT_TOKEN`, `CARGO_REGISTRY_TOKEN`.
+2. **Generic env var**: `TORII_HTTPS_TOKEN` (any provider).
+3. **Local repo store**: `<repo>/.torii/auth.toml`.
+4. **Global store**: `~/.config/torii/auth.toml`.
+
+Run `torii auth doctor` to see exactly which one is in effect for each provider.
+
+### Migration from 0.7.0 and earlier
+
+Pre-0.7.1, platform tokens lived in `~/.config/torii/config.toml [auth]`. Torii auto-migrates them to `auth.toml` on the next mutating call; `torii auth doctor` will tell you if a stale `[auth]` block remains in `config.toml` so you can clean it. `torii config set auth.<provider>_token …` keeps working as a deprecated alias that redirects to `torii auth set …` — will be removed in 0.8.
+
+---
+
+## `torii publish`
+
+Publish the current crate to crates.io. Thin wrapper over `cargo publish` that **injects `auth.cargo`** automatically, so you don't need `CARGO_REGISTRY_TOKEN` in `.env` or your shell.
+
+```bash
+torii auth set cargo cio_xxx               # once
+torii publish                              # validate + upload
+torii publish --dry-run                    # validate only
+torii publish --no-verify                  # skip verify-build (crates.io rebuilds anyway)
+torii publish --allow-dirty                # ignore uncommitted changes
+torii publish --token cio_yyy              # one-shot override
+```
+
+Passes `--locked` by default (verifies against the committed `Cargo.lock`). Useful in CI: set `CARGO_REGISTRY_TOKEN` env var and torii picks it up just like `cargo publish` does.
 
 ---
 

@@ -211,16 +211,18 @@ impl GitRepo {
                 }
             }
             if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                let token = if effective_url.contains("github.com") {
-                    cfg.auth.github_token.clone()
+                // Route through the unified token resolver so local
+                // overrides and env vars are honoured here too.
+                let provider = if effective_url.contains("github.com") {
+                    "github"
                 } else if effective_url.contains("gitlab.com") {
-                    cfg.auth.gitlab_token.clone()
+                    "gitlab"
                 } else if effective_url.contains("codeberg.org") {
-                    cfg.auth.codeberg_token.clone()
+                    "codeberg"
                 } else {
-                    cfg.auth.gitea_token.clone()
+                    "gitea"
                 };
-                if let Some(token) = token {
+                if let Some(token) = crate::auth::resolve_token(provider, ".").value {
                     return git2::Cred::userpass_plaintext("oauth2", &token);
                 }
             }

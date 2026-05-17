@@ -613,18 +613,55 @@ Available keys:
         action: ConfigCommands,
     },
 
-    /// Manage gitorii.com API key (cloud features: CI transpile, etc.)
-    #[command(after_help = "Examples:
-  torii auth login                  Prompt for an API key and save it
+    /// Manage credentials — gitorii.com cloud API key AND per-platform
+    /// tokens (github, gitlab, gitea, forgejo, codeberg, cargo, …).
+    #[command(after_help = "Examples — cloud key:
+  torii auth login                  Prompt for the gitorii.com API key
   torii auth login --key gitorii_sk_…   Save a key non-interactively
   torii auth status                 Show org / plan tied to the key
   torii auth logout                 Forget the local key
 
-Generate a key in the dashboard: https://gitorii.com/dashboard/api-keys
-Override per-process via env: TORII_API_KEY=gitorii_sk_…")]
+Examples — platform tokens:
+  torii auth set github ghp_xxx     Save a GitHub token globally
+  torii auth set cargo cio_xxx       Save a crates.io token
+  torii auth set gitlab glpat-xxx --local  Per-repo token (.torii/auth.toml)
+  torii auth list                    Every provider's state, masked
+  torii auth get github              Just one, masked
+  torii auth remove gitea            Drop it
+  torii auth doctor                  Where does each token come from?
+
+Resolution order: env vars (GITHUB_TOKEN, GITLAB_TOKEN, CARGO_REGISTRY_TOKEN, …)
+                  > .torii/auth.toml (per-repo) > ~/.config/torii/auth.toml (global)")]
     Auth {
         #[command(subcommand)]
         action: AuthCommands,
+    },
+
+    /// Publish the current crate to crates.io. Thin wrapper over
+    /// `cargo publish` that injects `auth.cargo` from `torii auth` so you
+    /// don't need to keep CARGO_REGISTRY_TOKEN in `.env` or your shell.
+    #[command(after_help = "Examples:
+  torii publish                       Validate + upload (uses auth.cargo)
+  torii publish --dry-run             Validate without uploading
+  torii publish --no-verify           Skip the local build step
+  torii publish --token cio_xxx       Override the token for this invocation
+
+Set the persistent token once with:
+  torii auth set cargo <token>")]
+    Publish {
+        /// Don't actually upload to crates.io — just package and verify.
+        #[arg(long)]
+        dry_run: bool,
+        /// Skip the verify-build step (faster but riskier — crates.io
+        /// rebuilds server-side anyway and yanks bad uploads).
+        #[arg(long)]
+        no_verify: bool,
+        /// Use this token for this invocation only (overrides auth.cargo).
+        #[arg(long)]
+        token: Option<String>,
+        /// Pass `--allow-dirty` through to cargo (uncommitted changes).
+        #[arg(long)]
+        allow_dirty: bool,
     },
 
     /// Manage remote repositories (create, delete, configure)
@@ -1369,7 +1406,7 @@ enum WorkspaceCommands {
 
 #[derive(Subcommand)]
 enum AuthCommands {
-    /// Save an API key locally and validate it against the backend.
+    /// Save a gitorii.com API key locally and validate it against the backend.
     Login {
         /// API key (gitorii_sk_…). If omitted, prompts on stdin.
         #[arg(long)]
@@ -1379,12 +1416,53 @@ enum AuthCommands {
         #[arg(long)]
         endpoint: Option<String>,
     },
-    /// Show the org / plan / seats tied to the active key.
+    /// Show the org / plan / seats tied to the active gitorii.com key.
     Status,
     /// Alias of `status`.
     Whoami,
-    /// Delete the local key (env var TORII_API_KEY still wins if set).
+    /// Delete the local gitorii.com API key (env var TORII_API_KEY still wins if set).
     Logout,
+
+    /// Save a platform token (github, gitlab, gitea, forgejo, codeberg,
+    /// bitbucket, sourcehut, cargo). Goes into `~/.config/torii/auth.toml`
+    /// (chmod 600); use `--local` for per-repo `.torii/auth.toml`.
+    Set {
+        /// Provider name. One of: github, gitlab, gitea, forgejo,
+        /// codeberg, bitbucket, sourcehut, cargo.
+        provider: String,
+        /// Token value. Use `-` to read from stdin (recommended for CI
+        /// so the token never lands in shell history).
+        token: String,
+        /// Save in the per-repo store instead of the global one.
+        #[arg(long)]
+        local: bool,
+    },
+
+    /// Print a stored token, value masked (`ghp_xxxx****`).
+    Get {
+        provider: String,
+        /// Show the raw token (you very rarely want this — it goes
+        /// straight to stdout / shell history). Off by default.
+        #[arg(long)]
+        unsafe_show: bool,
+    },
+
+    /// Show every provider's token state (set / not set / from env)
+    /// with masked values.
+    List,
+
+    /// Delete a stored token.
+    Remove {
+        provider: String,
+        /// Remove from per-repo store instead of global.
+        #[arg(long)]
+        local: bool,
+    },
+
+    /// Diagnose where each provider's token comes from (env var name,
+    /// local config, global config, or missing). Use this when "torii
+    /// auth doesn't seem to use my token".
+    Doctor,
 }
 
 #[derive(Subcommand)]
@@ -2589,9 +2667,61 @@ impl Cli {
                 run_auth(action)?;
             }
 
+            Commands::Publish { dry_run, no_verify, token, allow_dirty } => {
+                let resolved = match token {
+                    Some(t) => t.clone(),
+                    None => crate::auth::resolve_token("cargo", ".")
+                        .value
+                        .ok_or_else(|| anyhow::anyhow!(
+                            "No cargo token configured. Set one with:\n  torii auth set cargo <token>\n\
+                             …or pass --token <value> just for this invocation."
+                        ))?,
+                };
+                let mut cmd = std::process::Command::new("cargo");
+                cmd.arg("publish");
+                if *dry_run { cmd.arg("--dry-run"); }
+                if *no_verify { cmd.arg("--no-verify"); }
+                if *allow_dirty { cmd.arg("--allow-dirty"); }
+                // Pass --locked by default — same convention torii uses
+                // elsewhere so the verify-build matches the committed lock.
+                cmd.arg("--locked");
+                cmd.env("CARGO_REGISTRY_TOKEN", &resolved);
+                let mode = if *dry_run { "dry-run" } else { "publishing" };
+                println!("📦 cargo {} (token injected from torii auth)…", mode);
+                let status = cmd.status()?;
+                if !status.success() {
+                    anyhow::bail!("cargo publish exited with {}", status);
+                }
+                if !*dry_run {
+                    println!("\n✅ Published. View at https://crates.io/crates/$(name)");
+                }
+            }
+
             Commands::Config { action } => {
                 match action {
                     ConfigCommands::Set { key, value, local } => {
+                        // Auth tokens migrated to `torii auth` in 0.7.1.
+                        // Redirect transparently so old scripts keep
+                        // working but the user is steered to the new home.
+                        if let Some(provider_token) = key.strip_prefix("auth.") {
+                            if let Some(provider) = provider_token.strip_suffix("_token") {
+                                let repo: Option<&std::path::Path> = if *local {
+                                    Some(std::path::Path::new("."))
+                                } else {
+                                    None
+                                };
+                                crate::auth::set_token(provider, value, repo)?;
+                                eprintln!(
+                                    "⚠  `torii config set auth.{p}_token` is deprecated and will be removed in 0.8.\n   \
+                                     Saved via the new path: `torii auth set {p} …` (which is what you want next time).",
+                                    p = provider
+                                );
+                                let scope = if *local { "local" } else { "global" };
+                                println!("✅ {} token saved ({} store).", provider, scope);
+                                return Ok(());
+                            }
+                        }
+
                         if *local {
                             let mut config = ToriiConfig::load_local(".")?;
                             config.set(key, value)?;
@@ -3602,7 +3732,7 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
                 endpoint: endpoint.clone(),
             });
             let me = whoami(&client)?;
-            auth::save(&key_value, &endpoint)?;
+            auth::save_cloud(&key_value, &endpoint)?;
             println!("✅ Logged in to {}", endpoint);
             println!("   org:  {} ({})", me.org_name, me.org_slug);
             println!("   plan: {}", me.plan);
@@ -3628,8 +3758,121 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
                 println!("⚠️  TORII_API_KEY env var still set — unset it to fully log out.");
             }
         }
+        AuthCommands::Set { provider, token, local } => {
+            let resolved_token = if token == "-" {
+                use std::io::{BufRead, Write};
+                eprint!("Paste token (input hidden — Ctrl-D to end): ");
+                std::io::stderr().flush().ok();
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line)?;
+                let trimmed = line.trim().to_string();
+                if trimmed.is_empty() {
+                    anyhow::bail!("Empty token from stdin.");
+                }
+                trimmed
+            } else {
+                token.clone()
+            };
+            let repo: Option<&std::path::Path> = if *local {
+                Some(std::path::Path::new("."))
+            } else {
+                None
+            };
+            auth::set_token(provider, &resolved_token, repo)?;
+            let scope = if *local { "local" } else { "global" };
+            println!("✅ {} token saved ({} store).", provider, scope);
+        }
+        AuthCommands::Get { provider, unsafe_show } => {
+            let resolved = auth::resolve_token(provider, ".");
+            match (&resolved.value, unsafe_show) {
+                (Some(v), true) => println!("{}", v),
+                (Some(v), false) => println!("{}", mask_token(v)),
+                (None, _) => {
+                    println!("(not set for '{}')", provider);
+                }
+            }
+        }
+        AuthCommands::List => {
+            println!("🔑 Stored tokens:\n");
+            for p in auth::PROVIDERS {
+                let r = auth::resolve_token(p, ".");
+                match r.value.as_deref() {
+                    Some(v) => println!(
+                        "  {:<10} {:<24} {}",
+                        p,
+                        mask_token(v),
+                        describe_source(&r.source)
+                    ),
+                    None => println!("  {:<10} —", p),
+                }
+            }
+        }
+        AuthCommands::Remove { provider, local } => {
+            let repo: Option<&std::path::Path> = if *local {
+                Some(std::path::Path::new("."))
+            } else {
+                None
+            };
+            let removed = auth::remove_token(provider, repo)?;
+            if removed {
+                println!("✅ Removed {} token.", provider);
+            } else {
+                println!("(no {} token was set; nothing to remove)", provider);
+            }
+        }
+        AuthCommands::Doctor => {
+            println!("🔍 Token resolution (env > local > global):\n");
+            for p in auth::PROVIDERS {
+                let r = auth::resolve_token(p, ".");
+                let state = match &r.value {
+                    Some(_) => "✓ resolved",
+                    None => "— missing",
+                };
+                let source = describe_source(&r.source);
+                println!("  {:<10} {:<14} {}", p, state, source);
+            }
+            // Also surface the legacy config.toml [auth] if it lingers.
+            if let Some(cd) = dirs::config_dir() {
+                let cfg = cd.join("torii").join("config.toml");
+                if let Ok(t) = std::fs::read_to_string(&cfg) {
+                    let has_legacy = t.lines().any(|l| {
+                        let l = l.trim();
+                        l == "[auth]" || l.starts_with("[auth]")
+                    });
+                    if has_legacy {
+                        println!(
+                            "\n⚠  Legacy [auth] block still present in {}.\n   \
+                             Tokens have been migrated to auth.toml — you can delete that section now.",
+                            cfg.display()
+                        );
+                    }
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Render a token as `prefix6_xxxx****suffix4` so screenshots / logs
+/// don't leak the secret. Tokens shorter than 12 chars are fully masked.
+fn mask_token(t: &str) -> String {
+    let chars: Vec<char> = t.chars().collect();
+    if chars.len() < 12 {
+        return "****".to_string();
+    }
+    let head: String = chars.iter().take(6).collect();
+    let tail: String = chars.iter().skip(chars.len() - 4).collect();
+    format!("{}…{}", head, tail)
+}
+
+fn describe_source(s: &crate::auth::TokenSource) -> String {
+    match s {
+        crate::auth::TokenSource::EnvVar(name) => format!("from env: ${}", name),
+        crate::auth::TokenSource::EnvGeneric => "from env: $TORII_HTTPS_TOKEN".to_string(),
+        crate::auth::TokenSource::Local => "local .torii/auth.toml".to_string(),
+        crate::auth::TokenSource::Global => "global ~/.config/torii/auth.toml".to_string(),
+        crate::auth::TokenSource::Missing => "(not set)".to_string(),
+    }
 }
 
 fn run_scan(history: bool) -> Result<()> {
