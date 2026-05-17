@@ -44,12 +44,28 @@ pub struct WorktreeConfig {
     /// `~` expansion is honoured. The `<repo>-<branch>` suffix is appended
     /// automatically (branch slashes replaced with `-`).
     pub base_dir: String,
+
+    /// Paths from the main repo to also drop into every freshly-created
+    /// worktree. Typical entries: `.env`, `target/`, `node_modules/`, build
+    /// caches that aren't tracked by git but you don't want to regenerate
+    /// from scratch in every linked working copy.
+    ///
+    /// Each entry is resolved relative to the main repo's working
+    /// directory. Heuristic per entry:
+    ///   - directory present → symlink into the new worktree
+    ///   - file present      → copy into the new worktree
+    ///   - missing           → silently skipped
+    ///
+    /// Default is empty (no inheritance, vanilla `git worktree` behaviour).
+    #[serde(default)]
+    pub inherit_paths: Vec<String>,
 }
 
 impl Default for WorktreeConfig {
     fn default() -> Self {
         Self {
             base_dir: "..".to_string(),
+            inherit_paths: Vec::new(),
         }
     }
 }
@@ -331,6 +347,13 @@ impl ToriiConfig {
             ("auth", "forgejo_token") => self.auth.forgejo_token.clone().map(|_| "[set]".to_string()),
             ("auth", "codeberg_token") => self.auth.codeberg_token.clone().map(|_| "[set]".to_string()),
             ("worktree", "base_dir") => Some(self.worktree.base_dir.clone()),
+            ("worktree", "inherit_paths") => {
+                if self.worktree.inherit_paths.is_empty() {
+                    None
+                } else {
+                    Some(self.worktree.inherit_paths.join(","))
+                }
+            }
             _ => None,
         }
     }
@@ -412,6 +435,18 @@ impl ToriiConfig {
                 }
                 self.worktree.base_dir = value.to_string();
             }
+            ("worktree", "inherit_paths") => {
+                // Accept comma-separated list; empty string clears.
+                self.worktree.inherit_paths = if value.trim().is_empty() {
+                    Vec::new()
+                } else {
+                    value
+                        .split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                };
+            }
             _ => return Err(ToriiError::InvalidConfig(format!("Unknown config key: {}", key))),
         }
         
@@ -469,6 +504,12 @@ impl ToriiConfig {
 
         // Worktree
         items.push(("worktree.base_dir".to_string(), self.worktree.base_dir.clone()));
+        if !self.worktree.inherit_paths.is_empty() {
+            items.push((
+                "worktree.inherit_paths".to_string(),
+                self.worktree.inherit_paths.join(","),
+            ));
+        }
 
         items
     }

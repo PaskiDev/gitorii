@@ -30,6 +30,8 @@ mod versioning;
 mod pr;
 mod issue;
 mod tui;
+mod submodule;
+mod subtree;
 mod workspace;
 mod worktree;
 

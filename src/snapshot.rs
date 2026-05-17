@@ -76,13 +76,39 @@ impl SnapshotManager {
         // Create bundle with all refs
         let mut revwalk = repo.repository().revwalk()?;
         revwalk.push_head()?;
-        
-        // For now, we'll use a simpler approach: copy the entire .git directory
-        // In production, we'd use proper git bundle creation
-        let git_dir = self.repo_path.join(".git");
+
+        let git_path = self.repo_path.join(".git");
         let snapshot_git = snapshot_dir.join("git_backup");
-        
-        self.copy_dir_recursive(&git_dir, &snapshot_git)?;
+
+        // .git is normally a directory (regular checkout). In linked
+        // worktrees and submodules it's a regular file whose first line is
+        // "gitdir: <path-to-real-gitdir>" pointing at the metadata that
+        // actually lives elsewhere — shared with the main repo. In that
+        // case copying the file alone preserves the link; the worktree's
+        // working-tree content gets copied below alongside it. We do NOT
+        // duplicate the linked gitdir because (a) it's shared and (b) the
+        // worktree's unique state lives in the working tree.
+        match fs::symlink_metadata(&git_path) {
+            Ok(meta) if meta.is_dir() => {
+                self.copy_dir_recursive(&git_path, &snapshot_git)?;
+            }
+            Ok(_) => {
+                // .git is a file (worktree / submodule gitlink). Copy the
+                // single file so we know which gitdir this was tied to,
+                // then leave the rest alone.
+                fs::create_dir_all(&snapshot_git)?;
+                fs::copy(&git_path, snapshot_git.join("gitdir-link"))?;
+                // Also dump the resolved gitdir path so restoration knows
+                // where the real metadata lived.
+                if let Ok(content) = fs::read_to_string(&git_path) {
+                    let pointer = content.trim();
+                    fs::write(snapshot_git.join("RESOLVED-GITDIR"), pointer)?;
+                }
+            }
+            Err(e) => {
+                return Err(ToriiError::Io(e));
+            }
+        }
 
         Ok(())
     }

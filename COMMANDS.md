@@ -543,16 +543,28 @@ torii tui
 Multiple working copies of the same repository, each on its own branch, sharing the underlying object database. Useful for hot-fixes ("don't disturb my in-progress feature branch") or reviewing a PR without stashing.
 
 ```bash
+torii worktree                                     # default: list (same as 'torii worktree list')
 torii worktree add -b feature/auth                 # new branch + worktree at ../<repo>-feature-auth/
 torii worktree add ../hotfix -b release/0.7        # new branch at explicit path
 torii worktree add ../hotfix release/0.7           # check out existing branch in a worktree
-torii worktree list                                # every worktree with branch + clean/dirty
+torii worktree list                                # every worktree with branch + clean/dirty + ahead/behind
 torii worktree remove ../hotfix                    # delete worktree (snapshot taken first)
 torii worktree remove ../hotfix --force            # remove even if dirty
 torii worktree remove ../hotfix --no-snapshot      # skip the safety snapshot
 torii worktree prune                               # clean up metadata of deleted worktrees
 torii worktree open ../hotfix                      # launch $SHELL inside the worktree
 ```
+
+### Inherit paths to avoid rebuilds
+
+The biggest pain of worktrees in practice is that each one starts with an empty `target/`, `node_modules/`, `.venv/` etc., forcing a full rebuild. `worktree.inherit_paths` solves it:
+
+```bash
+torii config set worktree.inherit_paths ".env,target,node_modules"
+torii worktree add -b feat/login           # .env copied, target/ + node_modules/ symlinked
+```
+
+Files are copied (need a real writable copy); directories are symlinked (share the cache between worktrees). Missing entries are silently skipped.
 
 ### Default path resolution
 
@@ -578,10 +590,76 @@ Branch slashes are replaced with `-` in the directory name (`feature/auth` → `
 | Concept | git | torii |
 |---------|-----|-------|
 | Default path | always required | derived from `worktree.base_dir` + branch name |
-| List | per-worktree text, no status | one-line per worktree with branch + clean/dirty |
+| List | per-worktree text, no status | one-line per worktree with branch + clean/dirty + ahead/behind |
 | Remove safety | `--force` required if dirty | same + automatic snapshot |
 | `open` | (not present) | launches `$SHELL` in the worktree directory |
-| Lock / move / repair | yes | not yet in 0.6.8 — coming later |
+| Inherit paths from main (`.env`, `target/`) | (not present) | `worktree.inherit_paths` config copies/symlinks them automatically |
+| Lock / move / repair | yes | not yet — coming later |
+
+---
+
+## `torii submodule`
+
+Embed another git repo at a path inside this one and pin it at a specific commit. The embedded repo's history stays separate.
+
+```bash
+torii submodule                                       # default: status
+torii submodule add git@github.com:owner/lib.git vendor/lib       # register + clone + stage
+torii submodule add git@... vendor/lib --branch main              # pin a tracked branch
+torii submodule status                                # list with HEAD / working / state
+torii submodule init                                  # copy .gitmodules URLs to .git/config
+torii submodule init --force                          # overwrite existing entries
+torii submodule update                                # fetch + checkout pinned commit
+torii submodule update --init                         # init missing first, then update
+torii submodule sync                                  # re-copy URLs (after upstream URL change)
+torii submodule foreach 'cargo build'                 # run command in each submodule's wd
+torii submodule foreach 'echo $TORII_SUBMODULE_PATH'  # env: TORII_SUBMODULE_NAME, _PATH
+torii submodule remove vendor/lib                     # deregister + scrub all four state locations
+```
+
+### What `remove` actually does
+
+Submodule state lives in four places. `remove` scrubs each of them:
+
+1. `.gitmodules` — strip the `[submodule "<name>"]` section.
+2. `.git/config` — same, but in local config.
+3. `.git/modules/<name>/` — wipe the cached gitdir (so a future re-add starts clean).
+4. **Super-repo index** — remove the gitlink entry via libgit2 directly (not `git rm`, which refuses if `.gitmodules` already has uncommitted edits).
+
+After running, the user still needs `torii save -am "remove submodule X"` to commit the cleanup.
+
+### Limitations
+
+- **No `--recursive`** flag yet — nested submodules need a manual loop. Tracked for a later release.
+- **`foreach` stops at first non-zero exit** — no `--continue-on-error`. Matches `git submodule foreach` default.
+
+---
+
+## `torii subtree`
+
+Merge another project's history into a subdirectory of this repo, keeping commits but flattening it into our tree. **Thin wrapper over `git subtree`** (which must be installed — comes with git on most distros; on Debian/Ubuntu it's a separate `git-subtree` package).
+
+```bash
+torii subtree add   --prefix=vendor/lib git@... main --squash     # initial import
+torii subtree pull  --prefix=vendor/lib git@... main --squash     # fetch upstream changes
+torii subtree push  --prefix=vendor/lib git@... main              # push subtree back
+torii subtree split --prefix=vendor/lib -b lib-split              # extract history to a new branch
+torii subtree merge --prefix=vendor/lib some-ref                  # finish a manual conflict resolution
+```
+
+### Why wrapper, not from-scratch
+
+`git subtree` is an official git contrib script refined since 2009 (~800 lines, lots of edge cases around parent detection, orphan commits, --squash semantics, history rewriting through merge bases). Reimplementing those correctly in Rust on top of libgit2 (which has no subtree primitives) would be 1k+ LOC of risk for behaviour that's already correct upstream. Torii adds the consistent UX layer, defers the motor.
+
+### Submodule vs subtree at a glance
+
+| Concept | Submodule | Subtree |
+|---------|-----------|---------|
+| Embedded history | separate repo, pinned commit | flattened into our commits |
+| Extra files | `.gitmodules` | none |
+| Cloners need extra steps | yes (`init` + `update`) | no |
+| Pushing back upstream | clone-then-push the submodule | `torii subtree push` |
+| Best for | shared deps you treat as black boxes | vendored deps you patch locally |
 
 ---
 

@@ -149,6 +149,8 @@ Release & collaboration:
   torii snapshot stash                  Stash work in progress
   torii workspace status                Status across all workspace repos
   torii worktree add -b hotfix          Spin up a sibling worktree on a new branch
+  torii submodule add <url> vendor/lib  Embed another repo at a pinned commit
+  torii subtree pull --prefix=vendor/x  Fetch upstream into a vendored subtree
 
 Interactive UI:
   torii tui                             Launch terminal UI
@@ -707,7 +709,153 @@ The default path (when omitted) is derived from worktree.base_dir config:
   torii config set worktree.base_dir ..             # restore default")]
     Worktree {
         #[command(subcommand)]
-        action: WorktreeCommands,
+        action: Option<WorktreeCommands>,
+    },
+
+    /// Manage submodules — embed another git repo at a path and commit
+    /// inside this one. The embedded repo's history stays separate.
+    #[command(after_help = "Examples:
+  torii submodule add git@github.com:owner/lib.git vendor/lib            Add at vendor/lib
+  torii submodule add git@.../lib.git vendor/lib --branch main           Pin a tracked branch
+  torii submodule status                                                 List submodules + state
+  torii submodule init                                                   Copy .gitmodules URLs to .git/config
+  torii submodule update --init                                          Init missing + fetch+checkout pinned commit
+  torii submodule sync                                                   Re-copy URLs (after upstream URL change)
+  torii submodule foreach 'cargo build'                                  Run a command in each submodule
+  torii submodule remove vendor/lib                                       Deregister + clean up
+
+Recursion (--recursive) is not yet implemented; nested submodules need a
+manual loop for now.")]
+    Submodule {
+        #[command(subcommand)]
+        action: Option<SubmoduleCommands>,
+    },
+
+    /// Manage subtrees — merge another project's history into a
+    /// subdirectory of this repo, no second clone, no .gitmodules. Thin
+    /// wrapper over `git subtree` (which must be installed).
+    #[command(after_help = "Examples:
+  torii subtree add    --prefix=vendor/lib git@... main --squash       Initial import
+  torii subtree pull   --prefix=vendor/lib git@... main --squash       Fetch upstream changes
+  torii subtree push   --prefix=vendor/lib git@... main                Push subtree back
+  torii subtree split  --prefix=vendor/lib -b lib-split                Extract history to a branch
+  torii subtree merge  --prefix=vendor/lib some-ref                    Finish a manual merge
+
+Pass --squash on add/pull/merge to flatten upstream history into a single
+merge commit. Without it the full upstream graph is brought in.")]
+    Subtree {
+        #[command(subcommand)]
+        action: SubtreeCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SubmoduleCommands {
+    /// Register and clone a new submodule.
+    Add {
+        /// Source URL of the submodule (git@host:owner/repo.git, https://…, etc.).
+        url: String,
+        /// Where in this repo to place it (e.g. vendor/lib).
+        path: PathBuf,
+        /// Track a specific branch (writes submodule.<n>.branch in .gitmodules).
+        #[arg(long)]
+        branch: Option<String>,
+        /// Override the submodule name (defaults to the path).
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// List submodules with HEAD, working-tree id and state.
+    Status,
+
+    /// Copy URLs from `.gitmodules` into `.git/config`.
+    Init {
+        /// Overwrite existing entries in `.git/config`.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Fetch and checkout the commit each submodule is pinned at.
+    Update {
+        /// Also run `init` first for submodules that aren't initialised.
+        #[arg(long)]
+        init: bool,
+    },
+
+    /// Re-copy URLs from `.gitmodules` into `.git/config`.
+    Sync,
+
+    /// Run a shell command in each submodule's working directory.
+    Foreach {
+        /// Command to run via $SHELL -c. Stops at the first non-zero exit.
+        #[arg(trailing_var_arg = true)]
+        cmd: Vec<String>,
+    },
+
+    /// Deregister a submodule cleanly (.gitmodules, .git/config, .git/modules, working tree).
+    Remove {
+        /// Path of the submodule to remove (must match `path` in .gitmodules).
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum SubtreeCommands {
+    /// Initial import of `<url>:<ref>` at `--prefix=<dir>`.
+    Add {
+        /// Subdirectory inside the super-repo (e.g. vendor/lib).
+        #[arg(long)]
+        prefix: String,
+        /// Source URL or local path.
+        url: String,
+        /// Ref (branch, tag, commit) on the source side.
+        #[arg(value_name = "REF")]
+        refname: String,
+        /// Flatten upstream history into one merge commit.
+        #[arg(long)]
+        squash: bool,
+    },
+
+    /// Fetch and merge upstream updates into the subtree.
+    Pull {
+        #[arg(long)]
+        prefix: String,
+        url: String,
+        #[arg(value_name = "REF")]
+        refname: String,
+        #[arg(long)]
+        squash: bool,
+    },
+
+    /// Extract the subtree and push it back to its source.
+    Push {
+        #[arg(long)]
+        prefix: String,
+        url: String,
+        #[arg(value_name = "REF")]
+        refname: String,
+    },
+
+    /// Extract the subtree's history into a new branch without pushing.
+    Split {
+        #[arg(long)]
+        prefix: String,
+        /// Create a local branch at the split commit.
+        #[arg(short = 'b', long)]
+        branch: Option<String>,
+        /// Annotate cherry-picked commits with this prefix.
+        #[arg(long)]
+        annotate: Option<String>,
+    },
+
+    /// Finish a manual conflict resolution after `pull`.
+    Merge {
+        #[arg(long)]
+        prefix: String,
+        #[arg(value_name = "REF")]
+        refname: String,
+        #[arg(long)]
+        squash: bool,
     },
 }
 
@@ -2684,12 +2832,16 @@ impl Cli {
             Commands::Worktree { action } => {
                 use crate::worktree;
                 let repo_path = std::path::Path::new(".");
-                match action {
-                    WorktreeCommands::Add {
+                // Default to `list` when no subcommand is given — git/cargo/npm convention.
+                match action.as_ref() {
+                    None | Some(WorktreeCommands::List) => {
+                        worktree::list(repo_path)?;
+                    }
+                    Some(WorktreeCommands::Add {
                         path,
                         new_branch,
                         existing_branch,
-                    } => {
+                    }) => {
                         let spec = match (new_branch, existing_branch) {
                             (Some(_), Some(_)) => anyhow::bail!(
                                 "Pass either -b <new-branch> OR a positional <existing-branch>, not both."
@@ -2705,25 +2857,81 @@ impl Cli {
                         };
                         worktree::add(repo_path, spec, &opts)?;
                     }
-                    WorktreeCommands::List => {
-                        worktree::list(repo_path)?;
-                    }
-                    WorktreeCommands::Remove {
+                    Some(WorktreeCommands::Remove {
                         path,
                         force,
                         no_snapshot,
-                    } => {
+                    }) => {
                         let opts = worktree::RemoveOpts {
                             force: *force,
                             no_snapshot: *no_snapshot,
                         };
                         worktree::remove(repo_path, path, &opts)?;
                     }
-                    WorktreeCommands::Prune => {
+                    Some(WorktreeCommands::Prune) => {
                         worktree::prune(repo_path)?;
                     }
-                    WorktreeCommands::Open { path } => {
+                    Some(WorktreeCommands::Open { path }) => {
                         worktree::open(repo_path, path)?;
+                    }
+                }
+            }
+
+            Commands::Submodule { action } => {
+                use crate::submodule;
+                let repo_path = std::path::Path::new(".");
+                match action.as_ref() {
+                    None | Some(SubmoduleCommands::Status) => {
+                        submodule::status(repo_path)?;
+                    }
+                    Some(SubmoduleCommands::Add { url, path, branch, name }) => {
+                        let opts = submodule::AddOpts {
+                            branch: branch.clone(),
+                            name: name.clone(),
+                        };
+                        submodule::add(repo_path, url, path, &opts)?;
+                    }
+                    Some(SubmoduleCommands::Init { force }) => {
+                        submodule::init(repo_path, *force)?;
+                    }
+                    Some(SubmoduleCommands::Update { init }) => {
+                        let opts = submodule::UpdateOpts { init: *init };
+                        submodule::update(repo_path, &opts)?;
+                    }
+                    Some(SubmoduleCommands::Sync) => {
+                        submodule::sync(repo_path)?;
+                    }
+                    Some(SubmoduleCommands::Foreach { cmd }) => {
+                        if cmd.is_empty() {
+                            anyhow::bail!("foreach needs a command, e.g. torii submodule foreach 'cargo build'");
+                        }
+                        let joined = cmd.join(" ");
+                        submodule::foreach(repo_path, &joined)?;
+                    }
+                    Some(SubmoduleCommands::Remove { path }) => {
+                        submodule::remove(repo_path, path)?;
+                    }
+                }
+            }
+
+            Commands::Subtree { action } => {
+                use crate::subtree;
+                let repo_path = std::path::Path::new(".");
+                match action {
+                    SubtreeCommands::Add { prefix, url, refname, squash } => {
+                        subtree::add(repo_path, prefix, url, refname, &subtree::CommonOpts { squash: *squash })?;
+                    }
+                    SubtreeCommands::Pull { prefix, url, refname, squash } => {
+                        subtree::pull(repo_path, prefix, url, refname, &subtree::CommonOpts { squash: *squash })?;
+                    }
+                    SubtreeCommands::Push { prefix, url, refname } => {
+                        subtree::push(repo_path, prefix, url, refname)?;
+                    }
+                    SubtreeCommands::Split { prefix, branch, annotate } => {
+                        subtree::split(repo_path, prefix, branch.as_deref(), annotate.as_deref())?;
+                    }
+                    SubtreeCommands::Merge { prefix, refname, squash } => {
+                        subtree::merge(repo_path, prefix, refname, &subtree::CommonOpts { squash: *squash })?;
                     }
                 }
             }

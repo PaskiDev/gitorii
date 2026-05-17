@@ -127,9 +127,70 @@ pub fn add(repo_path: &Path, spec: BranchSpec, opts: &AddOpts) -> Result<()> {
         target_path.display(),
         branch_name
     );
+
+    // Optional: drop in inherited paths (.env, target/, node_modules/, …)
+    // so the worktree is usable immediately without rebuilding from
+    // scratch. Best-effort — print what we did but don't fail the whole
+    // operation if one entry can't be copied.
+    let cfg = crate::config::ToriiConfig::load_global().unwrap_or_default();
+    let inherited = inherit_paths(repo_path, &target_path, &cfg.worktree.inherit_paths);
+    for line in inherited {
+        println!("   {line}");
+    }
+
     println!("\n💡 Enter it with:  torii worktree open {}", target_path.display());
 
     Ok(())
+}
+
+/// For each entry in `paths`, drop it into `target` from `source`. Files
+/// are copied (small, want a real fresh writable copy); directories are
+/// symlinked (typically huge build caches that we want to share). Returns
+/// one human-readable status line per entry actually processed; missing
+/// entries are silent.
+fn inherit_paths(source_root: &Path, target_root: &Path, paths: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    let source_abs = match source_root.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return out,
+    };
+    for entry in paths {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let src = source_abs.join(entry);
+        let dst = target_root.join(entry);
+
+        let meta = match std::fs::symlink_metadata(&src) {
+            Ok(m) => m,
+            Err(_) => continue, // silently skip missing entries
+        };
+
+        // Make sure parent exists in target (entry may be nested like
+        // "config/secrets.env").
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        if meta.is_dir() {
+            // Symlink directories — fast, shares cache between worktrees.
+            #[cfg(unix)]
+            let res = std::os::unix::fs::symlink(&src, &dst);
+            #[cfg(not(unix))]
+            let res = std::os::windows::fs::symlink_dir(&src, &dst);
+            match res {
+                Ok(_) => out.push(format!("🔗 symlinked: {} → {}", entry, src.display())),
+                Err(e) => out.push(format!("⚠  symlink {} failed: {}", entry, e)),
+            }
+        } else if meta.is_file() {
+            match std::fs::copy(&src, &dst) {
+                Ok(_) => out.push(format!("📄 copied: {}", entry)),
+                Err(e) => out.push(format!("⚠  copy {} failed: {}", entry, e)),
+            }
+        }
+    }
+    out
 }
 
 fn resolve_target_path(
@@ -277,6 +338,10 @@ fn print_worktree_row(
 }
 
 /// Open the worktree as its own repo and report `(branch_name, status)`.
+///
+/// `status` combines dirty-file count and upstream divergence into one line:
+/// `clean · 2 ahead, 1 behind` or `3 change(s)` or `clean` if pristine and
+/// in sync (or upstream not tracked).
 fn describe_worktree(path: &Path) -> Result<(String, String)> {
     let repo = Repository::open(path).map_err(ToriiError::Git)?;
     let head = repo.head().ok();
@@ -294,13 +359,46 @@ fn describe_worktree(path: &Path) -> Result<(String, String)> {
         .filter(|s| !s.status().contains(git2::Status::IGNORED))
         .count();
 
-    let state = if dirty_count == 0 {
+    let dirty_part = if dirty_count == 0 {
         "clean".to_string()
     } else {
         format!("{} change(s)", dirty_count)
     };
 
+    // Try to compute ahead/behind vs upstream. Silently degrade to just the
+    // dirty part if there's no upstream tracked (very common for fresh
+    // feature branches) or the calculation fails for any reason.
+    let upstream_part = head
+        .as_ref()
+        .and_then(|h| h.shorthand())
+        .and_then(|name| repo.find_branch(name, BranchType::Local).ok())
+        .and_then(|b| b.upstream().ok())
+        .and_then(|upstream| {
+            let local_oid = head.as_ref().and_then(|h| h.target())?;
+            let up_oid = upstream.into_reference().target()?;
+            repo.graph_ahead_behind(local_oid, up_oid)
+                .ok()
+                .map(|(ahead, behind)| format_ahead_behind(ahead, behind))
+        })
+        .flatten();
+
+    let state = match upstream_part {
+        Some(ab) => format!("{dirty_part} · {ab}"),
+        None => dirty_part,
+    };
+
     Ok((branch, state))
+}
+
+/// Format the `(ahead, behind)` pair for the list table. Returns `None`
+/// when the branch is in sync with upstream (nothing useful to show).
+fn format_ahead_behind(ahead: usize, behind: usize) -> Option<String> {
+    match (ahead, behind) {
+        (0, 0) => None,
+        (a, 0) => Some(format!("{a} ahead")),
+        (0, b) => Some(format!("{b} behind")),
+        (a, b) => Some(format!("{a} ahead, {b} behind")),
+    }
 }
 
 // -- remove ----------------------------------------------------------------

@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-05-17
+
+### Added
+- **`torii submodule` — seven-subcommand MVP** for embedding another git repo at a pinned commit inside this one. Mirrors `git submodule` with torii's UX layer on top.
+  - **`torii submodule add <url> <path> [--branch <b>] [--name <n>]`** registers the entry in `.gitmodules`+`.git/config`, clones the contents, stages the result, and writes the optional tracking branch. The user finishes the operation with their own commit.
+  - **`torii submodule status` (or just `torii submodule`)** lists every submodule with HEAD oid, working-tree oid, URL, and a state string (`clean`, `modified`, `not initialised`, `dirty working tree`, etc.).
+  - **`torii submodule init [--force]`** copies `.gitmodules` URLs into `.git/config` so `update` knows where to fetch from. Idempotent.
+  - **`torii submodule update [--init]`** fetches and checks out the commit each submodule is pinned at. `--init` runs `init` first for uninitialised entries (mirrors `git submodule update --init`).
+  - **`torii submodule sync`** re-copies `.gitmodules` URLs into `.git/config` (useful after an upstream URL change).
+  - **`torii submodule foreach <cmd>`** runs `<cmd>` via `$SHELL -c` in each submodule's working directory, exporting `TORII_SUBMODULE_NAME` and `TORII_SUBMODULE_PATH`. Stops at the first non-zero exit (matches `git submodule foreach` default).
+  - **`torii submodule remove <path>`** scrubs all four places submodule state lives: `.gitmodules` section, `.git/config` section, `.git/modules/<name>/` cached gitdir, and the super-repo's index (via libgit2 directly — `git rm --cached` refuses when `.gitmodules` already has staged changes; libgit2's index API doesn't care).
+- **`torii subtree` — five-subcommand thin wrapper** around `git subtree` for merging another project's history into a subdirectory of this repo. `add`/`pull`/`push`/`split`/`merge`, all forwarding to the upstream contrib script. `--squash` exposed on the operations that support it.
+  - Why a wrapper, not a reimplementation: `git subtree` is ~800 lines of bash refined since 2009 with a long tail of edge cases (orphan commits, parent detection, --squash semantics, history rewrites through merge bases). Reimplementing those in Rust on top of libgit2 (no subtree primitives) would be 1k+ LOC of risk. Torii provides the UX skin and clear error message when `git-subtree` is missing.
+- **Worktree polish — four follow-ups to 0.6.8:**
+  - **`torii worktree` with no subcommand defaults to `list`** (git/cargo/npm convention).
+  - **`torii worktree list` now shows ahead/behind vs upstream** when the worktree's branch tracks one. Reads `dirty · 2 ahead, 1 behind` style; silently omits the second segment when there's no upstream (very common for fresh feature branches).
+  - **New config key `worktree.inherit_paths`** (comma-separated): paths from the main repo to drop into every freshly-created worktree. Files are copied (real fresh writable copy); directories are symlinked (typically large build caches like `target/` or `node_modules/`); missing entries are silent. Solves the #1 pain of worktrees in practice — no more rebuilding from scratch in every linked checkout.
+  - **Snapshot module now handles worktrees correctly.** Previously the pre-remove safety snapshot in `torii worktree remove` failed silently with "Not a directory (os error 20)" because the module assumed `.git` was a directory; in a worktree it's a one-line link file pointing at a shared gitdir in the main repo's `.git/modules/<name>/`. The module now detects the file case, copies the link plus a `RESOLVED-GITDIR` marker, and leaves the shared metadata alone.
+
+### Notes
+- **Submodule recursion (`--recursive`)** is intentionally not in 0.6.9; nested submodules need a manual loop for now. Tracked for follow-up.
+- **Subtree** depends on `git-subtree` being on PATH. On Arch/Fedora it ships with `git`; on Debian/Ubuntu it's a separate `git-subtree` package. Torii surfaces a precise error message if it's missing.
+- **Index manipulation in `submodule remove`** is now done via libgit2 directly (`Index::remove_path`/`remove_dir` + `Index::write`), not by shelling out to `git rm --cached`. The shell-out path stayed brittle in practice because git refuses to operate on the index when `.gitmodules` has uncommitted edits, which is precisely the state we're in mid-remove.
+
 ## [0.6.8] - 2026-05-16
 
 ### Added

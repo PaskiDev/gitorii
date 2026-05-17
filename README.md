@@ -187,16 +187,49 @@ torii branch --rename <name>  # rename current branch
 Multiple checkouts of the same repo, each on its own branch, sharing objects. Great for hot-fixes without disturbing in-progress work.
 
 ```bash
+torii worktree                             # default: list
 torii worktree add -b feature/auth         # new branch + worktree at ../<repo>-feature-auth/
-torii worktree add ../hotfix release/0.7   # check out existing branch in a worktree at given path
-torii worktree list                        # all worktrees with branch + clean/dirty
+torii worktree add ../hotfix release/0.7   # check out existing branch in a worktree
+torii worktree list                        # all worktrees with branch + clean/dirty + ahead/behind
 torii worktree remove ../hotfix            # delete worktree (snapshot taken automatically)
 torii worktree remove ../hotfix --force    # ...even if dirty
 torii worktree prune                       # clean up metadata of deleted worktrees
 torii worktree open ../hotfix              # launch $SHELL inside the worktree
 ```
 
-Default path comes from `worktree.base_dir` config (default `..`). Override with `torii config set worktree.base_dir ~/worktrees`.
+Default path comes from `worktree.base_dir` config (default `..`). `worktree.inherit_paths` automatically copies/symlinks `.env`, `target/`, `node_modules/` etc. into new worktrees so you don't rebuild from scratch:
+
+```bash
+torii config set worktree.inherit_paths ".env,target,node_modules"
+```
+
+### Submodules
+
+Embed another git repo at a path and commit pinned at a specific commit.
+
+```bash
+torii submodule                              # default: status
+torii submodule add git@github.com:owner/lib.git vendor/lib --branch main
+torii submodule status                       # list with HEAD / working / state
+torii submodule init                         # copy .gitmodules URLs to .git/config
+torii submodule update --init                # init missing + checkout pinned commit
+torii submodule sync                         # re-copy URLs (after upstream URL change)
+torii submodule foreach 'cargo build'        # run command in each submodule
+torii submodule remove vendor/lib            # deregister + scrub all four state locations
+```
+
+### Subtrees
+
+Merge another project's history into a subdirectory of this repo, flattening it into your tree. Thin wrapper over `git subtree` (must be installed).
+
+```bash
+torii subtree add  --prefix=vendor/lib git@... main --squash    # initial import
+torii subtree pull --prefix=vendor/lib git@... main --squash    # fetch upstream changes
+torii subtree push --prefix=vendor/lib git@... main             # push subtree back upstream
+torii subtree split --prefix=vendor/lib -b lib-split            # extract history to a new branch
+```
+
+Submodule vs subtree quick choice: submodule when the dep is a black box you bump occasionally; subtree when you patch it locally and want one cohesive history.
 
 ### Inspect
 
@@ -381,7 +414,7 @@ torii config edit
 torii config reset
 ```
 
-Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `auth.gitea_token`, `auth.forgejo_token`, `auth.codeberg_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `mirror.autofetch_enabled`, `snapshot.auto_enabled`, `snapshot.auto_interval_minutes`, `ui.colors`, `ui.emoji`, `ui.verbose`, `ui.date_format`, `worktree.base_dir`.
+Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `auth.gitea_token`, `auth.forgejo_token`, `auth.codeberg_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `mirror.autofetch_enabled`, `snapshot.auto_enabled`, `snapshot.auto_interval_minutes`, `ui.colors`, `ui.emoji`, `ui.verbose`, `ui.date_format`, `worktree.base_dir`, `worktree.inherit_paths` (comma-separated).
 
 ### Auth (gitorii.com cloud)
 
