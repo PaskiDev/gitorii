@@ -31,6 +31,7 @@ mod pr;
 mod issue;
 mod tui;
 mod workspace;
+mod worktree;
 
 use anyhow::Result;
 use cli::Cli;

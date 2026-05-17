@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-05-16
+
+### Added
+- **`torii worktree` — five-subcommand MVP**: linked working copies of the same repository, each on its own branch, sharing the underlying object database. Useful for "let me hot-fix without disturbing my in-progress branch" and similar workflows that `git worktree` covers — with torii ergonomics on top.
+  - **`torii worktree add [<path>] [-b <new-branch>] [<existing-branch>]`** creates a new worktree. Path is optional: when omitted it's derived from `worktree.base_dir` (new config key, default `..`) + `<repo>-<branch-sanitized>/`. `-b` creates a branch off HEAD; positional names an existing local branch.
+  - **`torii worktree list`** prints every worktree (main + linked) with branch name and clean/dirty status in one shot. `📍` marks the current one; locked worktrees show their lock reason. Faster mental model than the per-worktree text dump from `git worktree list`.
+  - **`torii worktree remove <path> [--force] [--no-snapshot]`** deletes a worktree's directory and prunes its libgit2 metadata. Refuses if the working tree is dirty unless `--force`. Always attempts a safety snapshot first (snapshot of the worktree itself, not the main repo). The snapshot may silently fail on worktrees because the existing snapshot module assumes `.git` is a directory and a worktree's `.git` is a link file — graceful warning, removal proceeds. Snapshot module fix tracked for a later release.
+  - **`torii worktree prune`** clears metadata for worktrees whose directories were deleted out-of-band (e.g. via `rm -rf`). Only fires on already-invalid entries; never touches live worktrees.
+  - **`torii worktree open <path>`** launches `$SHELL` (fallback `/bin/bash`) in the worktree directory and blocks until you exit — same gesture as `(cd <path> && $SHELL)` but rejected if the path isn't a known worktree of the current repo. `git worktree` has no equivalent.
+- **New config key `worktree.base_dir`** (default `..`) controls where `torii worktree add` puts new worktrees when no path is provided. Honors `~` expansion. Set with `torii config set worktree.base_dir ~/worktrees` to centralise them.
+
+### Notes
+- Lock / unlock / move / repair are intentionally not in 0.6.8; the design review picked an MVP plus `open` as the first cut. Filling them in is a straight-line addition on top of `Worktree::lock`/`unlock` from git2 + path manipulation; pull request welcome.
+- Unit tests cover branch-name sanitisation, `~` expansion, worktree-name derivation. Walker tested end-to-end against toy repos: add (new + existing branch), list (with status), remove (clean + dirty + force), prune (stale entries).
+
 ## [0.6.7] - 2026-05-16
 
 ### Added
