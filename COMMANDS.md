@@ -538,6 +538,53 @@ torii tui
 
 ---
 
+## `torii worktree`
+
+Multiple working copies of the same repository, each on its own branch, sharing the underlying object database. Useful for hot-fixes ("don't disturb my in-progress feature branch") or reviewing a PR without stashing.
+
+```bash
+torii worktree add -b feature/auth                 # new branch + worktree at ../<repo>-feature-auth/
+torii worktree add ../hotfix -b release/0.7        # new branch at explicit path
+torii worktree add ../hotfix release/0.7           # check out existing branch in a worktree
+torii worktree list                                # every worktree with branch + clean/dirty
+torii worktree remove ../hotfix                    # delete worktree (snapshot taken first)
+torii worktree remove ../hotfix --force            # remove even if dirty
+torii worktree remove ../hotfix --no-snapshot      # skip the safety snapshot
+torii worktree prune                               # clean up metadata of deleted worktrees
+torii worktree open ../hotfix                      # launch $SHELL inside the worktree
+```
+
+### Default path resolution
+
+If you omit `<path>`, the directory is derived from `worktree.base_dir` (default `..`) + `<repo>-<branch-sanitized>/`. Examples:
+
+```bash
+torii config set worktree.base_dir ..              # default: sibling of the main repo
+torii config set worktree.base_dir ~/worktrees     # central directory
+torii config set worktree.base_dir /tmp/wt          # somewhere disposable
+```
+
+Branch slashes are replaced with `-` in the directory name (`feature/auth` → `feature-auth`).
+
+### Safety behaviour
+
+- **Snapshot before remove**: `remove` always takes a snapshot of the worktree before deletion so you can restore it via `torii snapshot restore <id>`. Skip with `--no-snapshot`. The snapshot may fail silently if the worktree's `.git` is a link file (current snapshot module limitation); the remove proceeds either way and a warning is printed.
+- **Dirty refusal**: `remove` refuses if the worktree has uncommitted changes. Pass `--force` to drop them. Combine with `--no-snapshot` to also skip the safety net.
+- **Pending operations**: `add` and `remove` will surface libgit2 errors if the target repo state is mid-rebase/merge/etc — no special handling, the underlying message is shown.
+- **Unique paths**: `add` aborts if `<path>` already exists. Pick a different one or remove it first.
+
+### Comparison vs `git worktree`
+
+| Concept | git | torii |
+|---------|-----|-------|
+| Default path | always required | derived from `worktree.base_dir` + branch name |
+| List | per-worktree text, no status | one-line per worktree with branch + clean/dirty |
+| Remove safety | `--force` required if dirty | same + automatic snapshot |
+| `open` | (not present) | launches `$SHELL` in the worktree directory |
+| Lock / move / repair | yes | not yet in 0.6.8 — coming later |
+
+---
+
 ## `.toriignore`
 
 Extends `.gitignore` with optional `[sections]` for secrets, size limits and hooks. Path patterns sync to `.git/info/exclude` automatically so they are respected by every git operation without leaking ignore rules into the repo.

@@ -28,6 +28,30 @@ pub struct ToriiConfig {
     /// Update notifier settings
     #[serde(default)]
     pub update: UpdateConfig,
+
+    /// Worktree settings
+    #[serde(default)]
+    pub worktree: WorktreeConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct WorktreeConfig {
+    /// Where `torii worktree add` puts new worktrees when no path is given.
+    /// Default is `..` (sibling directories of the main repo). Examples:
+    ///   ".."                  → ../<repo>-<branch>/
+    ///   "~/worktrees"         → ~/worktrees/<repo>-<branch>/
+    ///   "/tmp/wt"             → /tmp/wt/<repo>-<branch>/
+    /// `~` expansion is honoured. The `<repo>-<branch>` suffix is appended
+    /// automatically (branch slashes replaced with `-`).
+    pub base_dir: String,
+}
+
+impl Default for WorktreeConfig {
+    fn default() -> Self {
+        Self {
+            base_dir: "..".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -165,6 +189,7 @@ impl Default for ToriiConfig {
             },
             auth: AuthConfig::default(),
             update: UpdateConfig::default(),
+            worktree: WorktreeConfig::default(),
         }
     }
 }
@@ -268,6 +293,9 @@ impl ToriiConfig {
         if overlay.auth.forgejo_token.is_some() { base.auth.forgejo_token = overlay.auth.forgejo_token; }
         if overlay.auth.codeberg_token.is_some() { base.auth.codeberg_token = overlay.auth.codeberg_token; }
 
+        // Worktree config — full overwrite, like snapshot/mirror.
+        base.worktree = overlay.worktree;
+
         base
     }
     
@@ -302,6 +330,7 @@ impl ToriiConfig {
             ("auth", "gitea_token") => self.auth.gitea_token.clone().map(|_| "[set]".to_string()),
             ("auth", "forgejo_token") => self.auth.forgejo_token.clone().map(|_| "[set]".to_string()),
             ("auth", "codeberg_token") => self.auth.codeberg_token.clone().map(|_| "[set]".to_string()),
+            ("worktree", "base_dir") => Some(self.worktree.base_dir.clone()),
             _ => None,
         }
     }
@@ -375,6 +404,14 @@ impl ToriiConfig {
             ("auth", "gitea_token") => self.auth.gitea_token = Some(value.to_string()),
             ("auth", "forgejo_token") => self.auth.forgejo_token = Some(value.to_string()),
             ("auth", "codeberg_token") => self.auth.codeberg_token = Some(value.to_string()),
+            ("worktree", "base_dir") => {
+                if value.trim().is_empty() {
+                    return Err(ToriiError::InvalidConfig(
+                        "worktree.base_dir must not be empty (use '..' for sibling directories)".to_string(),
+                    ));
+                }
+                self.worktree.base_dir = value.to_string();
+            }
             _ => return Err(ToriiError::InvalidConfig(format!("Unknown config key: {}", key))),
         }
         
@@ -429,6 +466,9 @@ impl ToriiConfig {
         items.push(("auth.gitea_token".to_string(), if self.auth.gitea_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
         items.push(("auth.forgejo_token".to_string(), if self.auth.forgejo_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
         items.push(("auth.codeberg_token".to_string(), if self.auth.codeberg_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
+
+        // Worktree
+        items.push(("worktree.base_dir".to_string(), self.worktree.base_dir.clone()));
 
         items
     }

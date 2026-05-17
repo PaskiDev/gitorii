@@ -148,6 +148,7 @@ Release & collaboration:
   torii pr create                       Open a pull request
   torii snapshot stash                  Stash work in progress
   torii workspace status                Status across all workspace repos
+  torii worktree add -b hotfix          Spin up a sibling worktree on a new branch
 
 Interactive UI:
   torii tui                             Launch terminal UI
@@ -688,6 +689,73 @@ public repo leaked (proprietary secret formats, internal paths, etc).")]
     #[command(after_help = "Examples:
   torii tui   Open dashboard (status, log, file navigation)")]
     Tui,
+
+    /// Manage worktrees — multiple working copies of the same repo, each on
+    /// its own branch, sharing the underlying objects.
+    #[command(after_help = "Examples:
+  torii worktree add -b feature/auth                  Create branch + worktree at ../<repo>-feature-auth/
+  torii worktree add ../hotfix -b release/0.7         Create branch at explicit path
+  torii worktree add ../hotfix release/0.7            Check out existing branch in worktree
+  torii worktree list                                 Show every worktree + status
+  torii worktree remove ../hotfix                     Remove worktree (snapshot taken automatically)
+  torii worktree remove ../hotfix --force             Remove even if dirty
+  torii worktree prune                                Clean up metadata of deleted worktrees
+  torii worktree open ../hotfix                       Launch $SHELL in that worktree
+
+The default path (when omitted) is derived from worktree.base_dir config:
+  torii config set worktree.base_dir ~/worktrees    # default is '..' (sibling dirs)
+  torii config set worktree.base_dir ..             # restore default")]
+    Worktree {
+        #[command(subcommand)]
+        action: WorktreeCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum WorktreeCommands {
+    /// Create a new worktree.
+    ///
+    /// One of `-b <new-branch>` or a positional `<existing-branch>` is
+    /// required. If `<path>` is omitted, it's derived from
+    /// `worktree.base_dir` + repo name + branch name.
+    Add {
+        /// Path for the new worktree. Defaults to <worktree.base_dir>/<repo>-<branch>.
+        path: Option<PathBuf>,
+
+        /// Create a new branch with this name (off the current HEAD).
+        #[arg(short = 'b', long = "branch", value_name = "NEW_BRANCH")]
+        new_branch: Option<String>,
+
+        /// Check out this existing local branch in the worktree.
+        #[arg(value_name = "EXISTING_BRANCH")]
+        existing_branch: Option<String>,
+    },
+
+    /// List all worktrees with branch and clean/dirty status.
+    List,
+
+    /// Remove a worktree and its directory (always takes a snapshot first).
+    Remove {
+        /// Path to the worktree to remove.
+        path: PathBuf,
+
+        /// Remove even if the working tree has uncommitted changes.
+        #[arg(long)]
+        force: bool,
+
+        /// Skip the safety snapshot taken before removing.
+        #[arg(long)]
+        no_snapshot: bool,
+    },
+
+    /// Clean up metadata of worktrees whose directory has been deleted.
+    Prune,
+
+    /// Launch $SHELL inside a worktree directory; returns when the shell exits.
+    Open {
+        /// Path to the worktree to open.
+        path: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2609,6 +2677,53 @@ impl Cli {
                             }
                             crate::tui::run_with_workspace(name)?;
                         }
+                    }
+                }
+            }
+
+            Commands::Worktree { action } => {
+                use crate::worktree;
+                let repo_path = std::path::Path::new(".");
+                match action {
+                    WorktreeCommands::Add {
+                        path,
+                        new_branch,
+                        existing_branch,
+                    } => {
+                        let spec = match (new_branch, existing_branch) {
+                            (Some(_), Some(_)) => anyhow::bail!(
+                                "Pass either -b <new-branch> OR a positional <existing-branch>, not both."
+                            ),
+                            (Some(name), None) => worktree::BranchSpec::New(name.clone()),
+                            (None, Some(name)) => worktree::BranchSpec::Existing(name.clone()),
+                            (None, None) => anyhow::bail!(
+                                "Specify the branch: either -b <new-branch> or a positional <existing-branch>."
+                            ),
+                        };
+                        let opts = worktree::AddOpts {
+                            explicit_path: path.clone(),
+                        };
+                        worktree::add(repo_path, spec, &opts)?;
+                    }
+                    WorktreeCommands::List => {
+                        worktree::list(repo_path)?;
+                    }
+                    WorktreeCommands::Remove {
+                        path,
+                        force,
+                        no_snapshot,
+                    } => {
+                        let opts = worktree::RemoveOpts {
+                            force: *force,
+                            no_snapshot: *no_snapshot,
+                        };
+                        worktree::remove(repo_path, path, &opts)?;
+                    }
+                    WorktreeCommands::Prune => {
+                        worktree::prune(repo_path)?;
+                    }
+                    WorktreeCommands::Open { path } => {
+                        worktree::open(repo_path, path)?;
                     }
                 }
             }
