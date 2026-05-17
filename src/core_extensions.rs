@@ -322,8 +322,7 @@ impl GitRepo {
                 "No rebase in progress".to_string()
             ))?;
 
-        let sig = self.repo.signature()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let sig = crate::core::resolve_signature(&self.repo)?;
 
         // Commit the currently resolved step
         rebase.commit(None, &sig, None)
@@ -370,8 +369,7 @@ impl GitRepo {
                 "No rebase in progress".to_string()
             ))?;
 
-        let sig = self.repo.signature()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let sig = crate::core::resolve_signature(&self.repo)?;
 
         // Advance past current step without committing
         rebase.next()
@@ -943,8 +941,7 @@ impl GitRepo {
             .map_err(|e| crate::error::ToriiError::Git(e))?;
 
         // Commit the revert
-        let sig = self.repo.signature()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let sig = crate::core::resolve_signature(&self.repo)?;
         let mut index = self.repo.index()
             .map_err(|e| crate::error::ToriiError::Git(e))?;
         let tree_oid = index.write_tree()
@@ -1029,8 +1026,7 @@ impl GitRepo {
                 .map_err(|e| crate::error::ToriiError::Git(e))?;
             let tree = self.repo.find_tree(tree_oid)
                 .map_err(|e| crate::error::ToriiError::Git(e))?;
-            let sig = self.repo.signature()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let sig = crate::core::resolve_signature(&self.repo)?;
             let head = self.repo.head()
                 .map_err(|e| crate::error::ToriiError::Git(e))?
                 .peel_to_commit()
@@ -1063,8 +1059,7 @@ impl GitRepo {
         let mut rebase = self.repo.rebase(None, Some(&upstream), None, None)
             .map_err(|e| crate::error::ToriiError::Git(e))?;
 
-        let sig = self.repo.signature()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let sig = crate::core::resolve_signature(&self.repo)?;
 
         while let Some(op) = rebase.next() {
             op.map_err(|e| crate::error::ToriiError::Git(e))?;

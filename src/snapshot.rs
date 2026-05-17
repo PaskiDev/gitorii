@@ -309,11 +309,13 @@ impl SnapshotManager {
             ));
         }
 
-        // Build signature; if user.name/email aren't configured fall back to
-        // a generic identity so stash never fails purely on a missing config.
-        let signature = repo.signature().or_else(|_| {
-            git2::Signature::now("torii", "torii@local")
-        }).map_err(ToriiError::Git)?;
+        // Use the unified resolver: torii config > git config > error.
+        // The previous "torii"/"torii@local" placeholder fallback (so
+        // stash "never fails") matched the same anti-pattern that
+        // BUG_COMMIT_AUTHOR_FALLBACK.md describes for `save`. Silent
+        // bogus authorship is worse than failing fast and prompting the
+        // user to set their identity — even for stashes.
+        let signature = crate::core::resolve_signature(&repo)?;
 
         let mut flags = git2::StashFlags::DEFAULT;
         if include_untracked {
