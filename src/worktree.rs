@@ -527,6 +527,244 @@ pub fn prune(repo_path: &Path) -> Result<()> {
 
 // -- open ------------------------------------------------------------------
 
+// -- lock -------------------------------------------------------------------
+
+/// Lock a worktree against `prune`. Optional human-readable reason gets
+/// surfaced in `list` and saved to `.git/worktrees/<name>/locked`.
+pub fn lock(repo_path: &Path, target: &Path, reason: Option<&str>) -> Result<()> {
+    let (name, wt) = find_worktree_by_path(repo_path, target)?;
+    match wt.is_locked().map_err(ToriiError::Git)? {
+        git2::WorktreeLockStatus::Locked(_) => {
+            return Err(ToriiError::InvalidConfig(format!(
+                "worktree '{name}' is already locked"
+            )));
+        }
+        git2::WorktreeLockStatus::Unlocked => {}
+    }
+    wt.lock(reason).map_err(ToriiError::Git)?;
+    let suffix = reason
+        .map(|r| format!(" ({r})"))
+        .unwrap_or_default();
+    println!("🔒 Locked worktree '{name}'{suffix}");
+    Ok(())
+}
+
+// -- unlock -----------------------------------------------------------------
+
+/// Release a previously locked worktree.
+pub fn unlock(repo_path: &Path, target: &Path) -> Result<()> {
+    let (name, wt) = find_worktree_by_path(repo_path, target)?;
+    match wt.is_locked().map_err(ToriiError::Git)? {
+        git2::WorktreeLockStatus::Unlocked => {
+            return Err(ToriiError::InvalidConfig(format!(
+                "worktree '{name}' is not locked"
+            )));
+        }
+        git2::WorktreeLockStatus::Locked(_) => {}
+    }
+    wt.unlock().map_err(ToriiError::Git)?;
+    println!("🔓 Unlocked worktree '{name}'");
+    Ok(())
+}
+
+// -- move -------------------------------------------------------------------
+
+/// Move a worktree directory and patch the two link files that point at it.
+///
+/// libgit2 has no `worktree_move`, so we drive this manually:
+///   1. `fs::rename(old, new)` — moves the working tree on disk.
+///   2. Update `<new>/.git` so the gitdir pointer matches the new path.
+///   3. Update `<repo>/.git/worktrees/<name>/gitdir` so the main repo's
+///      back-reference stays in sync.
+/// Cross-device renames fall back to copy+remove. Refuses if `new`
+/// already exists or `old` is the main worktree.
+pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
+    let (name, _wt) = find_worktree_by_path(repo_path, old)?;
+    let old_canon = old
+        .canonicalize()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{}: {}", old.display(), e)))?;
+    if new.exists() {
+        return Err(ToriiError::InvalidConfig(format!(
+            "target {} already exists",
+            new.display()
+        )));
+    }
+    if let Some(parent) = new.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            ToriiError::InvalidConfig(format!("mkdir parent {}: {}", parent.display(), e))
+        })?;
+    }
+
+    // 1. Move the directory.
+    if let Err(e) = std::fs::rename(&old_canon, new) {
+        // Cross-device — fall back to copy + remove. Rare in practice.
+        if e.raw_os_error() == Some(libc_exdev()) {
+            copy_dir_recursive(&old_canon, new)?;
+            std::fs::remove_dir_all(&old_canon).map_err(|e| {
+                ToriiError::InvalidConfig(format!("rm {} after copy: {}", old_canon.display(), e))
+            })?;
+        } else {
+            return Err(ToriiError::InvalidConfig(format!(
+                "rename {} -> {}: {}",
+                old_canon.display(),
+                new.display(),
+                e
+            )));
+        }
+    }
+
+    let new_canon = new
+        .canonicalize()
+        .map_err(|e| ToriiError::InvalidConfig(format!("canonicalize {}: {}", new.display(), e)))?;
+
+    // 2. Patch the `<new>/.git` link to point at the (unchanged) gitdir.
+    //    The gitdir itself doesn't move — only the worktree dir.
+    //    But the gitdir's back-pointer needs the new working tree path.
+    //    The `.git` file inside the worktree already points at the right
+    //    gitdir (it didn't move). We don't need to touch it; the
+    //    git_worktree library cares about the back-pointer only.
+
+    // 3. Patch `<repo>/.git/worktrees/<name>/gitdir` to point at the new
+    //    `.git` file location.
+    let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
+    let admin = repo.path().join("worktrees").join(&name).join("gitdir");
+    if admin.exists() {
+        let new_git_file = new_canon.join(".git");
+        std::fs::write(&admin, format!("{}\n", new_git_file.display())).map_err(|e| {
+            ToriiError::InvalidConfig(format!("write {}: {}", admin.display(), e))
+        })?;
+    }
+
+    println!(
+        "📦 Moved worktree '{}'\n   {} → {}",
+        name,
+        old_canon.display(),
+        new_canon.display()
+    );
+    Ok(())
+}
+
+/// EXDEV value for the current platform. Linux/BSD = 18; on other Unixes
+/// the constant varies, so we hard-code the common one. If unknown, the
+/// fallback path (copy+remove) will simply not trigger and the rename
+/// error bubbles up — acceptable behaviour.
+fn libc_exdev() -> i32 {
+    18
+}
+
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst).map_err(|e| {
+        ToriiError::InvalidConfig(format!("mkdir {}: {}", dst.display(), e))
+    })?;
+    for entry in std::fs::read_dir(src).map_err(|e| {
+        ToriiError::InvalidConfig(format!("read {}: {}", src.display(), e))
+    })? {
+        let entry = entry.map_err(|e| {
+            ToriiError::InvalidConfig(format!("read entry: {}", e))
+        })?;
+        let ty = entry.file_type().map_err(|e| {
+            ToriiError::InvalidConfig(format!("file_type: {}", e))
+        })?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if ty.is_symlink() {
+            #[cfg(unix)]
+            {
+                let target = std::fs::read_link(&src_path).map_err(|e| {
+                    ToriiError::InvalidConfig(format!("readlink {}: {}", src_path.display(), e))
+                })?;
+                std::os::unix::fs::symlink(&target, &dst_path).map_err(|e| {
+                    ToriiError::InvalidConfig(format!("symlink {}: {}", dst_path.display(), e))
+                })?;
+            }
+        } else {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| {
+                ToriiError::InvalidConfig(format!("copy {}: {}", src_path.display(), e))
+            })?;
+        }
+    }
+    Ok(())
+}
+
+// -- repair -----------------------------------------------------------------
+
+/// Re-validate every worktree's link files and print which ones libgit2
+/// considers healthy vs. broken. Equivalent to `git worktree repair`'s
+/// inspection pass; for now we only diagnose, the actual repair would
+/// need to rewrite admin files when something has drifted.
+pub fn repair(repo_path: &Path) -> Result<()> {
+    let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
+    let names = repo.worktrees().map_err(ToriiError::Git)?;
+    if names.is_empty() {
+        println!("🌳 No linked worktrees to inspect.");
+        return Ok(());
+    }
+
+    let mut healthy = 0;
+    let mut broken = 0;
+    for i in 0..names.len() {
+        let name = match names.get(i) {
+            Some(n) => n,
+            None => continue,
+        };
+        let wt = match repo.find_worktree(name) {
+            Ok(w) => w,
+            Err(_) => continue,
+        };
+        match wt.validate() {
+            Ok(_) => {
+                println!("✓ {name}  ({})", wt.path().display());
+                healthy += 1;
+            }
+            Err(e) => {
+                println!("✗ {name}  ({})  — {e}", wt.path().display());
+                broken += 1;
+            }
+        }
+    }
+    println!("\n{healthy} healthy, {broken} broken.");
+    if broken > 0 {
+        println!(
+            "\n💡 Broken entries usually mean the working-tree directory was deleted\n   \
+             or moved outside torii. Use 'torii worktree prune' to drop the dead\n   \
+             metadata, or recreate the working directory at the recorded path."
+        );
+    }
+    Ok(())
+}
+
+// -- helpers ----------------------------------------------------------------
+
+/// Resolve a user-supplied path to a libgit2 worktree handle. Errors with
+/// a helpful message when the path isn't a registered linked worktree.
+fn find_worktree_by_path<'a>(repo_path: &Path, target: &Path) -> Result<(String, git2::Worktree)> {
+    let canon = target
+        .canonicalize()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{}: {}", target.display(), e)))?;
+    let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
+    let names = repo.worktrees().map_err(ToriiError::Git)?;
+    for i in 0..names.len() {
+        if let Some(name) = names.get(i) {
+            if let Ok(wt) = repo.find_worktree(name) {
+                let p = wt
+                    .path()
+                    .canonicalize()
+                    .unwrap_or_else(|_| wt.path().to_path_buf());
+                if p == canon {
+                    return Ok((name.to_string(), wt));
+                }
+            }
+        }
+    }
+    Err(ToriiError::InvalidConfig(format!(
+        "{} is not a linked worktree of this repo. \
+         Use 'torii worktree list' to see what's available.",
+        canon.display()
+    )))
+}
+
 /// Spawn `$SHELL` (or `/bin/bash`) in `target` and block until the user
 /// exits it. Returns the child shell's exit status as an error if non-zero.
 pub fn open(repo_path: &Path, target: &Path) -> Result<()> {

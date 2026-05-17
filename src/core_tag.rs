@@ -41,11 +41,17 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Push tags to remote
-    pub fn push_tags(&self, name: Option<&str>) -> Result<()> {
+    /// Push tags to remote. When `force` is true, the refspec is prefixed
+    /// with `+` so the remote tag is replaced even if it already points at
+    /// a different commit — same semantics as `git push --force-with-lease`
+    /// /`--force` for tags, and matches the behaviour of `--force` on the
+    /// `push_all_tags_via_git2` path.
+    pub fn push_tags(&self, name: Option<&str>, force: bool) -> Result<()> {
         if let Some(tag) = name {
-            // Push a specific tag
-            let refspec = format!("refs/tags/{0}:refs/tags/{0}", tag);
+            // Push a specific tag. Force-push uses `+oldref:newref` to
+            // tell the remote "replace this regardless of fast-forward".
+            let prefix = if force { "+" } else { "" };
+            let refspec = format!("{0}refs/tags/{1}:refs/tags/{1}", prefix, tag);
             let mut remote = self.repo.find_remote("origin")?;
             let remote_url = remote.url().unwrap_or("").to_string();
             let callbacks = Self::auth_callbacks_for(&remote_url);
@@ -53,8 +59,8 @@ impl GitRepo {
             push_options.remote_callbacks(callbacks);
             remote.push(&[refspec.as_str()], Some(&mut push_options))?;
         } else {
-            // Push all tags
-            self.push_all_tags_via_git2("origin", false)?;
+            // Push all tags — push_all_tags_via_git2 already supports force.
+            self.push_all_tags_via_git2("origin", force)?;
         }
         Ok(())
     }

@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-17
+
+**Headline:** ~93 % porcelain coverage. 0.6.9 covered the structural gaps (worktrees, submodules, subtrees); 0.7.0 finishes the surface area with the eight commands a vanilla `git` user expects to find. Also pulls the existing names into plainer English where it didn't break git habits.
+
+### Added (top-level)
+
+- **`torii bisect`** — binary-search the commit that introduced a regression. Subcommands `start / bad / good / skip / reset / log / run <cmd>`. State-machine wrapper over `git bisect` (libgit2 has no bisect primitives).
+- **`torii describe`** — pretty name for HEAD based on the nearest tag, e.g. `v0.6.9-3-gabc1234`. Flags `--tags / --long / --dirty / --candidates N`.
+- **`torii archive`** — export a tree or commit as tarball/zip. Wrapper over `git archive` to inherit decades of format edge-cases.
+- **`torii remove`** (alias `rm`) — remove tracked files from index and working tree. Flags `--cached / -r / --force`.
+- **`torii rename`** (alias `mv`) — rename/move tracked files; both filesystem and index updated atomically. `--force` to overwrite.
+- **`torii grep`** — search tracked content for a pattern. Wrapper over `git grep` (faster than ripgrep on tracked-only content; different concern from `torii scan`).
+- **`torii notes`** — annotations on commits stored in `refs/notes/commits`. Subcommands `list / add / append / show / edit / copy / remove`.
+- **`torii patch`** — export commit ranges as `.patch` files (`export`) and apply them as new commits (`apply`). Wrappers over `git format-patch` / `git am` with `--3way / --continue / --abort / --skip` plumbed through.
+- **`torii clean`** — remove untracked files (≡ `git clean`). Defaults to dry-run for safety. `-f / -d / -x / -X` flags.
+
+### Added (extensions to existing commands)
+
+- **`torii tag push --force`** — finally a way to force-push a single tag (or all tags) from torii without falling back to `git`. Refspec gets the standard `+oldref:newref` prefix on the wire.
+- **`torii submodule update --recursive`** and **`torii submodule add --recursive`** — descend into nested submodules so `update` mirrors `git submodule update --init --recursive` when both flags are passed.
+- **`torii worktree lock`** / **`unlock`** / **`move`** / **`repair`** — fills in the rest of `git worktree` parity. `move` patches both the `.git` link inside the worktree and the `.git/worktrees/<name>/gitdir` admin file by hand because libgit2 has no `worktree_move`.
+- **`torii snapshot apply / pop / drop / clear / show`** — completes the `git stash` family on top of the existing `stash` / `unstash`. `apply` and `pop` are aliases of `unstash --keep` / `unstash` for users coming from git. `clear` deletes all snapshots (asks unless `--yes`); `show` prints metadata + bundle contents.
+- **`torii status --tracked` (`-z` for NUL-separated)** — `git ls-files` equivalent. Walks the index and prints every tracked file.
+- **`torii remote refs <target>` (`--heads / --tags`)** — `git ls-remote` equivalent. Hits the network using configured auth.
+
+### Renamed (with aliases — old names still work, prints deprecation in some cases)
+
+- **`torii history clean` → `torii history compact`** (alias `gc`). "GC" is jargon, "compact" reads. `clean` (history) → deprecated alias with warning; will be removed in 0.8. Frees up the word `clean` for the new top-level untracked-cleanup command.
+- **`torii history fsck` → `torii history orphans`** (alias `fsck`). "fsck" is hostile Unix-filesystem jargon; "orphans" describes exactly what the command finds.
+- **`torii rm` → `torii remove`** (alias `rm`). Plain English first, `rm` kept for muscle memory.
+- **`torii mv` → `torii rename`** (alias `mv`). "rename" is more accurate than "move" 95 % of the time and friendlier; `mv` kept for muscle memory.
+
+### Deprecated
+
+- **`torii blame <file>`** → use `torii show <file> --blame` (already existed; was a duplicate top-level). Old form prints a warning and still works through 0.7.x; will be removed in 0.8.
+- **`torii history clean`** → use `torii history compact` (or alias `gc`). Old form prints a warning.
+
+### Notes
+
+- **`torii notes` and `torii bisect`** intentionally wrap their git counterparts rather than reimplementing on top of libgit2. The state machines and edge-case handling involved (mailbox parsing, BISECT_* file ceremony, notes-tree merge semantics) are decades-refined upstream; reimplementing them would be 1k+ LOC of risk for behaviour already correct.
+- **Out of 0.7.0, deferred to 0.7.1:**
+  - `cargo-dist` installer setup — the README still mentions a `gitorii-installer.sh` that no CI generates. Tracked.
+  - GPG re-sign during `torii history reauthor` / `mailmap apply` — needs libgit2 `commit_signed` callback wiring + a real key in tests. Documented limitation since 0.6.7.
+- **`rust-toolchain.toml` stays pinned at 1.94.0.** rustc 1.96 (with the mono-partitioning ICE fix) is currently in beta with a stable release expected in ~11 days; we'll validate against it then and unpin.
+
+### Porcelain coverage
+
+After 0.7.0, gitorii covers **~93 %** of git porcelain commands (excluding GUIs and ploumbing). What remains intentionally out:
+
+- `sparse-checkout` (edge case for monorepos),
+- `mergetool` / `gui` / `citool` (interactive UIs — `torii tui` occupies that space),
+- `range-diff` (rare; comparing commit series),
+- `restore` at file-level (parcial via `save --reset`; explicit form pending if asked),
+- `shortlog` (parcial via `log --author`).
+
+Nothing structural is missing.
+
 ## [0.6.9] - 2026-05-17
 
 ### Added

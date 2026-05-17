@@ -201,7 +201,7 @@ impl SnapshotManager {
     /// Delete a snapshot
     pub fn delete_snapshot(&self, id: &str) -> Result<()> {
         let snapshot_dir = self.snapshots_dir.join(id);
-        
+
         if !snapshot_dir.exists() {
             return Err(ToriiError::Snapshot(format!("Snapshot not found: {}", id)));
         }
@@ -209,6 +209,58 @@ impl SnapshotManager {
         fs::remove_dir_all(snapshot_dir)?;
         Ok(())
     }
+
+    /// Delete every snapshot in this repo. Returns the count deleted so
+    /// the CLI can report it. Idempotent — empty dir returns 0.
+    pub fn clear_all(&self) -> Result<usize> {
+        if !self.snapshots_dir.exists() {
+            return Ok(0);
+        }
+        let mut count = 0;
+        for entry in fs::read_dir(&self.snapshots_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                fs::remove_dir_all(entry.path())?;
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Print everything we have on one snapshot: metadata + bundle layout.
+    /// Doesn't try to list every file under git_backup (could be huge);
+    /// shows the top-level entries so the user knows it's a real backup.
+    pub fn show(&self, id: &str) -> Result<()> {
+        let snapshot_dir = self.snapshots_dir.join(id);
+        if !snapshot_dir.exists() {
+            return Err(ToriiError::Snapshot(format!("Snapshot not found: {}", id)));
+        }
+        let metadata_path = snapshot_dir.join("metadata.json");
+        if metadata_path.exists() {
+            let metadata_json = fs::read_to_string(&metadata_path)?;
+            let metadata: SnapshotMetadata = serde_json::from_str(&metadata_json)?;
+            println!("📸 Snapshot {}", metadata.id);
+            println!("   timestamp: {}", metadata.timestamp.format("%Y-%m-%d %H:%M:%S"));
+            if let Some(name) = &metadata.name {
+                println!("   name:      {}", name);
+            }
+            println!("   branch:    {}", metadata.branch);
+            if let Some(commit) = &metadata.commit_hash {
+                println!("   commit:    {}", commit);
+            }
+        } else {
+            println!("📸 Snapshot {} (no metadata.json — likely partial)", id);
+        }
+        // Show what's captured inside.
+        println!("   contents:");
+        for entry in fs::read_dir(&snapshot_dir)? {
+            let entry = entry?;
+            let kind = if entry.file_type()?.is_dir() { "dir" } else { "file" };
+            println!("     {kind}: {}", entry.file_name().to_string_lossy());
+        }
+        Ok(())
+    }
+
 
     /// Configure auto-snapshot settings
     pub fn configure_auto_snapshot(&self, enable: bool, interval: Option<u32>) -> Result<()> {

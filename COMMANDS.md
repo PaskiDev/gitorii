@@ -267,13 +267,13 @@ torii config check-ssh
 
 ---
 
-## `torii blame`, `torii scan`, `torii cherry-pick`
+## `torii show --blame`, `torii scan`, `torii cherry-pick`
 
-Common file inspection and commit operations are available at the top level.
+Common file inspection and commit operations.
 
 ```bash
-torii blame <file>                  # Line-by-line change history
-torii blame <file> -L 10,20         # Specific line range
+torii show <file> --blame           # Line-by-line change history (was: torii blame)
+torii show <file> --blame -L 10,20  # Specific line range
 
 torii scan                          # Scan staged files for secrets
 torii scan --history                # Scan entire git history
@@ -282,6 +282,8 @@ torii cherry-pick <hash>            # Apply commit to current branch
 torii cherry-pick --continue        # Resume after resolving conflicts
 torii cherry-pick --abort           # Abort an in-progress cherry-pick
 ```
+
+> `torii blame <file>` still works as a deprecated alias and prints a warning. Will be removed in 0.8.
 
 ---
 
@@ -301,7 +303,8 @@ torii history rebase --skip            # Skip current patch
 # Rewrite / cleanup
 torii history rewrite "<start-date>" "<end-date>"  # Rewrite commit dates
 torii history remove-file <file>                   # Purge file from all commits
-torii history clean                                # GC + expire reflog
+torii history compact                              # Pack objects + expire reflog (alias: gc; was: history clean)
+torii history orphans                              # Find unreachable objects (alias: fsck)
 
 # Identity rewrite (reauthor / mailmap)
 torii history reauthor --old "Old <a@x>" --new "New <b@y>"
@@ -595,6 +598,124 @@ Branch slashes are replaced with `-` in the directory name (`feature/auth` → `
 | `open` | (not present) | launches `$SHELL` in the worktree directory |
 | Inherit paths from main (`.env`, `target/`) | (not present) | `worktree.inherit_paths` config copies/symlinks them automatically |
 | Lock / move / repair | yes | not yet — coming later |
+
+---
+
+## `torii bisect`
+
+Binary-search for the commit that introduced a regression. State-machine wrapper over `git bisect`.
+
+```bash
+torii bisect start                  # enter bisect mode
+torii bisect bad                    # current HEAD is bad
+torii bisect good v0.6.0            # v0.6.0 was good
+torii bisect skip                   # current commit unbuildable, skip
+torii bisect run cargo test         # automate: exit 0 = good, !=0 = bad, 125 = skip
+torii bisect log                    # show the search log so far
+torii bisect reset                  # exit bisect mode, restore HEAD
+```
+
+---
+
+## `torii describe`
+
+Pretty name for HEAD based on the nearest tag (≡ `git describe`).
+
+```bash
+torii describe              # v0.6.9 or v0.6.9-3-gabc1234
+torii describe --long       # always use the long form
+torii describe --dirty      # append -dirty if working tree has changes
+torii describe --tags       # include lightweight tags too
+```
+
+---
+
+## `torii archive`
+
+Export a tree or commit as tarball/zip. Wrapper over `git archive`.
+
+```bash
+torii archive HEAD -o release.tar.gz
+torii archive v0.6.9 --prefix=gitorii-0.6.9/ -o gitorii-0.6.9.tar.gz
+torii archive HEAD --format=zip -o release.zip
+```
+
+---
+
+## `torii remove` / `torii rename`
+
+Tracked-file operations that touch both the index and the working tree. `rm` and `mv` are kept as aliases for users coming from git.
+
+```bash
+torii remove src/old.rs                # remove + untrack (alias: rm)
+torii remove src/old.rs --cached       # untrack only (keep on disk)
+torii remove -r vendor/legacy/         # recursive
+torii remove --force src/dirty.rs      # drop local changes too
+torii rename old.rs new.rs             # stage a rename (alias: mv)
+torii rename old.rs new.rs --force     # overwrite if target exists
+```
+
+---
+
+## `torii grep`
+
+Search tracked content. Wrapper over `git grep` (faster than ripgrep on tracked-only content). Different concern from `torii scan` (secrets).
+
+```bash
+torii grep TODO                        # search for TODO in tracked files
+torii grep -i "fix me"                 # case-insensitive
+torii grep -l unsafe                   # only file names that match
+torii grep -w main src/                # word-boundary match, in src/ only
+```
+
+---
+
+## `torii notes`
+
+Annotations attached to commits, stored in `refs/notes/commits` so commit OIDs stay stable. Wrapper over `git notes`.
+
+```bash
+torii notes                             # list commits with notes
+torii notes add HEAD -m "reviewed"      # add a note to HEAD
+torii notes append HEAD -m "and also Y" # append to existing note
+torii notes show HEAD                   # show the note attached to HEAD
+torii notes edit HEAD                   # open $EDITOR on it
+torii notes copy v0.6.8 v0.6.9          # copy notes between commits
+torii notes remove HEAD                 # drop the note
+```
+
+---
+
+## `torii patch`
+
+Export commits as patch files / apply patches as new commits. Wrappers over `git format-patch` + `git am`.
+
+```bash
+torii patch export HEAD~3..HEAD                  # export last 3 commits
+torii patch export v0.6.8..HEAD -o /tmp/p/       # into a directory
+torii patch export HEAD~1..HEAD --stdout         # to stdout
+torii patch apply 0001-fix.patch                  # apply a single patch
+torii patch apply *.patch                          # apply a series
+torii patch apply --continue                      # after resolving conflicts
+torii patch apply --abort                         # bail out of an in-progress am
+torii patch apply --3way                          # 3-way fallback
+```
+
+---
+
+## `torii clean`
+
+Remove untracked files (≡ `git clean`). Defaults to a **dry-run** for safety — pass `-f` to actually delete.
+
+```bash
+torii clean                # dry-run, list what would go
+torii clean -f             # actually delete
+torii clean -f -d          # include untracked directories
+torii clean -f -x          # also remove .gitignore-matched files
+torii clean -f -X          # ONLY remove .gitignore-matched files
+```
+
+> **Heads up:** in 0.7.0 the previous `torii history clean` was renamed to `torii history compact` (alias `gc`) to free up the word `clean` for this command (which matches `git clean` semantics). The old `torii history clean` still works as a deprecated alias and prints a warning.
 
 ---
 

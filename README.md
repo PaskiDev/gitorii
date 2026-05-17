@@ -256,8 +256,8 @@ torii log --reflog                  # HEAD movement history
 
 torii sync --verify                 # verify local vs remote HEAD
 
-torii blame <file>                  # line-by-line change history
-torii blame <file> -L 10,20
+torii show <file> --blame           # line-by-line change history (was: torii blame, deprecated)
+torii show <file> --blame -L 10,20
 
 torii scan                          # scan staged files for secrets
 torii scan --history                # scan entire git history
@@ -267,7 +267,8 @@ torii cherry-pick --continue
 torii cherry-pick --abort
 
 torii history rewrite "2026-01-01" "2026-03-01"  # rewrite commit dates
-torii history clean                 # expire reflogs + remove backup refs
+torii history compact               # pack objects + expire reflog (alias: gc)
+torii history orphans               # find unreachable objects (alias: fsck)
 torii history remove-file <path>    # purge file from entire history
 
 torii history rebase main           # rebase onto branch
@@ -543,7 +544,7 @@ Full-screen interface with sidebar navigation. All views accessible from keyboar
 | `git stash push -u` | `torii snapshot stash -u` |
 | `git log --oneline --author X` | `torii log --oneline --author X` |
 | `git show HEAD` | `torii show` |
-| `git blame src/main.rs` | `torii blame src/main.rs` |
+| `git blame src/main.rs` | `torii show src/main.rs --blame` |
 | Push to 3 platforms | `torii mirror sync` |
 | Hunt for exposed secrets | `torii scan --history` |
 | Run status across 5 repos | `torii workspace status <name>` |

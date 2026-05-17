@@ -278,8 +278,22 @@ enum Commands {
 
     /// Show repository status
     #[command(after_help = "Examples:
-  torii status    Show staged, unstaged, and untracked files")]
-    Status,
+  torii status              Show staged, unstaged, and untracked files
+  torii status --tracked    List every tracked file (≡ git ls-files)
+  torii status --tracked -z Null-separated output (scripting)")]
+    Status {
+        /// Instead of the normal status, print every tracked file in the
+        /// index, one per line. Equivalent to `git ls-files`. Useful for
+        /// piping into other tools.
+        #[arg(long)]
+        tracked: bool,
+
+        /// With --tracked, separate entries by NUL instead of newline.
+        /// Same semantics as `git ls-files -z`. Safe for paths with
+        /// embedded newlines.
+        #[arg(short = 'z', long, requires = "tracked")]
+        null: bool,
+    },
 
     /// Show commit history
     #[command(after_help = "Examples:
@@ -346,10 +360,9 @@ enum Commands {
         last: bool,
     },
 
-    /// Show who changed each line of a file
-    #[command(after_help = "Examples:
-  torii blame src/main.rs               Annotate every line
-  torii blame src/main.rs -L 10,20      Limit to lines 10-20")]
+    /// **Deprecated** alias — use `torii show <file> --blame` instead.
+    /// Will be removed in 0.8.
+    #[command(hide = true)]
     Blame {
         /// File to blame
         file: String,
@@ -747,6 +760,269 @@ merge commit. Without it the full upstream graph is brought in.")]
         #[command(subcommand)]
         action: SubtreeCommands,
     },
+
+    /// Binary search for the commit that introduced a regression.
+    /// State-machine wrapper over `git bisect`.
+    #[command(after_help = "Examples:
+  torii bisect start                 Enter bisect mode
+  torii bisect bad                   Current HEAD is bad
+  torii bisect good v0.6.0           v0.6.0 was good
+  torii bisect skip                  Current commit unbuildable, skip
+  torii bisect run cargo test        Auto-run test on each candidate
+  torii bisect log                   Print the search log
+  torii bisect reset                 Exit bisect mode, restore HEAD")]
+    Bisect {
+        #[command(subcommand)]
+        action: BisectCommands,
+    },
+
+    /// Pretty name for HEAD based on the nearest tag (≡ git describe).
+    /// Format: `<tag>-<n>-g<short>` or just `<tag>` if HEAD is on a tag.
+    Describe {
+        /// Include lightweight tags (default: annotated only).
+        #[arg(long)]
+        tags: bool,
+        /// Always use the long format even if HEAD is on a tag.
+        #[arg(long)]
+        long: bool,
+        /// Append `-dirty` if the working tree has uncommitted changes.
+        #[arg(long)]
+        dirty: bool,
+        /// How many candidate tags to consider (default: 10).
+        #[arg(long, default_value = "10")]
+        candidates: u32,
+    },
+
+    /// Export a tree or commit as a tarball/zip (wrapper over `git archive`).
+    #[command(after_help = "Examples:
+  torii archive HEAD -o release.tar.gz
+  torii archive v0.6.9 --prefix=gitorii-0.6.9/ -o gitorii-0.6.9.tar.gz
+  torii archive HEAD --format=zip -o release.zip")]
+    Archive {
+        /// Revision (HEAD, tag, branch, commit) to archive.
+        revision: String,
+        /// Output file path. Without it, writes to stdout.
+        #[arg(short = 'o', long)]
+        output: Option<String>,
+        /// Force format (tar/zip/tar.gz/tgz). Otherwise inferred from extension.
+        #[arg(long)]
+        format: Option<String>,
+        /// Prepend each entry with this prefix (e.g. `myproj-1.0/`).
+        #[arg(long)]
+        prefix: Option<String>,
+    },
+
+    /// Remove tracked files from index and working tree.
+    #[command(alias = "rm", after_help = "Examples:
+  torii remove src/old.rs                 Remove + untrack
+  torii remove src/old.rs --cached        Untrack only (keep on disk)
+  torii remove -r vendor/legacy/          Recursive
+  torii remove --force src/dirty.rs       Drop local changes
+
+`torii rm` works too — alias kept for users coming from git.")]
+    Remove {
+        /// One or more paths to remove.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Don't delete from disk, just untrack.
+        #[arg(long)]
+        cached: bool,
+        /// Allow removing directories recursively.
+        #[arg(short = 'r', long)]
+        recursive: bool,
+        /// Proceed even if the file has uncommitted modifications.
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+
+    /// Rename (or move) a tracked file/directory.
+    #[command(alias = "mv", after_help = "Examples:
+  torii rename old.rs new.rs              Stage a rename
+  torii rename src/a.rs src/b.rs --force  Overwrite if target exists
+
+`torii mv` works too — alias kept for users coming from git.")]
+    Rename {
+        /// Source path.
+        from: PathBuf,
+        /// Destination path.
+        to: PathBuf,
+        /// Overwrite target if it already exists.
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+
+    /// Search tracked content for a pattern (wrapper over `git grep`).
+    #[command(after_help = "Examples:
+  torii grep TODO                     Search for TODO in tracked files
+  torii grep -i \"fix me\"               Case-insensitive
+  torii grep -l unsafe                List files containing 'unsafe'
+  torii grep -w main src/             Word-boundary match, in src/ only")]
+    Grep {
+        /// Pattern (regex by default — pass --fixed-string for literal).
+        pattern: String,
+        /// Restrict search to these paths.
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
+        /// Case-insensitive.
+        #[arg(short = 'i', long)]
+        ignore_case: bool,
+        /// Match whole words only.
+        #[arg(short = 'w', long)]
+        word_regexp: bool,
+        /// Print only file names that contain a match.
+        #[arg(short = 'l', long)]
+        files_with_matches: bool,
+        /// Suppress line numbers (which are on by default in torii).
+        #[arg(long)]
+        no_line_number: bool,
+    },
+
+    /// Annotations attached to commits (wrapper over `git notes`).
+    /// Stored in `refs/notes/commits` so commit OIDs stay stable.
+    #[command(after_help = "Examples:
+  torii notes                              List commits with notes
+  torii notes add HEAD -m \"reviewed by X\"  Add a note to HEAD
+  torii notes append HEAD -m \"and also Y\"  Append to an existing note
+  torii notes show HEAD                    Show the note attached to HEAD
+  torii notes edit HEAD                    Open $EDITOR on it
+  torii notes copy v0.6.8 v0.6.9           Copy notes between commits
+  torii notes remove HEAD                  Drop the note")]
+    Notes {
+        #[command(subcommand)]
+        action: Option<NotesCommands>,
+    },
+
+    /// Export commits as patch files / apply patches as new commits.
+    /// Wrapper over `git format-patch` and `git am`.
+    #[command(after_help = "Examples:
+  torii patch export HEAD~3..HEAD                Export last 3 commits
+  torii patch export v0.6.8..HEAD -o /tmp/p/      Into a directory
+  torii patch export HEAD~1..HEAD --stdout       To stdout
+  torii patch apply 0001-fix.patch                Apply a single patch
+  torii patch apply *.patch                        Apply a series
+  torii patch apply --continue                    After resolving conflicts")]
+    Patch {
+        #[command(subcommand)]
+        action: PatchCommands,
+    },
+
+    /// Remove untracked files from the working tree (≡ `git clean`).
+    /// Defaults to a dry-run for safety; pass -f to actually delete.
+    #[command(after_help = "Examples:
+  torii clean             Dry-run, list what would go
+  torii clean -f          Actually delete untracked files
+  torii clean -f -d       Include untracked directories
+  torii clean -f -x       Also remove .gitignore-matched files
+  torii clean -f -X       ONLY remove .gitignore-matched files")]
+    Clean {
+        /// Actually delete (otherwise dry-run).
+        #[arg(short = 'f', long)]
+        force: bool,
+        /// Recurse into untracked directories.
+        #[arg(short = 'd', long)]
+        dirs: bool,
+        /// Also remove ignored files.
+        #[arg(short = 'x', long)]
+        include_ignored: bool,
+        /// Only remove ignored files.
+        #[arg(short = 'X', long)]
+        only_ignored: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum BisectCommands {
+    /// Enter bisect mode. Optionally pass `<bad> [<good>...]` to seed it.
+    Start {
+        /// Known-bad commit (defaults to HEAD when seeding inline later).
+        bad: Option<String>,
+        /// One or more known-good commits.
+        good: Vec<String>,
+    },
+    /// Mark the given (or current) commit as bad.
+    Bad { commit: Option<String> },
+    /// Mark the given (or current) commit as good.
+    Good { commit: Option<String> },
+    /// Skip the current commit (unbuildable/untestable).
+    Skip { commit: Option<String> },
+    /// Exit bisect mode and restore HEAD.
+    Reset,
+    /// Print the bisect log so far.
+    Log,
+    /// Run `<cmd>` for every candidate; exit 0 = good, non-zero = bad, 125 = skip.
+    Run {
+        #[arg(trailing_var_arg = true, required = true)]
+        cmd: Vec<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum NotesCommands {
+    /// List commits that have notes attached.
+    List,
+    /// Add a note to a commit. Opens $EDITOR if -m not given.
+    Add {
+        commit: String,
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// Overwrite an existing note.
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Append to the commit's existing note.
+    Append {
+        commit: String,
+        #[arg(short = 'm', long)]
+        message: String,
+    },
+    /// Print the note attached to a commit.
+    Show { commit: String },
+    /// Open the note in $EDITOR for changes.
+    Edit { commit: String },
+    /// Copy notes from one commit to another.
+    Copy {
+        from: String,
+        to: String,
+        #[arg(short = 'f', long)]
+        force: bool,
+    },
+    /// Remove a commit's note.
+    Remove { commit: String },
+}
+
+#[derive(Subcommand)]
+enum PatchCommands {
+    /// Export a commit range as one `.patch` per commit.
+    Export {
+        /// Revision range, e.g. `v0.6.8..HEAD` or `HEAD~3..`.
+        range: String,
+        /// Output directory (default: cwd).
+        #[arg(short = 'o', long)]
+        output_dir: Option<PathBuf>,
+        /// Write patches to stdout instead of files.
+        #[arg(long)]
+        stdout: bool,
+        /// Include a cover letter as `0000-cover-letter.patch`.
+        #[arg(long)]
+        cover_letter: bool,
+    },
+    /// Apply one or more patch files as new commits.
+    Apply {
+        /// Patch files (use `--continue`/`--abort`/`--skip` for ongoing ops).
+        files: Vec<PathBuf>,
+        /// Fall back to 3-way merge on conflicts.
+        #[arg(long)]
+        three_way: bool,
+        /// Resume after manual conflict resolution.
+        #[arg(long = "continue")]
+        continue_: bool,
+        /// Drop the current patch and move on.
+        #[arg(long)]
+        skip: bool,
+        /// Bail out of an in-progress apply session.
+        #[arg(long)]
+        abort: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -763,6 +1039,10 @@ enum SubmoduleCommands {
         /// Override the submodule name (defaults to the path).
         #[arg(long)]
         name: Option<String>,
+        /// After cloning the top-level submodule, recursively init+update
+        /// any nested submodules it contains.
+        #[arg(long)]
+        recursive: bool,
     },
 
     /// List submodules with HEAD, working-tree id and state.
@@ -780,6 +1060,9 @@ enum SubmoduleCommands {
         /// Also run `init` first for submodules that aren't initialised.
         #[arg(long)]
         init: bool,
+        /// Recurse into nested submodules after each top-level update.
+        #[arg(long)]
+        recursive: bool,
     },
 
     /// Re-copy URLs from `.gitmodules` into `.git/config`.
@@ -904,6 +1187,32 @@ enum WorktreeCommands {
         /// Path to the worktree to open.
         path: PathBuf,
     },
+
+    /// Lock a worktree against `prune` (and accidental cleanup tools).
+    Lock {
+        /// Path to the worktree to lock.
+        path: PathBuf,
+        /// Optional reason saved alongside the lock; surfaces in `list`.
+        #[arg(short = 'r', long)]
+        reason: Option<String>,
+    },
+
+    /// Release a previously locked worktree.
+    Unlock {
+        /// Path to the worktree to unlock.
+        path: PathBuf,
+    },
+
+    /// Move a worktree directory and patch its link files.
+    Move {
+        /// Current path of the worktree.
+        old: PathBuf,
+        /// Target path.
+        new: PathBuf,
+    },
+
+    /// Re-validate every linked worktree's link files and report broken ones.
+    Repair,
 }
 
 #[derive(Subcommand)]
@@ -1262,6 +1571,24 @@ NAME bare.")]
         #[arg(short = 'y', long)]
         yes: bool,
     },
+
+    /// List refs the remote currently advertises (≡ `git ls-remote`).
+    /// Hits the network — uses your configured auth.
+    #[command(after_help = "Examples:
+  torii remote refs origin              List all refs on origin
+  torii remote refs origin --heads      Branch heads only
+  torii remote refs origin --tags       Tags only
+  torii remote refs https://...         Ad-hoc URL (no need to add as remote first)")]
+    Refs {
+        /// Local remote alias OR a full URL.
+        target: String,
+        /// Only print branch heads (`refs/heads/*`).
+        #[arg(long)]
+        heads: bool,
+        /// Only print tag refs (`refs/tags/*`).
+        #[arg(long)]
+        tags: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1275,7 +1602,19 @@ enum HistoryCommands {
         end: String,
     },
 
-    /// Clean repository history
+    /// Compact the repository — repack objects, expire reflog,
+    /// drop unreachable refs. Same operation as `git gc`.
+    ///
+    /// Renamed from `clean` → `gc` → `compact` over 0.7.0 as we
+    /// converged on plain English. `gc` still works as an alias for
+    /// users coming from git; old `clean` (top-level, was GC) is a
+    /// deprecated alias and prints a warning.
+    #[command(alias = "gc")]
+    Compact,
+
+    /// **Deprecated** — alias for `torii history gc`. Will be removed in 0.8.
+    /// `torii clean` (top-level) is now the cleanup-untracked-files command.
+    #[command(hide = true)]
     Clean,
 
     /// Remove a file from the entire git history
@@ -1318,11 +1657,13 @@ enum HistoryCommands {
     /// after a destructive operation like reset --hard, force-push, or rebase.
     /// By default lists the unreachable objects with a one-line summary.
     /// Use --show <oid> to inspect content; --restore to write a blob to disk.
-    #[command(after_help = "Examples:
-  torii history fsck                              List orphaned objects
-  torii history fsck --show abc1234               Print object content (commit/blob)
-  torii history fsck --restore abc1234 --to f.txt Recover a blob to disk")]
-    Fsck {
+    #[command(alias = "fsck", after_help = "Examples:
+  torii history orphans                              List unreachable objects
+  torii history orphans --show abc1234               Print object content (commit/blob)
+  torii history orphans --restore abc1234 --to f.txt Recover a blob to disk
+
+`torii history fsck` works too — alias kept for users coming from git.")]
+    Orphans {
         /// Show an object's content (commit message + tree, or blob bytes).
         #[arg(long, value_name = "OID")]
         show: Option<String>,
@@ -1495,6 +1836,42 @@ enum SnapshotCommands {
         keep: bool,
     },
 
+    /// `git stash apply` alias — restore without dropping the stash.
+    /// Equivalent to `torii snapshot unstash --keep [<id>]`.
+    Apply {
+        /// Snapshot/stash ID (latest if not specified).
+        id: Option<String>,
+    },
+
+    /// `git stash pop` alias — restore and drop the stash.
+    /// Equivalent to `torii snapshot unstash [<id>]`.
+    Pop {
+        /// Snapshot/stash ID (latest if not specified).
+        id: Option<String>,
+    },
+
+    /// `git stash drop` alias — delete a specific snapshot.
+    /// Equivalent to `torii snapshot delete <id>`.
+    Drop {
+        /// Snapshot/stash ID to drop.
+        id: String,
+    },
+
+    /// Delete every snapshot/stash in this repo. Asks for confirmation
+    /// unless `--yes` is given.
+    Clear {
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Show what's inside a snapshot — branch, commit, timestamp,
+    /// and a list of files captured.
+    Show {
+        /// Snapshot/stash ID.
+        id: String,
+    },
+
     /// Undo last operation
     Undo,
 }
@@ -1536,6 +1913,11 @@ enum TagCommands {
     Push {
         /// Specific tag to push (all if not specified)
         name: Option<String>,
+
+        /// Force-push tags even when the remote ref already exists at a
+        /// different commit (rewrites remote tag history).
+        #[arg(short = 'f', long)]
+        force: bool,
     },
 
     /// Show tag details
@@ -1803,9 +2185,23 @@ impl Cli {
                 }
             }
 
-            Commands::Status => {
-                let repo = GitRepo::open(".")?;
-                repo.status()?;
+            Commands::Status { tracked, null } => {
+                if *tracked {
+                    // ls-files behaviour: walk the index and print each entry.
+                    let repo = git2::Repository::open(".")?;
+                    let index = repo.index()?;
+                    let sep = if *null { '\0' } else { '\n' };
+                    use std::io::Write;
+                    let stdout = std::io::stdout();
+                    let mut out = stdout.lock();
+                    for entry in index.iter() {
+                        let path = String::from_utf8_lossy(&entry.path);
+                        write!(out, "{}{}", path, sep)?;
+                    }
+                } else {
+                    let repo = GitRepo::open(".")?;
+                    repo.status()?;
+                }
             }
 
             Commands::Log { count, oneline, graph, author, since, until, grep, stat, reflog } => {
@@ -1823,6 +2219,11 @@ impl Cli {
             }
 
             Commands::Blame { file, lines } => {
+                eprintln!(
+                    "⚠  'torii blame' is deprecated and will be removed in 0.8.\n   \
+                     Use 'torii show {} --blame' instead.",
+                    file
+                );
                 let repo = GitRepo::open(".")?;
                 repo.blame(file, lines.as_deref())?;
             }
@@ -2060,12 +2461,13 @@ impl Cli {
                         repo.delete_tag(name)?;
                         println!("✅ Tag deleted: {}", name);
                     }
-                    TagCommands::Push { name } => {
-                        repo.push_tags(name.as_deref())?;
+                    TagCommands::Push { name, force } => {
+                        repo.push_tags(name.as_deref(), *force)?;
+                        let force_note = if *force { " (force)" } else { "" };
                         if let Some(tag) = name {
-                            println!("✅ Pushed tag: {}", tag);
+                            println!("✅ Pushed tag: {}{}", tag, force_note);
                         } else {
-                            println!("✅ Pushed all tags");
+                            println!("✅ Pushed all tags{}", force_note);
                         }
                     }
                     TagCommands::Show { name } => {
@@ -2102,6 +2504,37 @@ impl Cli {
                     }
                     SnapshotCommands::Unstash { id, keep } => {
                         snapshot_mgr.unstash(id.as_deref(), *keep)?;
+                    }
+                    SnapshotCommands::Apply { id } => {
+                        snapshot_mgr.unstash(id.as_deref(), true)?;
+                    }
+                    SnapshotCommands::Pop { id } => {
+                        snapshot_mgr.unstash(id.as_deref(), false)?;
+                    }
+                    SnapshotCommands::Drop { id } => {
+                        snapshot_mgr.delete_snapshot(id)?;
+                        println!("✅ Dropped snapshot: {}", id);
+                    }
+                    SnapshotCommands::Clear { yes } => {
+                        if !*yes {
+                            use std::io::{self, BufRead, IsTerminal, Write};
+                            if !io::stdin().is_terminal() {
+                                anyhow::bail!("Refusing to clear without --yes when there's no tty to prompt.");
+                            }
+                            print!("⚠  Delete ALL snapshots in this repo? [y/N] ");
+                            io::stdout().flush().ok();
+                            let mut line = String::new();
+                            io::stdin().lock().read_line(&mut line)?;
+                            if !matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+                                println!("Aborted.");
+                                return Ok(());
+                            }
+                        }
+                        let count = snapshot_mgr.clear_all()?;
+                        println!("🧹 Cleared {count} snapshot(s).");
+                    }
+                    SnapshotCommands::Show { id } => {
+                        snapshot_mgr.show(id)?;
                     }
                     SnapshotCommands::Undo => {
                         snapshot_mgr.undo()?;
@@ -2489,7 +2922,7 @@ impl Cli {
                         let client = get_platform_client(platform)?;
                         println!("📋 Fetching repositories from {}...", platform);
                         let repos = client.list_repos()?;
-                        
+
                         if repos.is_empty() {
                             println!("No repositories found");
                         } else {
@@ -2499,6 +2932,41 @@ impl Cli {
                                 if let Some(desc) = &repo.description {
                                     println!("    {}", desc);
                                 }
+                            }
+                        }
+                    }
+                    RemoteCommands::Refs { target, heads, tags } => {
+                        // Resolve target — local remote alias or URL.
+                        let repo = git2::Repository::open(".")?;
+                        let mut remote = match repo.find_remote(target) {
+                            Ok(r) => r,
+                            Err(_) => repo.remote_anonymous(target)?,
+                        };
+                        // Connect read-only with default auth callbacks.
+                        let mut callbacks = git2::RemoteCallbacks::new();
+                        callbacks.credentials(|url, user, allowed| {
+                            // SSH agent first (most common); fall back to
+                            // userpass-plaintext nothing — let libgit2 fail
+                            // cleanly so the user knows to set up auth.
+                            if allowed.contains(git2::CredentialType::SSH_KEY) {
+                                git2::Cred::ssh_key_from_agent(user.unwrap_or("git"))
+                            } else {
+                                Err(git2::Error::from_str(&format!(
+                                    "no credentials available for {url}"
+                                )))
+                            }
+                        });
+                        remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None)?;
+                        let list = remote.list()?;
+                        for head in list {
+                            let name = head.name();
+                            let keep = match (*heads, *tags) {
+                                (true, false) => name.starts_with("refs/heads/"),
+                                (false, true) => name.starts_with("refs/tags/"),
+                                _ => true,
+                            };
+                            if keep {
+                                println!("{}\t{}", head.oid(), name);
                             }
                         }
                     }
@@ -2523,9 +2991,18 @@ impl Cli {
                         repo.rewrite_history(start, end)?;
                         println!("✅ History rewritten successfully");
                     }
-                    HistoryCommands::Clean => {
+                    HistoryCommands::Compact => {
                         repo.clean_history()?;
-                        println!("✅ Repository cleaned");
+                        println!("✅ Repository compacted (objects repacked, reflog expired)");
+                    }
+                    HistoryCommands::Clean => {
+                        eprintln!(
+                            "⚠  'torii history clean' is deprecated and will be removed in 0.8.\n   \
+                             Use 'torii history compact' (or 'gc' alias) instead.\n   \
+                             Heads up: 'torii clean' (top-level) now exists as untracked-file cleanup."
+                        );
+                        repo.clean_history()?;
+                        println!("✅ Repository compacted");
                     }
                     HistoryCommands::RemoveFile { file } => {
                         repo.remove_file_from_history(file)?;
@@ -2556,7 +3033,7 @@ impl Cli {
                             anyhow::bail!("Specify a target or use --root / --interactive / --todo-file / --continue / --abort / --skip");
                         }
                     }
-                    HistoryCommands::Fsck { show, restore, to } => {
+                    HistoryCommands::Orphans { show, restore, to } => {
                         run_fsck(show.as_deref(), restore.as_deref(), to.as_deref())?;
                     }
                     HistoryCommands::Reauthor {
@@ -2874,6 +3351,18 @@ impl Cli {
                     Some(WorktreeCommands::Open { path }) => {
                         worktree::open(repo_path, path)?;
                     }
+                    Some(WorktreeCommands::Lock { path, reason }) => {
+                        worktree::lock(repo_path, path, reason.as_deref())?;
+                    }
+                    Some(WorktreeCommands::Unlock { path }) => {
+                        worktree::unlock(repo_path, path)?;
+                    }
+                    Some(WorktreeCommands::Move { old, new }) => {
+                        worktree::move_wt(repo_path, old, new)?;
+                    }
+                    Some(WorktreeCommands::Repair) => {
+                        worktree::repair(repo_path)?;
+                    }
                 }
             }
 
@@ -2884,18 +3373,22 @@ impl Cli {
                     None | Some(SubmoduleCommands::Status) => {
                         submodule::status(repo_path)?;
                     }
-                    Some(SubmoduleCommands::Add { url, path, branch, name }) => {
+                    Some(SubmoduleCommands::Add { url, path, branch, name, recursive }) => {
                         let opts = submodule::AddOpts {
                             branch: branch.clone(),
                             name: name.clone(),
+                            recursive: *recursive,
                         };
                         submodule::add(repo_path, url, path, &opts)?;
                     }
                     Some(SubmoduleCommands::Init { force }) => {
                         submodule::init(repo_path, *force)?;
                     }
-                    Some(SubmoduleCommands::Update { init }) => {
-                        let opts = submodule::UpdateOpts { init: *init };
+                    Some(SubmoduleCommands::Update { init, recursive }) => {
+                        let opts = submodule::UpdateOpts {
+                            init: *init,
+                            recursive: *recursive,
+                        };
                         submodule::update(repo_path, &opts)?;
                     }
                     Some(SubmoduleCommands::Sync) => {
@@ -2934,6 +3427,115 @@ impl Cli {
                         subtree::merge(repo_path, prefix, refname, &subtree::CommonOpts { squash: *squash })?;
                     }
                 }
+            }
+
+            Commands::Bisect { action } => {
+                let p = std::path::Path::new(".");
+                match action {
+                    BisectCommands::Start { bad, good } => crate::bisect::start(p, bad.as_deref(), good)?,
+                    BisectCommands::Bad { commit } => crate::bisect::bad(p, commit.as_deref())?,
+                    BisectCommands::Good { commit } => crate::bisect::good(p, commit.as_deref())?,
+                    BisectCommands::Skip { commit } => crate::bisect::skip(p, commit.as_deref())?,
+                    BisectCommands::Reset => crate::bisect::reset(p)?,
+                    BisectCommands::Log => crate::bisect::log(p)?,
+                    BisectCommands::Run { cmd } => crate::bisect::run(p, cmd)?,
+                }
+            }
+
+            Commands::Describe { tags, long, dirty, candidates } => {
+                let opts = crate::describe::Opts {
+                    tags: *tags,
+                    long: *long,
+                    dirty: *dirty,
+                    candidates: *candidates,
+                };
+                crate::describe::describe(std::path::Path::new("."), &opts)?;
+            }
+
+            Commands::Archive { revision, output, format, prefix } => {
+                let opts = crate::archive::Opts {
+                    output: output.clone(),
+                    format: format.clone(),
+                    prefix: prefix.clone(),
+                };
+                crate::archive::archive(std::path::Path::new("."), revision, &opts)?;
+            }
+
+            Commands::Remove { paths, cached, recursive, force } => {
+                let opts = crate::fileops::RmOpts {
+                    cached: *cached,
+                    recursive: *recursive,
+                    force: *force,
+                };
+                crate::fileops::rm(std::path::Path::new("."), paths, &opts)?;
+            }
+
+            Commands::Rename { from, to, force } => {
+                let opts = crate::fileops::MvOpts { force: *force };
+                crate::fileops::mv(std::path::Path::new("."), from, to, &opts)?;
+            }
+
+            Commands::Grep { pattern, paths, ignore_case, word_regexp, files_with_matches, no_line_number } => {
+                let opts = crate::grep::Opts {
+                    ignore_case: *ignore_case,
+                    word_regexp: *word_regexp,
+                    files_with_matches: *files_with_matches,
+                    no_line_number: *no_line_number,
+                    extra: Vec::new(),
+                };
+                crate::grep::grep(std::path::Path::new("."), pattern, paths, &opts)?;
+            }
+
+            Commands::Notes { action } => {
+                let p = std::path::Path::new(".");
+                match action.as_ref() {
+                    None | Some(NotesCommands::List) => crate::notes::list(p)?,
+                    Some(NotesCommands::Add { commit, message, force }) => {
+                        crate::notes::add(p, commit, message.as_deref(), *force)?;
+                    }
+                    Some(NotesCommands::Append { commit, message }) => {
+                        crate::notes::append(p, commit, message)?;
+                    }
+                    Some(NotesCommands::Show { commit }) => crate::notes::show(p, commit)?,
+                    Some(NotesCommands::Edit { commit }) => crate::notes::edit(p, commit)?,
+                    Some(NotesCommands::Copy { from, to, force }) => {
+                        crate::notes::copy(p, from, to, *force)?;
+                    }
+                    Some(NotesCommands::Remove { commit }) => crate::notes::remove(p, commit)?,
+                }
+            }
+
+            Commands::Patch { action } => {
+                let p = std::path::Path::new(".");
+                match action {
+                    PatchCommands::Export { range, output_dir, stdout, cover_letter } => {
+                        let opts = crate::patch::ExportOpts {
+                            output_dir: output_dir.clone(),
+                            stdout: *stdout,
+                            cover_letter: *cover_letter,
+                        };
+                        crate::patch::export(p, range, &opts)?;
+                    }
+                    PatchCommands::Apply { files, three_way, continue_, skip, abort } => {
+                        let opts = crate::patch::ApplyOpts {
+                            three_way: *three_way,
+                            continue_: *continue_,
+                            skip: *skip,
+                            abort: *abort,
+                        };
+                        crate::patch::apply(p, files, &opts)?;
+                    }
+                }
+            }
+
+            Commands::Clean { force, dirs, include_ignored, only_ignored } => {
+                let opts = crate::clean::Opts {
+                    force: *force,
+                    dirs: *dirs,
+                    include_ignored: *include_ignored,
+                    only_ignored: *only_ignored,
+                };
+                crate::clean::clean(std::path::Path::new("."), &opts)?;
             }
         }
 

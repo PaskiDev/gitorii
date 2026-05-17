@@ -50,6 +50,9 @@ pub struct AddOpts {
     pub branch: Option<String>,
     /// Optional name for the submodule. Defaults to the path.
     pub name: Option<String>,
+    /// After the top-level submodule is cloned, recursively initialise
+    /// and update any nested submodules it contains. Off by default.
+    pub recursive: bool,
 }
 
 /// Register a new submodule at `path` cloned from `url`, then stage it.
@@ -110,8 +113,46 @@ pub fn add(repo_path: &Path, url: &str, path: &Path, opts: &AddOpts) -> Result<(
     if let Some(branch) = &opts.branch {
         println!("   branch: {branch}");
     }
+
+    // Recursive: if the freshly-cloned submodule has its own .gitmodules,
+    // init+update everything underneath. Walks via the submodule's own
+    // libgit2 handle, not by shelling out, so behaviour stays in-process.
+    if opts.recursive {
+        let nested_root = repo
+            .workdir()
+            .ok_or_else(|| ToriiError::InvalidConfig("bare repo".into()))?
+            .join(path);
+        recurse_update(&nested_root, true)?;
+    }
+
     println!("\n💡 Don't forget to commit:  torii save -am \"add submodule {}\"", path.display());
 
+    Ok(())
+}
+
+/// Internal helper: init+update every submodule of `repo_path`, descending
+/// into each one. Called by `add --recursive` and `update --recursive`.
+fn recurse_update(repo_path: &Path, init_missing: bool) -> Result<()> {
+    let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
+    let mut subs = repo.submodules().map_err(ToriiError::Git)?;
+    if subs.is_empty() {
+        return Ok(());
+    }
+    for sm in &mut subs {
+        let name = sm.name().unwrap_or("?").to_string();
+        let mut up_opts = SubmoduleUpdateOptions::new();
+        sm.update(init_missing, Some(&mut up_opts))
+            .map_err(|e| ToriiError::InvalidConfig(format!("recurse update {name}: {e}")))?;
+        // Now descend.
+        let child_path = sm.path().to_path_buf();
+        let child_abs = repo
+            .workdir()
+            .ok_or_else(|| ToriiError::InvalidConfig("bare repo".into()))?
+            .join(&child_path);
+        if child_abs.exists() {
+            recurse_update(&child_abs, init_missing)?;
+        }
+    }
     Ok(())
 }
 
@@ -217,6 +258,9 @@ pub struct UpdateOpts {
     /// off (matches `git submodule update`); pass `true` to mimic
     /// `git submodule update --init`.
     pub init: bool,
+    /// Recurse into nested submodules after updating each top-level one.
+    /// Off by default (one-level update only).
+    pub recursive: bool,
 }
 
 /// Fetch and checkout each submodule at the commit the super-repo records.
@@ -239,8 +283,20 @@ pub fn update(repo_path: &Path, opts: &UpdateOpts) -> Result<()> {
             .map(|o| o.to_string()[..7].to_string())
             .unwrap_or_else(|| "?".to_string());
         println!("⬆  {name}  →  {at}");
+
+        if opts.recursive {
+            let child = sm.path().to_path_buf();
+            let child_abs = repo
+                .workdir()
+                .ok_or_else(|| ToriiError::InvalidConfig("bare repo".into()))?
+                .join(&child);
+            if child_abs.exists() {
+                recurse_update(&child_abs, opts.init)?;
+            }
+        }
     }
-    println!("\n✅ Updated {} submodule(s).", subs.len());
+    println!("\n✅ Updated {} submodule(s){}.", subs.len(),
+        if opts.recursive { " (recursive)" } else { "" });
     Ok(())
 }
 
