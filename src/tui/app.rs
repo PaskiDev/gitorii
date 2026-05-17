@@ -399,9 +399,14 @@ impl Default for TagState {
 
 // ── History state ─────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct ReflogEntry {
     pub id: String,
+    /// Reflog `update message` (e.g. "commit: feat: …"). Surfaced in the
+    /// reflog panel when the history view gains its interactive sweep
+    /// (0.7.3 just renders the id column for now).
     pub message: String,
+    /// Wall-clock time of the reflog entry, rendered relative.
     pub time: String,
 }
 
@@ -970,6 +975,10 @@ pub struct BisectState {
     pub current_hash: Option<String>,
     pub good_refs: Vec<String>,
     pub bad_refs: Vec<String>,
+    /// How many steps git estimates remain. libgit2 doesn't expose this
+    /// so we leave it `None` for now; populated once we compute it from
+    /// the reachable revwalk between good/bad in 0.7.3+.
+    #[allow(dead_code)]
     pub steps_left_estimate: Option<usize>,
     pub status: Option<String>,
 }
@@ -1847,6 +1856,7 @@ impl App {
 
     // ── History helpers ──────────────────────────────────────────────────────
 
+    #[allow(dead_code)]
     fn load_reflog(&mut self) {
         self.history_view.reflog.clear();
         let Ok(repo) = Repository::discover(&self.repo_path) else { return };
@@ -2356,10 +2366,12 @@ impl App {
 
     // ── Settings helpers ─────────────────────────────────────────────────────
 
+    #[allow(dead_code)]
     pub fn settings_move_up(&mut self) {
         if self.settings_view.idx > 0 { self.settings_view.idx -= 1; }
     }
 
+    #[allow(dead_code)]
     pub fn settings_move_down(&mut self) {
         if self.settings_view.idx < 19 { self.settings_view.idx += 1; }
     }

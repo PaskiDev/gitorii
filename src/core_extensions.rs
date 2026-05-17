@@ -572,8 +572,9 @@ impl GitRepo {
                 .to_string()
         };
 
-        let cfg = crate::config::ToriiConfig::load_global().unwrap_or_default();
-
+        // Token lookups inside the credentials closure use the unified
+        // resolver in `crate::auth::resolve_token`; no global config
+        // load needed here.
         let mut callbacks = git2::RemoteCallbacks::new();
         let url_owned = url.to_string();
         callbacks.credentials(move |_url, username_from_url, allowed_types| {

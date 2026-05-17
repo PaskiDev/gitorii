@@ -6,16 +6,16 @@ pub mod commit;
 pub mod snapshot;
 pub mod sync;
 pub mod tag;
-pub mod history;
 pub mod remote;
 pub mod mirror;
 pub mod workspace;
 pub mod pr;
 pub mod issue;
 pub mod config;
-pub mod settings;
 pub mod help;
 pub mod worktree;
 pub mod submodule;
 pub mod bisect;
 pub mod auth;
+// `history` and `settings` modules removed in 0.7.3 — their renders are
+// now served from `log` and `config` respectively (see ui.rs dispatcher).

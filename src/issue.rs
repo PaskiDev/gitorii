@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use reqwest::blocking::Client;
-use crate::config::ToriiConfig;
 use crate::error::{Result, ToriiError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

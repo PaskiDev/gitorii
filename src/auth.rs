@@ -269,6 +269,10 @@ pub enum TokenSource {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedToken {
+    /// Provider this token resolves for. Currently informational only —
+    /// kept on the public type so consumers (CLI doctor output, future
+    /// audit logs) can use it without forcing a recompile.
+    #[allow(dead_code)]
     pub provider: String,
     pub value: Option<String>,
     pub source: TokenSource,

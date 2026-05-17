@@ -192,7 +192,8 @@ impl GitRepo {
     /// Build auth callbacks for SSH and HTTPS token auth.
     /// Pass the remote URL so the correct token is selected per host.
     pub fn auth_callbacks_for<'a>(url: &str) -> git2::RemoteCallbacks<'a> {
-        let cfg = crate::config::ToriiConfig::load_global().unwrap_or_default();
+        // Token lookups inside the credentials callback now go through
+        // crate::auth::resolve_token; no global config load needed here.
         let url_owned = url.to_string();
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(move |cb_url, username_from_url, allowed_types| {

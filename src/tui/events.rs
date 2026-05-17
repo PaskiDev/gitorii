@@ -1017,6 +1017,7 @@ fn handle_tag(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     None
 }
 
+#[allow(dead_code)]
 fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     match app.history_view.confirm.clone() {
         HistoryConfirm::CherryPick => {
@@ -2113,6 +2114,7 @@ fn handle_config(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     None
 }
 
+#[allow(dead_code)]
 fn handle_settings(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     if let Some(a) = handle_global_nav(key, app) { return Some(a); }
     match (key.modifiers, key.code) {

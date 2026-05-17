@@ -1291,7 +1291,7 @@ fn unstage_selected(app: &mut App) -> crate::error::Result<()> {
 }
 
 fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
-    use git2::{Repository, Signature};
+    use git2::Repository;
 
     let repo = Repository::discover(&app.repo_path).map_err(crate::error::ToriiError::Git)?;
     let mut index = repo.index().map_err(crate::error::ToriiError::Git)?;

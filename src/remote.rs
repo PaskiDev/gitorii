@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use crate::config::ToriiConfig;
 use crate::error::{Result, ToriiError};
 
 /// Remote repository visibility
