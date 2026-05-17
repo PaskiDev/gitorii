@@ -15,3 +15,7 @@ pub mod issue;
 pub mod config;
 pub mod settings;
 pub mod help;
+pub mod worktree;
+pub mod submodule;
+pub mod bisect;
+pub mod auth;

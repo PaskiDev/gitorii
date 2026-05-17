@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-17
+
+**Headline:** TUI catches up with the CLI surface. The four big feature blocks from 0.6.6 → 0.7.1 (worktrees, submodules, bisect, auth) now have first-class views in `torii tui`, and the sidebar is reshuffled so related concepts live together.
+
+### Added
+
+- **`Worktree` view** — lists every linked working copy with branch, clean/dirty count, and lock status. Sidebar key `k`. Refreshes on entry via libgit2's `repo.worktrees()` directly (no CLI shell-out).
+- **`Submodule` view** — every registered submodule with HEAD oid, working-tree oid, URL, and state string (clean/modified/staged/untracked/not initialised). Sidebar key `m`.
+- **`Bisect` view** — surfaces the state of an active `git bisect` session (current commit, good/bad refs from `.git/BISECT_LOG`). When no session is active, points to the CLI commands to start one. Sidebar key `v`.
+- **`Auth` view** — masked list of every credential torii knows about (cloud key + per-platform tokens) with the source of each (`env: $VAR` / `local` / `global` / `(not set)`). Mirrors `torii auth doctor` from the CLI. Sidebar key `a`.
+
+### Changed — sidebar reorganisation
+
+Three view-pairs that were technically separate but functionally one have been **fused**, with the deprecated variants kept in the `View` enum for back-compat redirects:
+
+- **`Log` absorbs `History`.** The natural flow is "browse log → modify the commit I see", and separating them forced sidebar hops. History rewriting ops will surface inside the log view in 0.7.3 (no functional regression — `torii history …` from the shell remains the canonical write path). Sidebar entry "history" removed.
+- **`Remote` absorbs `Mirror`.** The previous dispatcher already redirected `View::Mirror → views::remote::render`, so the separation was artificial. Mirrors become a panel/tab inside Remote in 0.7.3. Sidebar entry "mirror" removed.
+- **`Config` absorbs `Settings`.** Both end up presenting key-value editors; they'll share a single view with two tabs ("TUI prefs" / "Repo config") in 0.7.3. Sidebar entry "settings" removed.
+
+Net sidebar count: 14 (pre-0.7.2) → 16 entries, with four new feature surfaces and three removed-but-redirected.
+
+### Notes
+
+- The four new views are **informative in 0.7.2** — they show state and point at CLI commands for actions. Interactive ops dropdowns (add/remove/lock/start-bisect/set-token) will land in 0.7.3 once we've validated the layout. Same pattern other views (tag/snapshot) follow.
+- Deprecated `View::Mirror`, `View::History`, `View::Settings` variants still match in the dispatcher and `go_to` so any old code that constructs them keeps working — they just redirect to the fused view. Will be removed when the 0.8 deprecation cycle lands.
+- Old per-view event handlers (`handle_history`, `handle_mirror`, `handle_settings`) generate dead-code warnings for now; cleaning them up is bundled with the 0.7.3 interactive sweep so the diff stays focused.
+
+### Out of scope, deferred to 0.7.3
+
+- Interactive keybinds on the four new views (n=new, d=delete, l=lock, …).
+- `Log` getting `--tracked` toggle + notes overlay + patch-export modal.
+- `Snapshot` view ops dropdown (`apply` / `pop` / `drop` / `clear` / `show`).
+- `Tag` view force-push toggle.
+- `Remote` view: mirrors panel + subtree subpanel.
+- `Config` view: TUI/Repo tabs absorbing the old Settings view.
+
 ## [0.7.1] - 2026-05-17
 
 **Headline:** credential management gets a coherent home. `torii auth` now manages every secret torii uses (cloud key + platform tokens). The old split (`torii auth login` for cloud, `torii config set auth.X_token` for platforms) was confusing and had three real bugs.

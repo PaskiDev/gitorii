@@ -41,13 +41,20 @@ const TABS: &[Tab] = &[
     Tab { key: "l", label: "log",       view: View::Log        },
     Tab { key: "b", label: "branch",    view: View::Branch     },
     Tab { key: "t", label: "tags",      view: View::Tag        },
-    Tab { key: "h", label: "history",   view: View::History    },
+    // 0.7.2: 4 new views.
+    Tab { key: "k", label: "worktrees", view: View::Worktree   },
+    Tab { key: "m", label: "submodules",view: View::Submodule  },
     Tab { key: "r", label: "remote",    view: View::Remote     },
     Tab { key: "w", label: "workspace", view: View::Workspace  },
-    Tab { key: "n", label: "pr/mr",      view: View::Pr         },
+    Tab { key: "n", label: "pr/mr",     view: View::Pr         },
     Tab { key: "i", label: "issues",    view: View::Issue      },
+    Tab { key: "v", label: "bisect",    view: View::Bisect     },
+    Tab { key: "a", label: "auth",      view: View::Auth       },
     Tab { key: "g", label: "config",    view: View::Config     },
-    Tab { key: "x", label: "settings",  view: View::Settings   },
+    // History merged into Log (0.7.2); Mirror merged into Remote;
+    // Settings merged into Config (as a tab). Old entries removed from
+    // the sidebar but the View variants still exist for back-compat —
+    // their renders redirect at the top-level dispatcher.
 ];
 
 pub fn render(f: &mut Frame, app: &App) {
@@ -100,17 +107,22 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Commit    => views::commit::render(f, app, content_rows[0]),
         View::Sync      => views::sync::render(f, app, content_rows[0]),
         View::Snapshot  => views::snapshot::render(f, app, content_rows[0]),
-        View::Log       => views::log::render(f, app, content_rows[0]),
+        // Log absorbs History since 0.7.2: same listing, history ops are
+        // exposed as actions within Log itself.
+        View::Log | View::History => views::log::render(f, app, content_rows[0]),
         View::Branch    => views::branch::render(f, app, content_rows[0]),
         View::Tag       => views::tag::render(f, app, content_rows[0]),
-        View::History   => views::history::render(f, app, content_rows[0]),
-        View::Remote    => views::remote::render(f, app, content_rows[0]),
-        View::Mirror    => views::remote::render(f, app, content_rows[0]),
+        // Remote absorbs Mirror in 0.7.2 — same view, mirrors are a tab.
+        View::Remote | View::Mirror => views::remote::render(f, app, content_rows[0]),
         View::Workspace => views::workspace::render(f, app, content_rows[0]),
         View::Pr        => views::pr::render(f, app, content_rows[0]),
         View::Issue     => views::issue::render(f, app, content_rows[0]),
-        View::Config    => views::config::render(f, app, content_rows[0]),
-        View::Settings  => views::settings::render(f, app, content_rows[0]),
+        View::Worktree  => views::worktree::render(f, app, content_rows[0]),
+        View::Submodule => views::submodule::render(f, app, content_rows[0]),
+        View::Bisect    => views::bisect::render(f, app, content_rows[0]),
+        View::Auth      => views::auth::render(f, app, content_rows[0]),
+        // Config absorbs Settings via tabs since 0.7.2.
+        View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
         View::Diff | View::Help => {}
     }
 

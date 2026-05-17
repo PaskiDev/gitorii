@@ -11,17 +11,29 @@ pub enum View {
     Snapshot,
     Sync,
     Tag,
+    /// Deprecated in 0.7.2 — merged into `Log`. Kept for back-compat with
+    /// any code that still references it; the dispatcher redirects to Log.
+    #[allow(dead_code)]
     History,
     Remote,
-    /// Sidebar-reachable; not currently constructed from any keybind
-    /// (view-switcher letters were removed). Kept because mirror is a core
-    /// feature and the sidebar entry will reach it again.
+    /// Deprecated in 0.7.2 — merged into `Remote` as a panel. Dispatcher
+    /// redirects to `Remote`.
     #[allow(dead_code)]
     Mirror,
     Workspace,
     Pr,
     Issue,
+    /// New in 0.7.2 — per-repo and global worktrees.
+    Worktree,
+    /// New in 0.7.2 — submodule management.
+    Submodule,
+    /// New in 0.7.2 — `git bisect` state machine.
+    Bisect,
+    /// New in 0.7.2 — credentials (cloud key + platform tokens).
+    Auth,
     Config,
+    /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
+    #[allow(dead_code)]
     Settings,
     Help,
 }
@@ -906,6 +918,91 @@ impl Default for SettingsState {
     fn default() -> Self { Self { idx: 0, status: None } }
 }
 
+// -- Worktree view ---------------------------------------------------------
+
+#[derive(Clone)]
+pub struct WorktreeEntry {
+    pub name: String,
+    pub path: String,
+    pub branch: String,
+    pub state: String, // "clean" / "N change(s)" / "locked: <reason>"
+    pub is_main: bool,
+}
+
+pub struct WorktreeState {
+    pub items: Vec<WorktreeEntry>,
+    pub idx: usize,
+    pub status: Option<String>,
+}
+
+impl Default for WorktreeState {
+    fn default() -> Self { Self { items: Vec::new(), idx: 0, status: None } }
+}
+
+// -- Submodule view --------------------------------------------------------
+
+#[derive(Clone)]
+pub struct SubmoduleEntry {
+    pub name: String,
+    pub path: String,
+    pub url: String,
+    pub head_oid: String,
+    pub workdir_oid: String,
+    pub state: String,
+}
+
+pub struct SubmoduleState {
+    pub items: Vec<SubmoduleEntry>,
+    pub idx: usize,
+    pub status: Option<String>,
+}
+
+impl Default for SubmoduleState {
+    fn default() -> Self { Self { items: Vec::new(), idx: 0, status: None } }
+}
+
+// -- Bisect view -----------------------------------------------------------
+
+#[derive(Clone, Default)]
+pub struct BisectState {
+    /// Is a bisect session currently in flight (`.git/BISECT_START` exists).
+    pub in_progress: bool,
+    pub current_hash: Option<String>,
+    pub good_refs: Vec<String>,
+    pub bad_refs: Vec<String>,
+    pub steps_left_estimate: Option<usize>,
+    pub status: Option<String>,
+}
+
+// -- Auth view -------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct AuthEntry {
+    pub provider: String,
+    pub masked: Option<String>,
+    pub source: String, // "global" / "local" / "env: $VAR" / "(not set)"
+}
+
+pub struct AuthState {
+    pub items: Vec<AuthEntry>,
+    pub idx: usize,
+    pub status: Option<String>,
+    pub cloud_key_set: bool,
+    pub cloud_endpoint: String,
+}
+
+impl Default for AuthState {
+    fn default() -> Self {
+        Self {
+            items: Vec::new(),
+            idx: 0,
+            status: None,
+            cloud_key_set: false,
+            cloud_endpoint: String::new(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub enum EventKind { Error, Success, Info }
 
@@ -958,6 +1055,12 @@ pub struct App {
     pub settings_view: SettingsState,
     pub settings: TuiSettings,
 
+    // 0.7.2: views added on the TUI side
+    pub worktree_view: WorktreeState,
+    pub submodule_view: SubmoduleState,
+    pub bisect_view: BisectState,
+    pub auth_view: AuthState,
+
     pub event_log: Vec<EventEntry>,
     pub show_event_log: bool,
     pub sync_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
@@ -1008,6 +1111,10 @@ impl App {
             config_view: ConfigState::default(),
             settings_view: SettingsState::default(),
             settings: TuiSettings::load(),
+            worktree_view: WorktreeState::default(),
+            submodule_view: SubmoduleState::default(),
+            bisect_view: BisectState::default(),
+            auth_view: AuthState::default(),
             event_log: vec![],
             show_event_log: false,
             sync_rx: None,
@@ -1099,37 +1206,49 @@ impl App {
                 self.sync_view.status = SyncStatus::Idle;
                 self.sync_view.selected_op = SyncOp::PullPush;
             }
-            View::Log => {
+            View::Log | View::History => {
                 self.log.idx = self.dashboard.log_idx;
                 self.log.scroll = 0;
                 self.log.last_files_idx = None;
                 self.log_load_commit_files();
             }
             View::Tag       => self.load_tags(),
-            View::History   => self.load_reflog(),
-            View::Remote    => self.load_remotes(),
+            View::Remote | View::Mirror => self.load_remotes(),
             View::Workspace => self.load_workspaces(),
             View::Pr        => self.load_prs(),
             View::Issue     => self.load_issues(),
-            View::Config    => self.load_config(),
+            View::Config | View::Settings => self.load_config(),
+            // 0.7.2: refresh the four new informative views on entry.
+            View::Worktree  => crate::tui::views::worktree::refresh(self),
+            View::Submodule => crate::tui::views::submodule::refresh(self),
+            View::Bisect    => crate::tui::views::bisect::refresh(self),
+            View::Auth      => crate::tui::views::auth::refresh(self),
             _ => {}
         }
+        // Sidebar order in 0.7.2 (16 entries, see TABS in ui.rs).
+        // History / Mirror / Settings have no sidebar entry; we map them
+        // to their fused destination so `go_to` from old call sites still
+        // highlights something sensible.
         self.sidebar_idx = match &view {
             View::Dashboard => 0,
             View::Commit    => 1,
             View::Sync      => 2,
             View::Snapshot  => 3,
             View::Log       => 4,
+            View::History   => 4, // fused into Log
             View::Branch    => 5,
             View::Tag       => 6,
-            View::History   => 7,
-            View::Remote    => 8,
-            View::Mirror    => 8,
-            View::Workspace => 9,
-            View::Pr        => 10,
-            View::Issue     => 11,
-            View::Config    => 12,
-            View::Settings  => 13,
+            View::Worktree  => 7,
+            View::Submodule => 8,
+            View::Remote    => 9,
+            View::Mirror    => 9, // fused into Remote
+            View::Workspace => 10,
+            View::Pr        => 11,
+            View::Issue     => 12,
+            View::Bisect    => 13,
+            View::Auth      => 14,
+            View::Config    => 15,
+            View::Settings  => 15, // fused into Config
             _               => self.sidebar_idx,
         };
         self.view = view;

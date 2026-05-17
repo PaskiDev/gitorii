@@ -380,14 +380,18 @@ impl EventHandler {
                     View::Snapshot  => handle_snapshot(key, app),
                     View::Sync      => handle_sync(key, app),
                     View::Tag       => handle_tag(key, app),
-                    View::History   => handle_history(key, app),
+                    View::History   => handle_log(key, app), // fused into Log
                     View::Remote    => handle_remote(key, app),
-                    View::Mirror    => handle_mirror(key, app),
+                    View::Mirror    => handle_remote(key, app), // fused into Remote
                     View::Workspace => handle_workspace(key, app),
                     View::Pr        => handle_pr(key, app),
                     View::Issue     => handle_issue(key, app),
+                    // 0.7.2: no custom keybinds yet for the four new views;
+                    // they're informative and refresh on entry. ↑/↓ etc. are
+                    // handled in the generic list navigation block above.
+                    View::Worktree | View::Submodule | View::Bisect | View::Auth => None,
                     View::Config    => handle_config(key, app),
-                    View::Settings  => handle_settings(key, app),
+                    View::Settings  => handle_config(key, app), // fused into Config
                     View::Help      => handle_help(key, app),
                 });
             }
