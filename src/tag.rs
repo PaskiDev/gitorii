@@ -16,7 +16,7 @@ impl<'repo> TagManager<'repo> {
         
         if let Some(msg) = message {
             // Annotated tag
-            let sig = self.repo.signature()?;
+            let sig = crate::core::resolve_signature(self.repo)?;
             self.repo.tag(name, target.as_object(), &sig, msg, false)?;
         } else {
             // Lightweight tag

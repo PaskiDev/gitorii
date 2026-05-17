@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-17
+
+### Fixed
+
+- **`torii save` no longer falls back to `"Torii User" <user@torii.local>`** when the user's identity is configured via `torii config` but not in git's own config chain. The previous `GitRepo::get_signature` read **only** from `repo.config()` (libgit2's `.git/config` → `~/.gitconfig` → `/etc/gitconfig`) and substituted a hardcoded placeholder on miss. Tracked in `docs/BUG_COMMIT_AUTHOR_FALLBACK.md` (now annotated as FIXED). The fix introduces a single `crate::core::resolve_signature(&repo)` with documented precedence:
+  1. Torii config (`~/.config/torii/config.toml [user]` — `user.name` / `user.email`). Treated as the source of truth for the user's identity.
+  2. Git's own config chain (kept as fallback so existing `git config user.name` setups keep working).
+  3. **Hard error** with a fix-it hint pointing at `torii config set user.name "…"`. Bogus authorship is worse than failing fast.
+- **Every commit-writing call site routes through the new resolver**: `GitRepo::get_signature` (used by `save` / `save --revert` paths), `core_tag::cherry_pick` and its continue/conflict paths, `tag::create_tag` (annotated tags), `core_extensions` (rebase apply, revert commit, merge commit, generic-commit helper x2), `snapshot::stash` (which previously had its own `"torii"/"torii@local"` placeholder fallback — same anti-pattern, now removed), and the TUI's direct-commit path. Seven sites in total, all unified.
+- **Empty strings treated as "not configured".** `torii config set user.name ""` previously slipped past the lookup and passed an empty name straight to libgit2, which rejected the commit with the generic `Signature cannot have an empty name or email` error. Now the resolver filters empties and returns the same fix-it error as a missing key.
+
+### Migration
+
+Users with the bug today (commits attributed to `Torii User`) can clean up after upgrading via:
+
+- Single bad commit: `torii config set user.name "…"` + `torii config set user.email "…"`, then `torii save --amend -m "<same message>"`.
+- Multiple bad commits: configure as above, then `torii history reauthor --old "Torii User" --new "Real Name <real@email>"` (committer pass-through with `--committer` if needed).
+
 ## [0.7.2] - 2026-05-17
 
 **Headline:** TUI catches up with the CLI surface. The four big feature blocks from 0.6.6 → 0.7.1 (worktrees, submodules, bisect, auth) now have first-class views in `torii tui`, and the sidebar is reshuffled so related concepts live together.

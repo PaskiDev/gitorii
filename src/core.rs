@@ -644,18 +644,77 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Get git signature from config or use defaults
-    fn get_signature(&self) -> Result<Signature<'_>> {
-        let config = self.repo.config()?;
-        
-        let name = config
-            .get_string("user.name")
-            .unwrap_or_else(|_| "Torii User".to_string());
-        
-        let email = config
-            .get_string("user.email")
-            .unwrap_or_else(|_| "user@torii.local".to_string());
-
-        Ok(Signature::now(&name, &email)?)
+    /// Get git signature using the unified resolver.
+    fn get_signature(&self) -> Result<Signature<'static>> {
+        resolve_signature(&self.repo)
     }
+}
+
+/// Resolve a commit signature for the current user, in this order:
+///
+///   1. Torii config (`~/.config/torii/config.toml [user]` —
+///      `user.name`/`user.email`). This is the source of truth for any
+///      identity the user set via `torii config set …`.
+///   2. Git's own config chain (`.git/config` → `~/.gitconfig` →
+///      `/etc/gitconfig`). Kept so users who already had a working
+///      `git config` setup don't have to duplicate it.
+///   3. Hard error. **No more silent fallback to "Torii User"** — that
+///      placeholder was the root cause of
+///      `docs/BUG_COMMIT_AUTHOR_FALLBACK.md`. Bogus commits are worse
+///      than a clear error that prompts the user to fix it.
+///
+/// Returns the signature ready to pass to `repo.commit(..)`.
+///
+/// Returns `Signature<'static>` deliberately: callers often need to
+/// hold the signature past a subsequent `&mut repo` operation
+/// (`stash_save2`, `commit` after another index op), and the
+/// `'static` lifetime decouples it from the borrow used here. Possible
+/// because `Signature::now` produces an owned signature.
+pub fn resolve_signature(repo: &git2::Repository) -> Result<Signature<'static>> {
+    let tc = crate::config::ToriiConfig::load_global().unwrap_or_default();
+
+    // Filter out empty strings at every level. `torii config set user.name ""`
+    // counts as "not configured" — the previous behaviour passed the empty
+    // string straight to libgit2, which then rejected the commit with a
+    // generic "Signature cannot have an empty name or email" instead of our
+    // torii-flavoured fix-it hint.
+    let name = tc
+        .user
+        .name
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            repo.config()
+                .ok()
+                .and_then(|c| c.get_string("user.name").ok())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            crate::error::ToriiError::InvalidConfig(
+                "user.name not configured. Set it with:\n  \
+                 torii config set user.name \"Your Name\""
+                    .to_string(),
+            )
+        })?;
+
+    let email = tc
+        .user
+        .email
+        .clone()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            repo.config()
+                .ok()
+                .and_then(|c| c.get_string("user.email").ok())
+                .filter(|s| !s.trim().is_empty())
+        })
+        .ok_or_else(|| {
+            crate::error::ToriiError::InvalidConfig(
+                "user.email not configured. Set it with:\n  \
+                 torii config set user.email \"you@example.com\""
+                    .to_string(),
+            )
+        })?;
+
+    Ok(Signature::now(&name, &email)?)
 }

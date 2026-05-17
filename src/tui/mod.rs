@@ -1298,9 +1298,7 @@ fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
     let tree_oid = index.write_tree().map_err(crate::error::ToriiError::Git)?;
     let tree = repo.find_tree(tree_oid).map_err(crate::error::ToriiError::Git)?;
 
-    let sig = repo.signature().map_err(crate::error::ToriiError::Git)?;
-    let author = Signature::now(sig.name().unwrap_or(""), sig.email().unwrap_or(""))
-        .map_err(crate::error::ToriiError::Git)?;
+    let author = crate::core::resolve_signature(&repo)?;
 
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
