@@ -65,10 +65,20 @@ impl IssueClient for GitHubIssueClient {
             .header("Accept", "application/vnd.github.v3+json")
             .send()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
+        let status = resp.status();
         let json: serde_json::Value = resp.json()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message in response)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "GitHub API {}: {} (url: {})", status, msg, url
+            )));
+        }
         let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig("Unexpected GitHub response".to_string()))?;
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "GitHub returned a non-array body for {}. Body: {}",
+                url, json
+            )))?;
         // filter out PRs (GitHub issues API returns PRs too)
         Ok(arr.iter().filter(|v| v["pull_request"].is_null()).filter_map(|v| parse_github_issue(v).ok()).collect())
     }
@@ -195,10 +205,26 @@ impl IssueClient for GitLabIssueClient {
             .header("PRIVATE-TOKEN", &self.token)
             .send()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
+        // Same pattern as pr.rs::list — check status before assuming the
+        // body is an array of issues. The pre-0.7.5 code printed
+        // "Unexpected GitLab response" for any non-200, swallowing the
+        // real reason (bad token, 404 project path, etc.).
+        let status = resp.status();
         let json: serde_json::Value = resp.json()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str()
+                .or_else(|| json["error"].as_str())
+                .unwrap_or("(no message in response)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "GitLab API {}: {} (url: {})", status, msg, url
+            )));
+        }
         let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig("Unexpected GitLab response".to_string()))?;
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "GitLab returned a non-array body for {}. Body: {}",
+                url, json
+            )))?;
         arr.iter().map(|v| parse_gitlab_issue(v)).collect()
     }
 
