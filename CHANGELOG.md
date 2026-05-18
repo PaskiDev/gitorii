@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-05-18
+
+### Added
+
+- **`torii sync --fetch` accepts a remote name and `--all`.** The fork workflow — `origin` for our work, a separate `upstream` for read-only mirror sync — had no path through torii: `sync --fetch` always hit the tracking remote, and there was no way to point it elsewhere without dropping to `git fetch upstream` and bypassing the gitorii-skill invariant ("every VCS op goes through torii"). 0.7.6 closes this gap by overloading the existing positional argument on `sync`: when `--fetch` is present, the positional argument is the remote name, not a branch.
+
+  ```sh
+  torii sync --fetch                       # tracking remote (unchanged)
+  torii sync --fetch upstream              # explicit remote
+  torii sync --fetch --all                 # every configured remote
+  ```
+
+  Implementation:
+  - `fetch_named(name)` validates the remote exists up-front and surfaces a hint listing configured remotes if it doesn't (instead of libgit2's generic error).
+  - `fetch_all()` iterates `Repository::remotes()`, prints one line per remote with the per-remote status, returns Err if any single remote failed (the others are still attempted before the error surfaces).
+  - Both share `fetch_one(name)`, which uses the default refspec from `.git/config` and the same auth callbacks + progress display the existing single-remote `fetch()` used.
+  - `--all` is mutually exclusive with the positional remote (clap-enforced via `conflicts_with = "branch"`).
+
+  Origin: tramuntana fork of servo/servo. Spec in `docs/FEATURE_FETCH_SPECIFIC_REMOTE.md`. Top-level `torii fetch` subcommand was considered and rejected — keeping the surface inside `sync` reuses the existing mental model.
+
+### Audit — non-changes
+
+- The companion request "add `torii remote add` / `remove`" was audited and dropped: `torii remote link` / `unlink` already cover the gap (URL form and platform shorthand both work). Renaming a public CLI surface for mental-model alignment with git costs more than it buys.
+
 ## [0.7.5] - 2026-05-18
 
 ### Fixed

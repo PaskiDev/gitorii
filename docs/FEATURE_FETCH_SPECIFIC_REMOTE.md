@@ -75,29 +75,25 @@ Rejected: dedicated `torii fetch` subcommand. More discoverable but
 adds a top-level command for one operation the user already
 associates with `sync`.
 
-## Also missing: adding remote pointers locally
+## Adding remote pointers locally — NON-ISSUE
 
-Companion gap: there's no way today to add a `[remote "name"]` entry
-to `.git/config` through torii. We worked around it by editing
-`.git/config` directly:
-
-```ini
-[remote "upstream"]
-    url = https://github.com/servo/servo.git
-    fetch = +refs/heads/*:refs/remotes/upstream/*
-    tagopt = --no-tags
-```
-
-A `torii remote add <name> <url>` (separate from
-`torii remote create`) would close this gap without overlapping the
-create-on-platform semantics. Suggestion:
+**Audit on 2026-05-18 (during 0.7.6 implementation):** `torii
+remote link` and `torii remote unlink` already cover this. Both the
+URL form and the platform shorthand work today:
 
 ```sh
-torii remote add upstream https://github.com/servo/servo.git
-torii remote add upstream github servo/servo    # platform shorthand
-torii remote remove upstream
-torii remote list                                # already exists?
+torii remote link upstream --url git@github.com:servo/servo.git
+torii remote link upstream github servo/servo
+torii remote unlink upstream
+torii remote local                              # lists configured remotes
 ```
+
+The workaround of editing `.git/config` by hand was unnecessary —
+the functionality exists, just under names that don't match git's
+`remote add` / `remote remove` mental model. **Decision:** leave
+`link`/`unlink` alone. Adding `add`/`remove` aliases was considered
+and rejected — the names are non-blocking and renaming a public CLI
+surface costs more than it buys.
 
 ## Suggested implementation notes
 
@@ -127,8 +123,6 @@ torii remote list                                # already exists?
    succeeded.
 5. `torii sync --fetch upstream --all` → conflict; reject with
    `--all and explicit remote are mutually exclusive`.
-6. `torii remote add <name> <url>` → writes the entry, idempotent
-   on second call if URL matches, errors if URL differs.
 
 ## Why now
 

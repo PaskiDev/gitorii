@@ -914,8 +914,74 @@ impl GitRepo {
     /// Fetch from remote without merging
     pub fn fetch(&self) -> Result<()> {
         println!("🔄 Fetching from remote...");
+        self.fetch_one("origin")?;
+        Ok(())
+    }
 
-        let mut remote = self.repo.find_remote("origin")
+    /// Fetch from a specific named remote. Errors with a helpful hint
+    /// listing configured remotes if the name is not in `.git/config`.
+    pub fn fetch_named(&self, name: &str) -> Result<()> {
+        // Validate the remote exists up-front so the error message names
+        // the missing remote (libgit2's own error is generic).
+        if self.repo.find_remote(name).is_err() {
+            let configured: Vec<String> = self.repo.remotes()
+                .map_err(|e| crate::error::ToriiError::Git(e))?
+                .iter().flatten().map(String::from).collect();
+            let list = if configured.is_empty() {
+                "(none — add one with `torii remote link <name> --url <url>`)".to_string()
+            } else {
+                configured.join(", ")
+            };
+            return Err(crate::error::ToriiError::InvalidConfig(format!(
+                "no remote '{}' configured. Configured remotes: {}", name, list
+            )));
+        }
+        println!("🔄 Fetching from '{}'...", name);
+        self.fetch_one(name)?;
+        println!("✅ Fetched from '{}'", name);
+        Ok(())
+    }
+
+    /// Fetch from every configured remote. Prints one line per remote
+    /// with status, returns Err if any single remote failed (the others
+    /// still get attempted before the error surfaces).
+    pub fn fetch_all(&self) -> Result<()> {
+        let names: Vec<String> = self.repo.remotes()
+            .map_err(|e| crate::error::ToriiError::Git(e))?
+            .iter().flatten().map(String::from).collect();
+        if names.is_empty() {
+            return Err(crate::error::ToriiError::InvalidConfig(
+                "no remotes configured. Add one with `torii remote link <name> --url <url>`".to_string()
+            ));
+        }
+        println!("🔄 Fetching from {} remote(s)...", names.len());
+        let mut failures: Vec<(String, String)> = Vec::new();
+        for name in &names {
+            match self.fetch_one(name) {
+                Ok(()) => println!("  ✅ {}", name),
+                Err(e) => {
+                    println!("  ❌ {}: {}", name, e);
+                    failures.push((name.clone(), e.to_string()));
+                }
+            }
+        }
+        if failures.is_empty() {
+            println!("✅ Fetched from all {} remote(s)", names.len());
+            Ok(())
+        } else {
+            Err(crate::error::ToriiError::InvalidConfig(format!(
+                "{}/{} remote(s) failed to fetch: {}",
+                failures.len(), names.len(),
+                failures.iter().map(|(n,_)| n.as_str()).collect::<Vec<_>>().join(", ")
+            )))
+        }
+    }
+
+    /// Shared fetch implementation: refspec defaults to whatever is in
+    /// `.git/config` for this remote (libgit2 reads it when an empty
+    /// slice is passed). Honors auth callbacks + progress display.
+    fn fetch_one(&self, name: &str) -> Result<()> {
+        let mut remote = self.repo.find_remote(name)
             .map_err(|e| crate::error::ToriiError::Git(e))?;
         let remote_url = remote.url().unwrap_or("").to_string();
         let mut callbacks = GitRepo::auth_callbacks_for(&remote_url);
@@ -924,8 +990,6 @@ impl GitRepo {
         fetch_options.remote_callbacks(callbacks);
         remote.fetch(&[] as &[&str], Some(&mut fetch_options), None)
             .map_err(|e| crate::error::ToriiError::Git(e))?;
-
-        println!("✅ Fetched from remote");
         Ok(())
     }
 
@@ -1463,4 +1527,95 @@ fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
             println!();
         }
     });
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn make_source_repo(dir: &Path) -> git2::Repository {
+        let repo = git2::Repository::init_bare(dir).unwrap();
+        {
+            let sig = git2::Signature::now("Test", "t@x").unwrap();
+            let mut idx = repo.index().unwrap();
+            let tree_oid = idx.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        }
+        repo
+    }
+
+    fn make_consumer_repo(dir: &Path) -> GitRepo {
+        git2::Repository::init(dir).unwrap();
+        GitRepo::open(dir).unwrap()
+    }
+
+    #[test]
+    fn fetch_named_pulls_refs_into_remotes_namespace() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("src.git");
+        let _ = make_source_repo(&src);
+        let consumer = tmp.path().join("consumer");
+        let gitorii = make_consumer_repo(&consumer);
+        gitorii.repo.remote("upstream", &format!("file://{}", src.display())).unwrap();
+
+        gitorii.fetch_named("upstream").unwrap();
+
+        // refs/remotes/upstream/HEAD or refs/remotes/upstream/master should exist
+        let mut found = false;
+        for r in gitorii.repo.references().unwrap().flatten() {
+            if r.name().unwrap_or("").starts_with("refs/remotes/upstream/") {
+                found = true; break;
+            }
+        }
+        assert!(found, "expected refs/remotes/upstream/* after fetch_named");
+    }
+
+    #[test]
+    fn fetch_named_missing_remote_errors_with_hint() {
+        let tmp = TempDir::new().unwrap();
+        let consumer = tmp.path().join("consumer");
+        let gitorii = make_consumer_repo(&consumer);
+        gitorii.repo.remote("origin", "file:///nowhere").unwrap();
+
+        let err = gitorii.fetch_named("upstream").unwrap_err().to_string();
+        assert!(err.contains("upstream"), "error should name the missing remote: {}", err);
+        assert!(err.contains("origin"), "error should list configured remotes: {}", err);
+    }
+
+    #[test]
+    fn fetch_all_iterates_every_remote() {
+        let tmp = TempDir::new().unwrap();
+        let src_a = tmp.path().join("a.git");
+        let src_b = tmp.path().join("b.git");
+        let _ = make_source_repo(&src_a);
+        let _ = make_source_repo(&src_b);
+        let consumer = tmp.path().join("consumer");
+        let gitorii = make_consumer_repo(&consumer);
+        gitorii.repo.remote("a", &format!("file://{}", src_a.display())).unwrap();
+        gitorii.repo.remote("b", &format!("file://{}", src_b.display())).unwrap();
+
+        gitorii.fetch_all().unwrap();
+
+        let mut a_seen = false;
+        let mut b_seen = false;
+        for r in gitorii.repo.references().unwrap().flatten() {
+            let n = r.name().unwrap_or("");
+            if n.starts_with("refs/remotes/a/") { a_seen = true; }
+            if n.starts_with("refs/remotes/b/") { b_seen = true; }
+        }
+        assert!(a_seen && b_seen, "fetch_all should populate both remotes");
+    }
+
+    #[test]
+    fn fetch_all_with_no_remotes_errors() {
+        let tmp = TempDir::new().unwrap();
+        let consumer = tmp.path().join("consumer");
+        let gitorii = make_consumer_repo(&consumer);
+
+        let err = gitorii.fetch_all().unwrap_err().to_string();
+        assert!(err.contains("no remotes"), "error should mention missing remotes: {}", err);
+    }
 }

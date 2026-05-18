@@ -226,17 +226,21 @@ enum Commands {
 
     /// Sync with remote (pull+push) or integrate a branch
     #[command(after_help = "Examples:
-  torii sync                    Pull from remote then push
-  torii sync --pull             Pull only
-  torii sync --push             Push only
-  torii sync --force            Force push (rewrites remote history)
-  torii sync --fetch            Fetch remote refs without merging
-  torii sync main               Integrate main into current branch (smart merge/rebase)
-  torii sync main --merge       Force merge strategy
-  torii sync main --rebase      Force rebase strategy
-  torii sync main --preview     Preview what would happen without executing")]
+  torii sync                       Pull from remote then push
+  torii sync --pull                Pull only
+  torii sync --push                Push only
+  torii sync --force               Force push (rewrites remote history)
+  torii sync --fetch               Fetch from the tracking remote
+  torii sync --fetch upstream      Fetch from a specific remote
+  torii sync --fetch --all         Fetch from every configured remote
+  torii sync main                  Integrate main into current branch (smart merge/rebase)
+  torii sync main --merge          Force merge strategy
+  torii sync main --rebase         Force rebase strategy
+  torii sync main --preview        Preview what would happen without executing")]
     Sync {
-        /// Branch to integrate (smart merge/rebase). If omitted, syncs with remote
+        /// When `--fetch` is present: name of the remote to fetch from
+        /// (e.g. `upstream`). Without `--fetch`: branch to integrate
+        /// (smart merge/rebase). If omitted, syncs with the tracking remote.
         branch: Option<String>,
 
         /// Pull only
@@ -254,6 +258,11 @@ enum Commands {
         /// Fetch remote refs without merging
         #[arg(long)]
         fetch: bool,
+
+        /// With `--fetch`, fetch from every configured remote (not just
+        /// the tracking remote). Mutually exclusive with a named remote.
+        #[arg(long, requires = "fetch", conflicts_with = "branch")]
+        all: bool,
 
         /// Force merge strategy when integrating a branch
         #[arg(long)]
@@ -2202,7 +2211,7 @@ impl Cli {
                 }
             }
 
-            Commands::Sync { branch, pull, push, force, fetch, merge, rebase, preview, verify, skip_hooks } => {
+            Commands::Sync { branch, pull, push, force, fetch, all, merge, rebase, preview, verify, skip_hooks } => {
                 let repo = GitRepo::open(".")?;
                 let repo_path = std::path::Path::new(".");
                 let ti = crate::toriignore::ToriIgnore::load(repo_path)?;
@@ -2215,7 +2224,18 @@ impl Cli {
                     return Ok(());
                 }
 
-                if let Some(branch_name) = branch {
+                // --fetch wins over the integrate-branch interpretation: when
+                // --fetch is present, the positional argument is a remote name.
+                if *fetch {
+                    if *all {
+                        repo.fetch_all()?;
+                    } else if let Some(remote_name) = branch {
+                        repo.fetch_named(remote_name)?;
+                    } else {
+                        repo.fetch()?;
+                        println!("✅ Fetched from remote");
+                    }
+                } else if let Some(branch_name) = branch {
                     if *preview {
                         println!("🔍 Preview: Would integrate branch '{}'", branch_name);
                         println!("💡 Recommendation: Use merge for feature branches, rebase for clean history");
@@ -2233,9 +2253,6 @@ impl Cli {
                         repo.merge_branch(branch_name)?;
                         println!("✅ Integrated branch: {}", branch_name);
                     }
-                } else if *fetch {
-                    repo.fetch()?;
-                    println!("✅ Fetched from remote");
                 } else if *force {
                     repo.push(true)?;
                     println!("✅ Force synced with remote");
