@@ -1071,15 +1071,31 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 }
             }
         },
-        View::Config => Line::from(vec![
-            Span::raw(" "),
-            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-            Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[Enter]", Style::default().fg(bc)),
-            Span::styled(" edit  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[Tab]", Style::default().fg(bc)),
-            Span::styled(" toggle scope", Style::default().fg(C_SUBTLE)),
-        ]),
+        View::Config => {
+            // Hint adapts to mode (0.7.5): editing → Enter saves, Esc
+            // cancels; otherwise Enter opens edit + Tab toggles scope.
+            // The dedicated "status" box inside the view itself was
+            // removed in 0.7.5; the line below replaces it.
+            if app.config_view.editing {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" save  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" edit  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Tab]", Style::default().fg(bc)),
+                    Span::styled(" toggle scope", Style::default().fg(C_SUBTLE)),
+                ])
+            }
+        },
         View::Settings => Line::from(vec![
             Span::raw(" "),
             Span::styled("[↑↓/jk]", Style::default().fg(bc)),

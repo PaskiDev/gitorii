@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState},
 };
 
 use crate::tui::app::{App, ConfigScope};
@@ -13,19 +13,19 @@ const SECTIONS: &[&str] = &["user", "auth", "git", "mirror", "snapshot", "ui"];
 const SECTION_COLORS: &[ratatui::style::Color] = &[C_CYAN, C_YELLOW, C_GREEN, C_CYAN, C_YELLOW, C_GREEN];
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
-        .split(area);
-
+    // 0.7.5: the "status" box used to live below as a third row with
+    // mode-aware hints. Those hints moved into the global hint bar
+    // (render_hint in ui.rs) so they sit with every other view's bottom
+    // legend. The view now uses the full area for sections + entries.
+    // Transient status_msg (post-save confirmation) is surfaced via the
+    // App-wide status line for the same reason.
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(16), Constraint::Min(1)])
-        .split(chunks[0]);
+        .split(area);
 
     render_sections(f, app, cols[0]);
     render_entries(f, app, cols[1]);
-    render_status(f, app, chunks[1]);
 }
 
 fn render_sections(f: &mut Frame, app: &App, area: Rect) {
@@ -131,26 +131,8 @@ fn render_entries(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(List::new(items).block(block), area, &mut state);
 }
 
-fn render_status(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let (text, color) = if app.config_view.editing {
-        ("editing — [Enter] save  [Esc] cancel".to_string(), C_YELLOW)
-    } else {
-        match &app.config_view.status {
-            Some(msg) => (msg.clone(), C_GREEN),
-            None => ("ready — [Enter] edit  [Tab] toggle scope".to_string(), C_DIM),
-        }
-    };
-
-    let block = Block::default()
-        .title(Span::styled(" status ", Style::default().fg(bc)))
-        .borders(Borders::ALL).border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::styled(text, Style::default().fg(color)),
-        ])).block(block),
-        area,
-    );
-}
+// `render_status` was removed in 0.7.5; hints moved to the global hint
+// bar in `ui.rs::render_hint` (where every other view's legend lives).
+// Removed altogether rather than #[allow(dead_code)] because it would
+// become a maintenance trap — drifting copy-paste of the hint strings
+// that already exist elsewhere.

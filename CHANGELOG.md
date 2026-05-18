@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-05-18
+
+### Fixed
+
+- **PR / Issue views failed with the generic `Invalid configuration: Unexpected GitLab response`** for every non-200 reply. Both `pr::list` and `issue::list` (GitHub + GitLab variants) parsed the response body straight into `serde_json::Value::as_array()` without inspecting the HTTP status, so a `401 Unauthorized`, `404 Not Found`, or `403` (the actual common failure modes) was indistinguishable from a malformed body. Now each list call:
+  1. Captures `resp.status()` before consuming the body.
+  2. Parses the body as `serde_json::Value` (works for both the array success case and the `{ "message": "…" }` / `{ "error": "…" }` error case).
+  3. On non-success, surfaces a real diagnostic: `GitLab API 401 Unauthorized: <message> (url: <full url>)` / `GitHub API 404 Not Found: <message> (url: <full url>)`. The URL is included so misconfigured `gitlab.host` / `github.owner` are obvious from the error alone.
+
+- **`Auth` config keys lived in two places at once.** Since 0.7.2 the `Auth` view became the source of truth for tokens (`~/.config/torii/auth.toml`), but `load_config()` in `src/tui/app.rs` still listed `auth.cloud_key`, `auth.github_token`, `auth.gitlab_token`, `auth.codeberg_token`, `auth.bitbucket_token` in `ALL_KEYS` (and in `SENSITIVE`). Result: the `auth` section appeared in the Config view with `[set]` / `[not set]` placeholders that read from the old `config.toml [auth]` table — stale, and editing them did nothing because the resolver routes through `auth.toml` now. The five keys were removed from `ALL_KEYS` and `SENSITIVE`; the `Auth` view is now the only place credentials are managed. `worktree.base_dir` and `worktree.inherit_paths` were added in their place (real keys the Config view should expose).
+
+### Changed — TUI
+
+- **Config view "status" box removed; its hints live in the global hint bar.** The view used to render a three-row layout (sections | entries | status), where the bottom box duplicated the bottom hint legend used by every other view. The status box is gone; `render_hint` for `View::Config` is now mode-aware:
+  - Navigating: `[↑↓/jk] navigate  [Enter] edit  [Tab] toggle scope`
+  - Editing: `[Enter] save  [Esc] cancel`
+
+  The transient save-confirmation message ("saved ✓") moved to the App-wide status line that already exists for every other view's transient feedback. Removing `render_status` outright (rather than `#[allow(dead_code)]`) was deliberate — copy-pasted hint strings drift fast and the canonical legend is in `ui.rs::render_hint`.
+
 ## [0.7.4] - 2026-05-17
 
 ### Fixed

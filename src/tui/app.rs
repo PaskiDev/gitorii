@@ -2260,16 +2260,16 @@ impl App {
     // ── Config helpers ───────────────────────────────────────────────────────
 
     fn load_config(&mut self) {
-        // All known torii config keys in order
+        // All known torii config keys in order. `auth.*` entries were
+        // removed from this list in 0.7.5 — credentials live in the
+        // dedicated Auth view (sidebar key `a`) since 0.7.2; showing
+        // them in two places confused users and required the masking
+        // shim below. The Auth view handles its own masking via the
+        // `crate::auth` resolver.
         const ALL_KEYS: &[&str] = &[
             "user.name",
             "user.email",
             "user.editor",
-            "auth.github_token",
-            "auth.gitlab_token",
-            "auth.gitea_token",
-            "auth.forgejo_token",
-            "auth.codeberg_token",
             "git.default_branch",
             "git.sign_commits",
             "git.pull_rebase",
@@ -2281,16 +2281,12 @@ impl App {
             "ui.emoji",
             "ui.verbose",
             "ui.date_format",
+            "worktree.base_dir",
+            "worktree.inherit_paths",
         ];
 
-        // Sensitive keys — show masked
-        const SENSITIVE: &[&str] = &[
-            "auth.github_token",
-            "auth.gitlab_token",
-            "auth.gitea_token",
-            "auth.forgejo_token",
-            "auth.codeberg_token",
-        ];
+        // No sensitive keys anymore in this view — tokens live in Auth.
+        const SENSITIVE: &[&str] = &[];
 
         self.config_view.entries.clear();
 
