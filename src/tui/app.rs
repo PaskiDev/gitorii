@@ -1153,6 +1153,9 @@ impl App {
         });
     }
 
+    /// Sidebar order in 0.7.2+ (must stay in sync with TABS in
+    /// src/tui/ui.rs and the sidebar_idx assignments in `go_to`).
+    /// Total: 16 entries, max valid index = 15.
     fn view_for_idx(idx: usize) -> View {
         match idx {
             0  => View::Dashboard,
@@ -1162,16 +1165,22 @@ impl App {
             4  => View::Log,
             5  => View::Branch,
             6  => View::Tag,
-            7  => View::History,
-            8  => View::Remote,
-            9  => View::Workspace,
-            10 => View::Pr,
-            11 => View::Issue,
-            12 => View::Config,
-            13 => View::Settings,
+            7  => View::Worktree,
+            8  => View::Submodule,
+            9  => View::Remote,
+            10 => View::Workspace,
+            11 => View::Pr,
+            12 => View::Issue,
+            13 => View::Bisect,
+            14 => View::Auth,
+            15 => View::Config,
             _  => View::Dashboard,
         }
     }
+
+    /// Total entries in the sidebar — keep in sync with `view_for_idx`
+    /// and TABS in ui.rs.
+    const SIDEBAR_LEN: usize = 16;
 
     pub fn sidebar_up(&mut self) {
         if self.sidebar_idx > 0 {
@@ -1183,7 +1192,7 @@ impl App {
     }
 
     pub fn sidebar_down(&mut self) {
-        if self.sidebar_idx < 13 {
+        if self.sidebar_idx + 1 < Self::SIDEBAR_LEN {
             self.sidebar_idx += 1;
             let view = Self::view_for_idx(self.sidebar_idx);
             self.go_to(view);
@@ -1266,21 +1275,28 @@ impl App {
 
     pub fn go_back(&mut self) {
         if let Some(prev) = self.prev_view.take() {
+            // Mapping must mirror `view_for_idx` + `go_to`'s sidebar_idx
+            // assignments. Keep them aligned when re-ordering the sidebar.
             let idx = match &prev {
                 View::Dashboard => 0,
                 View::Commit    => 1,
                 View::Sync      => 2,
                 View::Snapshot  => 3,
                 View::Log       => 4,
+                View::History   => 4, // fused into Log
                 View::Branch    => 5,
                 View::Tag       => 6,
-                View::History   => 7,
-                View::Remote    => 8,
-                View::Mirror    => 8,
-                View::Workspace => 9,
-                View::Pr        => 10,
-                View::Config    => 11,
-                View::Settings  => 12,
+                View::Worktree  => 7,
+                View::Submodule => 8,
+                View::Remote    => 9,
+                View::Mirror    => 9, // fused into Remote
+                View::Workspace => 10,
+                View::Pr        => 11,
+                View::Issue     => 12,
+                View::Bisect    => 13,
+                View::Auth      => 14,
+                View::Config    => 15,
+                View::Settings  => 15, // fused into Config
                 _               => 0,
             };
             // If returning to a view with its own content, keep focus in the view

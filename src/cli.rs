@@ -2693,7 +2693,22 @@ impl Cli {
                     anyhow::bail!("cargo publish exited with {}", status);
                 }
                 if !*dry_run {
-                    println!("\n✅ Published. View at https://crates.io/crates/$(name)");
+                    // Read [package].name from Cargo.toml so the URL is
+                    // accurate even if the binary name differs from the
+                    // crate name (gitorii binary is `torii`).
+                    let crate_name = std::fs::read_to_string("Cargo.toml")
+                        .ok()
+                        .and_then(|s| {
+                            s.lines()
+                                .find(|l| l.trim_start().starts_with("name "))
+                                .and_then(|l| l.split('=').nth(1))
+                                .map(|v| v.trim().trim_matches('"').to_string())
+                        })
+                        .unwrap_or_else(|| "<crate>".to_string());
+                    println!(
+                        "\n✅ Published. View at https://crates.io/crates/{}",
+                        crate_name
+                    );
                 }
             }
 

@@ -49,7 +49,7 @@ jobs:
     name: Publish to crates.io
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
+      id-token: write   # required for the OIDC auth path
       contents: read
     steps:
       - name: Checkout
@@ -62,8 +62,25 @@ jobs:
         # TODO: revert to @stable once a fixed stable rustc lands.
         uses: dtolnay/rust-toolchain@1.94.0
 
-      - name: Authenticate with crates.io
+      # Auth chain (try OIDC first, fall back to a stored PAT):
+      #
+      #   1. Trusted Publisher / OIDC via rust-lang/crates-io-auth-action.
+      #      Sets CARGO_REGISTRY_TOKEN in the job env when crates.io
+      #      recognises this repo+workflow as a trusted publisher.
+      #      Configure at:
+      #        https://crates.io/me  →  Trusted Publishers
+      #        Repository:        PaskiDev/gitorii
+      #        Workflow filename: release.yml
+      #      `continue-on-error: true` so the job survives when OIDC
+      #      isn't (yet) configured and we can fall back to the secret.
+      #
+      #   2. Repository secret CARGO_REGISTRY_TOKEN as fallback.
+      #      Set under Settings → Secrets and variables → Actions.
+      #      Used automatically by `cargo publish` when present in env.
+      - name: Authenticate via OIDC (optional)
+        id: oidc
         uses: rust-lang/crates-io-auth-action@v1
+        continue-on-error: true
 
       - name: Publish to crates.io
         # --locked respects the committed Cargo.lock so the verify-build
@@ -72,6 +89,11 @@ jobs:
         # workarounds for the codegen-pressure path.
         run: cargo publish --locked
         env:
-          CARGO_REGISTRY_TOKEN: ${{ env.CRATES_IO_TOKEN }}
+          # OIDC action exports CARGO_REGISTRY_TOKEN itself when it
+          # succeeds; this line keeps the secret fallback live for jobs
+          # where OIDC failed or isn't configured. `||` here is GitHub
+          # Actions' literal-OR, which yields the secret when the env
+          # var is empty/unset.
+          CARGO_REGISTRY_TOKEN: ${{ env.CARGO_REGISTRY_TOKEN || secrets.CARGO_REGISTRY_TOKEN }}
           RUST_MIN_STACK: "16777216"
           CARGO_BUILD_JOBS: "2"
