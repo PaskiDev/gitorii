@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-17
+
+### Fixed
+
+- **TUI sidebar couldn't reach the four new views** added in 0.7.2 (Worktree, Submodule, Bisect, Auth). `App::sidebar_down` hard-coded `if self.sidebar_idx < 13` — the pre-0.7.2 max — so navigating with `↓` / `j` capped at index 13 instead of 15 and the bottom four entries (Bisect, Auth, Config, and the slot they pushed Pr/Issue past) were unreachable through the sidebar. The mapping in `view_for_idx` was also stale: indexes 7–15 still pointed at the pre-0.7.2 layout (`History`, `Remote`, `Workspace`, …) so even when navigation worked the rendered view was wrong.
+
+  Fix:
+  - `view_for_idx` updated to the post-0.7.2 16-entry order, kept in sync with `TABS` in `src/tui/ui.rs` and the `sidebar_idx` assignments in `App::go_to`. A new constant `App::SIDEBAR_LEN = 16` is used as the bound for `sidebar_down`.
+  - `App::go_back` mapping rewritten with the same order; the deprecated `View::History` / `Mirror` / `Settings` variants map to their fused destinations (4, 9, 15 respectively).
+
+- **`torii publish` printed a literal `$(name)`** after a successful upload (`View at https://crates.io/crates/$(name)`) — the placeholder was never substituted. Now reads `[package].name` from `Cargo.toml` and prints the correct URL.
+
+### Changed (CI)
+
+- **`.github/workflows/release.yml` publish-crates job rebuilt around an OIDC-primary + PAT-secret fallback chain.** The previous version layered `rust-lang/crates-io-auth-action@v1` (which injects `CARGO_REGISTRY_TOKEN` via Trusted Publishing OIDC) and then immediately overwrote that token with `${{ env.CRATES_IO_TOKEN }}` — a never-defined env var that resolved to empty string. Net effect: `cargo publish` always ran with no token and failed. Now:
+  1. The OIDC action runs with `continue-on-error: true`. If trusted publishing is set up on crates.io for `PaskiDev/gitorii` + workflow `release.yml`, it injects the token and `cargo publish` uses it.
+  2. If OIDC didn't fire, the publish step's env reads `secrets.CARGO_REGISTRY_TOKEN` (repository or org secret) as a fallback.
+- **Note for users updating their GitHub allowlist**: the workflow uses three external actions (`actions/checkout`, `softprops/action-gh-release`, `dtolnay/rust-toolchain`, `rust-lang/crates-io-auth-action`). The org-level "Actions permissions" must either allow Marketplace-verified creators or list these explicitly under "Allow specified actions".
+
 ## [0.7.3] - 2026-05-17
 
 ### Fixed
