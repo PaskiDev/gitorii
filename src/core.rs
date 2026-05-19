@@ -469,29 +469,87 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Push all local tags to a remote using git2 (no subprocess needed)
+    /// Push local tags to a remote, but **only the ones that aren't already
+    /// in sync** with what the remote advertises.
+    ///
+    /// 0.7.8: pre-fix this function pushed every local tag on every
+    /// `torii sync --push`. GitLab fires its `workflow:rules` on each tag
+    /// ref the remote sees in a push event — even when the tag OID is
+    /// identical to what was already there — so every release retriggered
+    /// CI pipelines for every historical tag (v0.7.0, v0.7.1, v0.7.2, …).
+    /// In the gitorii repo this was producing 4+ stale pipelines per
+    /// release that all eventually got canceled, plus wasted runner time
+    /// while they were queued.
+    ///
+    /// The fix: do an ls-remote (libgit2's `Remote::list` after
+    /// `connect_auth`), compare each local tag's OID against the remote's,
+    /// and push *only* the ones that differ (or don't exist remotely).
+    /// One extra network round-trip in exchange for not retriggering N
+    /// pipelines per release. With `force=true` the comparison still
+    /// holds but the refspec gets a `+` prefix so rewritten tag OIDs
+    /// (e.g. after `torii history reauthor --since ...`) still go through.
     pub fn push_all_tags_via_git2(&self, remote_name: &str, force: bool) -> Result<()> {
-        let tags = self.repo.tag_names(None)?;
-        if tags.is_empty() {
+        let local_tags = self.repo.tag_names(None)?;
+        if local_tags.is_empty() {
             return Ok(());
         }
+
+        // Build the local-OID map first so we don't keep the repo borrowed
+        // while we open the remote connection.
+        let local: std::collections::HashMap<String, git2::Oid> = local_tags.iter()
+            .flatten()
+            .filter_map(|t| {
+                let refname = format!("refs/tags/{}", t);
+                self.repo.refname_to_id(&refname).ok().map(|oid| (t.to_string(), oid))
+            })
+            .collect();
+
         let mut remote = self.repo.find_remote(remote_name)?;
         let remote_url = remote.url().unwrap_or("").to_string();
-        let refspecs: Vec<String> = tags.iter()
-            .flatten()
-            .map(|t| {
+
+        // ls-remote equivalent: connect, list, disconnect. We pass a fresh
+        // set of auth callbacks since `connect_auth` consumes them.
+        let remote_tags: std::collections::HashMap<String, git2::Oid> = {
+            let callbacks = Self::auth_callbacks_for(&remote_url);
+            remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None)?;
+            let list = remote.list()?;
+            let map = list.iter()
+                .filter_map(|h| {
+                    let name = h.name();
+                    name.strip_prefix("refs/tags/")
+                        // Drop the peeled-tag suffix `^{}` libgit2 sometimes
+                        // surfaces in remote listings for annotated tags —
+                        // we only care about the tag object itself, which
+                        // is the entry without the suffix.
+                        .filter(|n| !n.ends_with("^{}"))
+                        .map(|n| (n.to_string(), h.oid()))
+                })
+                .collect::<std::collections::HashMap<_, _>>();
+            remote.disconnect()?;
+            map
+        };
+
+        // Only the tags whose OID differs (or are missing remotely) get a
+        // refspec. Tags that match are left alone — GitLab won't see a
+        // push event for them, so its workflow:rules won't fire.
+        let refspecs: Vec<String> = local.iter()
+            .filter(|(name, oid)| remote_tags.get(*name) != Some(oid))
+            .map(|(t, _)| {
                 let r = format!("refs/tags/{}:refs/tags/{}", t, t);
                 if force { format!("+{}", r) } else { r }
             })
             .collect();
+
+        if refspecs.is_empty() {
+            return Ok(());
+        }
+
         let refspec_refs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
-        if !refspec_refs.is_empty() {
-            let callbacks = Self::auth_callbacks_for(&remote_url);
-            let mut push_options = git2::PushOptions::new();
-            push_options.remote_callbacks(callbacks);
-            if let Err(e) = remote.push(&refspec_refs, Some(&mut push_options)) {
-                eprintln!("⚠️  Tag push failed: {}", e);
-            }
+        let callbacks = Self::auth_callbacks_for(&remote_url);
+        let mut push_options = git2::PushOptions::new();
+        push_options.remote_callbacks(callbacks);
+        if let Err(e) = remote.push(&refspec_refs, Some(&mut push_options)) {
+            eprintln!("⚠️  Tag push failed: {}", e);
         }
         Ok(())
     }
