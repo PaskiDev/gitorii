@@ -203,109 +203,104 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Rebase with a pre-written todo file (no editor required)
+    /// Rebase with a pre-written todo file (no editor required).
+    /// Unix-only because it shells out to `git rebase -i` and needs a
+    /// real shell to invoke the GIT_SEQUENCE_EDITOR helper script.
+    #[cfg(unix)]
     pub fn rebase_with_todo(&self, base: &str, todo_file: &std::path::Path) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let repo_path = self.repo.path().parent().unwrap().to_path_buf();
-            let todo_abs = todo_file.canonicalize().map_err(|_| {
-                crate::error::ToriiError::InvalidConfig(
-                    format!("Todo file not found: {}", todo_file.display())
-                )
-            })?;
-            println!("🔄 Rebasing from {} using todo file: {}", base, todo_abs.display());
-            let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
-            let editor = format!("cp {}", todo_for_git.display());
-            let mut cmd = std::process::Command::new("git");
-            cmd.args(["rebase", "-i", base])
-                .env("GIT_SEQUENCE_EDITOR", &editor)
-                .current_dir(&repo_path);
-            install_message_editor(&mut cmd, &reword_map, &repo_path)?;
-            let status = cmd.status()?;
-            report_rebase_outcome(&repo_path, status);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (base, todo_file);
-            return Err(crate::error::ToriiError::InvalidConfig(
-                "Interactive rebase with todo file requires a Unix shell. Not supported on this platform.".to_string()
-            ));
-        }
+        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        let todo_abs = todo_file.canonicalize().map_err(|_| {
+            crate::error::ToriiError::InvalidConfig(
+                format!("Todo file not found: {}", todo_file.display())
+            )
+        })?;
+        println!("🔄 Rebasing from {} using todo file: {}", base, todo_abs.display());
+        let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
+        let editor = format!("cp {}", todo_for_git.display());
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["rebase", "-i", base])
+            .env("GIT_SEQUENCE_EDITOR", &editor)
+            .current_dir(&repo_path);
+        install_message_editor(&mut cmd, &reword_map, &repo_path)?;
+        let status = cmd.status()?;
+        report_rebase_outcome(&repo_path, status);
         Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn rebase_with_todo(&self, _base: &str, _todo_file: &std::path::Path) -> Result<()> {
+        Err(crate::error::ToriiError::InvalidConfig(
+            "Interactive rebase with todo file requires a Unix shell. Not supported on this platform.".to_string()
+        ))
     }
 
     /// Interactive rebase
+    #[cfg(unix)]
     pub fn rebase_interactive(&self, base: &str) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let repo_path = self.repo.path().parent().unwrap().to_path_buf();
-            println!("🔄 Starting interactive rebase onto {}...", base);
-            let status = std::process::Command::new("git")
-                .args(["rebase", "-i", base])
-                .current_dir(&repo_path)
-                .status()?;
-            report_rebase_outcome(&repo_path, status);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = base;
-            return Err(crate::error::ToriiError::InvalidConfig(
-                "Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()
-            ));
-        }
+        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        println!("🔄 Starting interactive rebase onto {}...", base);
+        let status = std::process::Command::new("git")
+            .args(["rebase", "-i", base])
+            .current_dir(&repo_path)
+            .status()?;
+        report_rebase_outcome(&repo_path, status);
         Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn rebase_interactive(&self, _base: &str) -> Result<()> {
+        Err(crate::error::ToriiError::InvalidConfig(
+            "Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()
+        ))
     }
 
     /// Interactive rebase from the root commit (`git rebase -i --root`)
+    #[cfg(unix)]
     pub fn rebase_root_interactive(&self) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let repo_path = self.repo.path().parent().unwrap().to_path_buf();
-            println!("🔄 Starting interactive rebase from root...");
-            let status = std::process::Command::new("git")
-                .args(["rebase", "-i", "--root"])
-                .current_dir(&repo_path)
-                .status()?;
-            report_rebase_outcome(&repo_path, status);
-        }
-        #[cfg(not(unix))]
-        {
-            return Err(crate::error::ToriiError::InvalidConfig(
-                "Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()
-            ));
-        }
+        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        println!("🔄 Starting interactive rebase from root...");
+        let status = std::process::Command::new("git")
+            .args(["rebase", "-i", "--root"])
+            .current_dir(&repo_path)
+            .status()?;
+        report_rebase_outcome(&repo_path, status);
         Ok(())
     }
 
+    #[cfg(not(unix))]
+    pub fn rebase_root_interactive(&self) -> Result<()> {
+        Err(crate::error::ToriiError::InvalidConfig(
+            "Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()
+        ))
+    }
+
     /// Rebase from the root commit using a pre-written todo file
+    #[cfg(unix)]
     pub fn rebase_root_with_todo(&self, todo_file: &std::path::Path) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let repo_path = self.repo.path().parent().unwrap().to_path_buf();
-            let todo_abs = todo_file.canonicalize().map_err(|_| {
-                crate::error::ToriiError::InvalidConfig(
-                    format!("Todo file not found: {}", todo_file.display())
-                )
-            })?;
-            println!("🔄 Rebasing from root using todo file: {}", todo_abs.display());
-            let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
-            let editor = format!("cp {}", todo_for_git.display());
-            let mut cmd = std::process::Command::new("git");
-            cmd.args(["rebase", "-i", "--root"])
-                .env("GIT_SEQUENCE_EDITOR", &editor)
-                .current_dir(&repo_path);
-            install_message_editor(&mut cmd, &reword_map, &repo_path)?;
-            let status = cmd.status()?;
-            report_rebase_outcome(&repo_path, status);
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = todo_file;
-            return Err(crate::error::ToriiError::InvalidConfig(
-                "Interactive rebase with todo file requires a Unix shell. Not supported on this platform.".to_string()
-            ));
-        }
+        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        let todo_abs = todo_file.canonicalize().map_err(|_| {
+            crate::error::ToriiError::InvalidConfig(
+                format!("Todo file not found: {}", todo_file.display())
+            )
+        })?;
+        println!("🔄 Rebasing from root using todo file: {}", todo_abs.display());
+        let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
+        let editor = format!("cp {}", todo_for_git.display());
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["rebase", "-i", "--root"])
+            .env("GIT_SEQUENCE_EDITOR", &editor)
+            .current_dir(&repo_path);
+        install_message_editor(&mut cmd, &reword_map, &repo_path)?;
+        let status = cmd.status()?;
+        report_rebase_outcome(&repo_path, status);
         Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub fn rebase_root_with_todo(&self, _todo_file: &std::path::Path) -> Result<()> {
+        Err(crate::error::ToriiError::InvalidConfig(
+            "Interactive rebase with todo file requires a Unix shell. Not supported on this platform.".to_string()
+        ))
     }
 
     /// Continue an in-progress rebase
