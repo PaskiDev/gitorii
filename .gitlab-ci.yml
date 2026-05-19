@@ -171,7 +171,7 @@ release:
 
     - |
       HTTP=$(curl -s -o /tmp/release.json -w "%{http_code}" \
-        --header "PRIVATE-TOKEN: ${GITLAB_TOKEN}" \
+        --header "PRIVATE-TOKEN: ${GITLAB_RELEASE_TOKEN}" \
         --header "Content-Type: application/json" \
         --data "$PAYLOAD" \
         "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/releases")
