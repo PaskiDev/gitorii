@@ -30,6 +30,8 @@ mod versioning;
 mod pr;
 mod issue;
 mod pipeline;
+mod package;
+mod release;
 mod tui;
 mod archive;
 mod bisect;
