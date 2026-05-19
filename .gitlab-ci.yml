@@ -56,12 +56,14 @@ variables:
   script:
     - cargo build --release --target $TARGET
     - cp target/$TARGET/release/torii${EXT:-} torii-${ASSET_NAME}
-  cache:
-    # Per-branch cache key so simultaneous tags don't fight; per-target
-    # path scoped to the artifact dir to keep cache size sane.
-    key: "$CI_COMMIT_REF_SLUG-$TARGET"
-    paths:
-      - target/$TARGET/
+  # No `cache:` block — the shell-executor runner runs on a persistent
+  # host so `~/.cargo/registry` (crate downloads) and the working
+  # `target/` (incremental compile state) already survive across builds
+  # without GitLab's cache layer. Adding `cache:` here required the
+  # runner to declare a `[runners.cache]` backend in config.toml, which
+  # ours doesn't, and the job failed at startup with
+  # "cache factory not found". If we ever switch to ephemeral Docker
+  # executors, re-add a cache block AND configure the backend.
   artifacts:
     paths:
       - torii-${ASSET_NAME}
