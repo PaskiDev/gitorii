@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use git2::transport::{Service, SmartSubtransport, SmartSubtransportStream, Transport};
 use git2::{Error, Remote};
 use russh::client;
+#[cfg(unix)]
 use russh::keys::agent::client::AgentClient;
 use russh::keys::ssh_key::PublicKey;
 use russh::keys::{check_known_hosts, load_secret_key, PrivateKeyWithHashAlg};
@@ -192,6 +193,7 @@ async fn authenticate(
     Err(format!("ssh auth failed. tried: {}", tried.join("; ")).into())
 }
 
+#[cfg(unix)]
 async fn try_agent(
     session: &mut client::Handle<Handler>,
     user: &str,
@@ -211,6 +213,17 @@ async fn try_agent(
             return Ok(true);
         }
     }
+    Ok(false)
+}
+
+/// On Windows there's no ssh-agent socket path in russh's
+/// `AgentClient::connect_env` (Unix-only API). Skip agent auth
+/// cleanly so the caller falls through to the disk-key branch.
+#[cfg(not(unix))]
+async fn try_agent(
+    _session: &mut client::Handle<Handler>,
+    _user: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     Ok(false)
 }
 
