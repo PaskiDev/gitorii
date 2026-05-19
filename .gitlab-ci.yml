@@ -10,16 +10,20 @@ stages:
   - build
   - release
 
-# All jobs run on the project-dedicated self-hosted runner (registered
-# with tag `gitorii`). The shared runners on gitlab.com hit two walls:
-# (1) the russh / rsa-rc / sec1 generic tree blows past rustc's default
-# stack and SIGSEGVs without RUST_MIN_STACK=16777216 (set below), and
-# (2) the cross-compile step for windows-x86_64 + linux-aarch64 plus
-# rust toolchain install pushes wall-clock past the free-tier quota.
-# The companion `syrakon` / `tramuntana` runner stays isolated by tag.
-default:
-  tags:
-    - gitorii
+# Self-hosted attempt (tag `gitorii`) was abandoned after ~4h fighting
+# a rustc 1.94 / glibc / kernel interaction on the Arch host that
+# SIGSEGVs even compiling trivial crates like `libc` and `idna` —
+# unrelated to gitorii itself. Switched back to GitLab.com's shared
+# runners (saas-linux-small-amd64): standard Linux env, well-tested
+# for rust builds, the russh / rsa-rc / sec1 generic-tree stack
+# pressure is covered by the project-level RUST_MIN_STACK CI/CD
+# variable (set in UI to a value that the shared runner can satisfy
+# — pthread can grow the worker-thread stack to whatever pthread_attr
+# requests, no kernel cap fight). Free tier: 400 CI minutes/month,
+# which covers ~10 releases of gitorii at current build times.
+#
+# Don't add a `tags:` here. Untagged jobs go to the shared runner
+# pool; `saas-linux-small-amd64` is the default.
 
 variables:
   # See e297db2 / docs: the deep generic tree pulled in by russh's
