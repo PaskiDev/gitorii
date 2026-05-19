@@ -24,9 +24,12 @@ default:
 variables:
   # See e297db2 / docs: the deep generic tree pulled in by russh's
   # rsa-rc → sec1 chain overflows rustc's 8 MB default thread stack
-  # during monomorphisation. 16 MB fixes it. Won't be needed once those
-  # crates drop the -rc suffix and stabilise their generic depth.
-  RUST_MIN_STACK: "16777216"
+  # during monomorphisation. 16 MB worked locally; the gitorii runner
+  # host needs more (rustc SIGSEGV'd on `idna` mid-build of v0.7.8
+  # and printed `help: RUST_MIN_STACK=33554432`). 32 MB matches the
+  # compiler's own recommendation. Won't be needed once russh's
+  # crypto chain drops the -rc suffix and stabilises generic depth.
+  RUST_MIN_STACK: "33554432"
   # Local builds use `-j 2` as the OOM ceiling on this host (rustc at 16 MB
   # stack × N parallel jobs + codegen working set). The runner mirrors it.
   CARGO_BUILD_JOBS: "2"
