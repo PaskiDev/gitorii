@@ -94,7 +94,11 @@ build-windows-x86_64:
   variables:
     TARGET: x86_64-pc-windows-gnu
     ASSET_NAME: windows-x86_64.exe
-    EXTRA_PKGS: mingw-w64
+    # `aws-lc-sys` pulls NASM for x86 assembly optimisations when
+    # building for Windows targets (its `nasm_builder.rs` panics with
+    # "NASM command not found! Build cannot continue." otherwise). On
+    # Linux/aarch64 it uses regular cc and doesn't need NASM.
+    EXTRA_PKGS: mingw-w64 nasm
     LINKER: x86_64-w64-mingw32-gcc
     EXT: .exe
 
