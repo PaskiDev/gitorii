@@ -10,20 +10,42 @@ stages:
   - build
   - release
 
+# All jobs run on the project-dedicated self-hosted runner (registered
+# with tag `gitorii`). The shared runners on gitlab.com hit two walls:
+# (1) the russh / rsa-rc / sec1 generic tree blows past rustc's default
+# stack and SIGSEGVs without RUST_MIN_STACK=16777216 (set below), and
+# (2) the cross-compile step for windows-x86_64 + linux-aarch64 plus
+# rust toolchain install pushes wall-clock past the free-tier quota.
+# The companion `syrakon` / `tramuntana` runner stays isolated by tag.
+default:
+  tags:
+    - gitorii
+
 variables:
-  CARGO_HOME: $CI_PROJECT_DIR/.cargo
-  RUSTUP_HOME: $CI_PROJECT_DIR/.rustup
+  # See e297db2 / docs: the deep generic tree pulled in by russh's
+  # rsa-rc → sec1 chain overflows rustc's 8 MB default thread stack
+  # during monomorphisation. 16 MB fixes it. Won't be needed once those
+  # crates drop the -rc suffix and stabilise their generic depth.
+  RUST_MIN_STACK: "16777216"
+  # Local builds use `-j 2` as the OOM ceiling on this host (rustc at 16 MB
+  # stack × N parallel jobs + codegen working set). The runner mirrors it.
+  CARGO_BUILD_JOBS: "2"
   PACKAGE_REGISTRY_URL: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/gitorii"
+  # Persistent host cargo/rustup cache lives at ~/.cargo and ~/.rustup;
+  # we used to override these to $CI_PROJECT_DIR/.cargo back when this
+  # job ran in a fresh Docker container per build. With the shell-executor
+  # runner that's just throwing away the host's existing cache, so we
+  # leave the defaults alone.
 
 .build_linux:
   stage: build
-  image: rust:1-bookworm
   before_script:
-    # gitorii 0.6.0+ uses pure-Rust transports (rustls + russh).
-    # Build only needs a C compiler for libgit2 vendored without HTTPS/SSH.
-    - apt-get update -qq && apt-get install -y -qq curl build-essential $EXTRA_PKGS
-    - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
-    - export PATH="$CARGO_HOME/bin:$PATH"
+    # Shell executor on a host where rust+cargo+rustup+cross-toolchains
+    # are pre-installed: skip apt-install + rustup-init. We still ensure
+    # the per-target rustup component is present (idempotent if already
+    # installed) and write the per-target linker into a job-local
+    # .cargo/config.toml so concurrent jobs targeting different arches
+    # don't stomp each other's linker setting.
     - rustup target add $TARGET
     - |
       if [ -n "$LINKER" ]; then
@@ -32,9 +54,14 @@ variables:
       fi
   retry: 0
   script:
-    - export PATH="$CARGO_HOME/bin:$PATH"
     - cargo build --release --target $TARGET
     - cp target/$TARGET/release/torii${EXT:-} torii-${ASSET_NAME}
+  cache:
+    # Per-branch cache key so simultaneous tags don't fight; per-target
+    # path scoped to the artifact dir to keep cache size sane.
+    key: "$CI_COMMIT_REF_SLUG-$TARGET"
+    paths:
+      - target/$TARGET/
   artifacts:
     paths:
       - torii-${ASSET_NAME}
@@ -51,7 +78,6 @@ build-linux-aarch64:
   variables:
     TARGET: aarch64-unknown-linux-gnu
     ASSET_NAME: linux-aarch64
-    EXTRA_PKGS: gcc-aarch64-linux-gnu
     LINKER: aarch64-linux-gnu-gcc
 
 build-windows-x86_64:
@@ -59,7 +85,6 @@ build-windows-x86_64:
   variables:
     TARGET: x86_64-pc-windows-gnu
     ASSET_NAME: windows-x86_64.exe
-    EXTRA_PKGS: mingw-w64
     LINKER: x86_64-w64-mingw32-gcc
     EXT: .exe
 
@@ -67,7 +92,6 @@ build-windows-x86_64:
 release:
   stage: release
   retry: 0
-  image: alpine:latest
   needs:
     - build-linux-x86_64
     - build-linux-aarch64
@@ -76,8 +100,9 @@ release:
     - build-linux-x86_64
     - build-linux-aarch64
     - build-windows-x86_64
-  before_script:
-    - apk add --no-cache curl jq
+  # `curl` and `jq` are expected on the runner host (the gitorii runner
+  # is provisioned with both — see runner setup notes). No image / apt
+  # / apk step needed under the shell executor.
   script:
     - TAG="${CI_COMMIT_TAG}"
     - VER="${TAG#v}"
