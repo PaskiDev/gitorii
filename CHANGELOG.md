@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-05-19
+
+### Fixed
+
+- **`torii sync --push` was re-pushing every local tag on every invocation, retriggering CI pipelines for every historical tag.** Severity: medium (no data loss; wasted runner time, polluted pipeline list). Observed in production on the gitorii repo itself: every release (`torii sync --push` after a new `torii tag create`) created stale "canceled" pipelines for `v0.7.0`, `v0.7.1`, `v0.7.2`, `v0.7.3` etc. They eventually got canceled by GitLab (concurrent tag pipelines hitting workflow:rules), but only after sitting queued and consuming runner attention — and they accumulated in the pipeline list like noise.
+
+  Root cause: `GitRepo::push_all_tags_via_git2` (called unconditionally at the end of `push()`) built a refspec for **every** `refs/tags/*` in the local repo and pushed them all. libgit2 happily issued a push even for tag refs whose OID matched the remote already — and GitLab's `workflow:rules` evaluates the *receiving end's tag-push event*, not the underlying object delta, so an idempotent re-push still fires the pipeline. Mirror replication (`MirrorManager::sync_replicas_if_any`) had the same pattern for its SSH-based tag push.
+
+  Fix: both call sites now do an `ls-remote` equivalent (`Remote::connect_auth` → `Remote::list`) before deciding what to push. Only tags whose local OID differs from the remote's (or aren't on the remote at all) get a refspec. Cost: one extra round-trip per push to enumerate remote tag OIDs. Benefit: N stale pipelines per release avoided on a repo with N historical release tags.
+
+  Edge cases:
+  - `force=true` (`torii sync --push --force`) still works — the comparison still happens, but tags that differ get the `+` prefix so rewritten OIDs (e.g. after `torii history reauthor --since ...`) still get pushed over the remote's ref.
+  - Annotated tags' peeled `refs/tags/<name>^{}` entries that libgit2 sometimes surfaces in `list()` output are filtered out — only the tag object's own ref matters for the comparison.
+  - First push of a brand-new tag still works (it's missing remotely → `None != Some(oid)` → included in the refspec list).
+
 ## [0.7.7] - 2026-05-18
 
 ### Fixed

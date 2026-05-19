@@ -411,21 +411,27 @@ impl MirrorManager {
 
         remote.push(&[&refspec], Some(&mut push_options))?;
 
-        // Push tags via git2 — enumerate local tags and push each one
+        // Push tags via git2 — but only the ones whose OID differs from
+        // what the mirror already has. Pre-0.7.8 this re-pushed every
+        // local tag on every replica sync, which made GitLab retrigger
+        // its workflow:rules for every historical tag (see the matching
+        // comment in `core.rs::push_all_tags_via_git2`). One extra
+        // ls-remote round-trip per replica saves N stale pipelines.
         let tags = repo.repository().tag_names(None)?;
         if !tags.is_empty() {
-            let refspecs: Vec<String> = tags.iter()
+            let local: std::collections::HashMap<String, git2::Oid> = tags.iter()
                 .flatten()
-                .map(|t| {
-                    let r = format!("refs/tags/{}:refs/tags/{}", t, t);
-                    if force { format!("+{}", r) } else { r }
+                .filter_map(|t| {
+                    let refname = format!("refs/tags/{}", t);
+                    repo.repository().refname_to_id(&refname).ok().map(|oid| (t.to_string(), oid))
                 })
                 .collect();
-            let refspec_refs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
-            if !refspec_refs.is_empty() {
-                let mut tag_remote = repo.repository().find_remote(&mirror.name)?;
-                let mut tag_callbacks = git2::RemoteCallbacks::new();
-                tag_callbacks.credentials(|_url, username_from_url, _allowed_types| {
+
+            let mut tag_remote = repo.repository().find_remote(&mirror.name)?;
+
+            let make_ssh_callbacks = || {
+                let mut cb = git2::RemoteCallbacks::new();
+                cb.credentials(|_url, username_from_url, _allowed_types| {
                     let username = username_from_url.unwrap_or("git");
                     let home = dirs::home_dir().unwrap_or_default();
                     let ed25519 = home.join(".ssh").join("id_ed25519");
@@ -438,8 +444,37 @@ impl MirrorManager {
                         git2::Cred::ssh_key_from_agent(username)
                     }
                 });
+                cb
+            };
+
+            // ls-remote on the mirror to learn what tags are already there.
+            let remote_tags: std::collections::HashMap<String, git2::Oid> = {
+                let cb = make_ssh_callbacks();
+                tag_remote.connect_auth(git2::Direction::Fetch, Some(cb), None)?;
+                let list = tag_remote.list()?;
+                let map = list.iter()
+                    .filter_map(|h| {
+                        h.name().strip_prefix("refs/tags/")
+                            .filter(|n| !n.ends_with("^{}"))
+                            .map(|n| (n.to_string(), h.oid()))
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                let _ = tag_remote.disconnect();
+                map
+            };
+
+            let refspecs: Vec<String> = local.iter()
+                .filter(|(name, oid)| remote_tags.get(*name) != Some(oid))
+                .map(|(t, _)| {
+                    let r = format!("refs/tags/{}:refs/tags/{}", t, t);
+                    if force { format!("+{}", r) } else { r }
+                })
+                .collect();
+
+            if !refspecs.is_empty() {
+                let refspec_refs: Vec<&str> = refspecs.iter().map(|s| s.as_str()).collect();
                 let mut tag_push_opts = git2::PushOptions::new();
-                tag_push_opts.remote_callbacks(tag_callbacks);
+                tag_push_opts.remote_callbacks(make_ssh_callbacks());
                 let _ = tag_remote.push(&refspec_refs, Some(&mut tag_push_opts));
             }
         }
