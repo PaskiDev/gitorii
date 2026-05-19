@@ -13,6 +13,7 @@ use crate::versioning::AutoTagger;
 use crate::scanner;
 use crate::issue::{get_issue_client, CreateIssueOptions};
 use crate::pr::detect_platform_from_remote;
+use crate::pipeline::{get_pipeline_client, ListFilters, filter_older_than};
 
 /// Template `policies/commits.toml` written by `torii init`. Conservative
 /// defaults so a fresh repo doesn't fail every save out of the box — users
@@ -731,6 +732,26 @@ Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo")]
         action: IssueCommands,
     },
 
+    /// Manage CI pipelines (GitLab Pipelines / GitHub Actions workflow runs)
+    #[command(after_help = "Examples:
+  torii pipeline list                                  Recent pipelines on origin
+  torii pipeline list --status failed                  Only failed
+  torii pipeline list --limit 50                       Up to 50 entries
+  torii pipeline cancel 12345                          Cancel one
+  torii pipeline retry 12345                           Re-run one
+  torii pipeline delete 12345                          Delete one
+  torii pipeline delete --status failed --yes          Batch delete all failed
+  torii pipeline delete --status failed --older-than 7d --yes
+
+`--status` accepts: success | failed | running | canceled | pending.
+`delete` requires either an explicit ID or at least one filter; `--yes`
+skips the confirmation prompt. Platform is auto-detected from the
+origin remote (github / gitlab).")]
+    Pipeline {
+        #[command(subcommand)]
+        action: PipelineCommands,
+    },
+
     /// Manage .toriignore rules (paths, secrets, size, hooks)
     #[command(after_help = "Examples:
   torii ignore add 'build/'                         Add path to public .toriignore
@@ -1361,6 +1382,40 @@ enum IssueCommands {
         number: u64,
         #[arg(short, long)]
         message: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum PipelineCommands {
+    /// List recent pipelines on the auto-detected platform
+    List {
+        /// Filter by normalized status: success|failed|running|canceled|pending
+        #[arg(long)]
+        status: Option<String>,
+        /// Max entries to return (clamped to [1, 100]).
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Cancel a running pipeline by id
+    Cancel { id: String },
+    /// Retry a pipeline (re-run failed/canceled jobs) by id
+    Retry { id: String },
+    /// Delete one pipeline (`<id>`) or many (use `--status` / `--older-than`).
+    /// Requires either an explicit id or at least one filter — never both.
+    Delete {
+        /// Explicit pipeline id. Mutually exclusive with the filter flags.
+        id: Option<String>,
+        /// Delete every pipeline matching this normalized status. Required
+        /// (alongside or instead of `--older-than`) when no id is given.
+        #[arg(long, conflicts_with = "id")]
+        status: Option<String>,
+        /// Delete only pipelines older than this duration (e.g. `7d`,
+        /// `12h`, `30m`). Combine with `--status` to narrow further.
+        #[arg(long, conflicts_with = "id")]
+        older_than: Option<String>,
+        /// Skip the confirmation prompt. Required for non-interactive use.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 }
 
@@ -3412,6 +3467,123 @@ impl Cli {
                     IssueCommands::Comment { number, message } => {
                         client.comment(&owner, &repo_name, *number, message)?;
                         println!("✅ Comment added to issue #{}", number);
+                    }
+                }
+            }
+
+            Commands::Pipeline { action } => {
+                let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
+                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
+                    .ok_or_else(|| anyhow::anyhow!(
+                        "Could not detect platform from remote origin. \
+                         Supported: github, gitlab."
+                    ))?;
+                let client = get_pipeline_client(&platform)?;
+                match action {
+                    PipelineCommands::List { status, limit } => {
+                        let filters = ListFilters { status: status.clone(), per_page: *limit };
+                        let pipelines = client.list(&owner, &repo_name, &filters)?;
+                        if pipelines.is_empty() {
+                            println!("No pipelines found.");
+                        } else {
+                            println!("{:<12} {:<12} {:<24} {:<10} {}", "ID", "STATUS", "BRANCH", "SHA", "CREATED");
+                            for p in &pipelines {
+                                let icon = match p.status.as_str() {
+                                    "success"  => "✅",
+                                    "failed"   => "❌",
+                                    "running"  => "🟡",
+                                    "canceled" => "⚪",
+                                    "pending"  => "⏳",
+                                    _          => "·",
+                                };
+                                let sha_short = p.sha.chars().take(8).collect::<String>();
+                                let created = p.created_at.get(..10).unwrap_or(&p.created_at);
+                                println!("{:<12} {} {:<10} {:<24} {:<10} {}",
+                                         p.id, icon, p.raw_status, p.branch, sha_short, created);
+                            }
+                        }
+                    }
+                    PipelineCommands::Cancel { id } => {
+                        client.cancel(&owner, &repo_name, id)?;
+                        println!("✅ Cancelled pipeline {}", id);
+                    }
+                    PipelineCommands::Retry { id } => {
+                        client.retry(&owner, &repo_name, id)?;
+                        println!("✅ Retried pipeline {}", id);
+                    }
+                    PipelineCommands::Delete { id, status, older_than, yes } => {
+                        // Two modes:
+                        //   1. Explicit id → delete that one.
+                        //   2. Filter-driven → list everything matching
+                        //      --status, narrow further by --older-than,
+                        //      confirm count, delete each. Reports per-id
+                        //      success/failure so a single 403 doesn't abort
+                        //      the rest.
+                        if let Some(pid) = id {
+                            if !*yes {
+                                print!("Delete pipeline {}? [y/N] ", pid);
+                                use std::io::Write;
+                                std::io::stdout().flush()?;
+                                let mut input = String::new();
+                                std::io::stdin().read_line(&mut input)?;
+                                if !input.trim().eq_ignore_ascii_case("y") {
+                                    println!("❌ Cancelled.");
+                                    return Ok(());
+                                }
+                            }
+                            client.delete(&owner, &repo_name, pid)?;
+                            println!("✅ Deleted pipeline {}", pid);
+                            return Ok(());
+                        }
+                        if status.is_none() && older_than.is_none() {
+                            anyhow::bail!(
+                                "`pipeline delete` needs either an explicit id or \
+                                 at least one of --status / --older-than"
+                            );
+                        }
+                        // List up to 100 matching, then narrow by date.
+                        let filters = ListFilters { status: status.clone(), per_page: 100 };
+                        let mut targets = client.list(&owner, &repo_name, &filters)?;
+                        if let Some(d) = older_than.as_deref() {
+                            let mins = crate::duration::parse_duration(d)? as i64;
+                            let days = std::cmp::max(1, mins / (60 * 24));
+                            targets = filter_older_than(targets, days);
+                        }
+                        if targets.is_empty() {
+                            println!("No pipelines matched the filter.");
+                            return Ok(());
+                        }
+                        if !*yes {
+                            println!("Will delete {} pipeline(s):", targets.len());
+                            for p in targets.iter().take(10) {
+                                println!("  {} [{}] {} {}",
+                                         p.id, p.raw_status, p.branch, &p.created_at[..p.created_at.len().min(10)]);
+                            }
+                            if targets.len() > 10 {
+                                println!("  ... and {} more", targets.len() - 10);
+                            }
+                            print!("Proceed? [y/N] ");
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        let mut ok = 0usize;
+                        let mut failed: Vec<(String, String)> = Vec::new();
+                        for p in &targets {
+                            match client.delete(&owner, &repo_name, &p.id) {
+                                Ok(_) => { ok += 1; println!("  ✅ {}", p.id); }
+                                Err(e) => { failed.push((p.id.clone(), e.to_string())); println!("  ❌ {}: {}", p.id, e); }
+                            }
+                        }
+                        println!("Done: {} deleted, {} failed.", ok, failed.len());
+                        if !failed.is_empty() {
+                            anyhow::bail!("{} pipeline(s) could not be deleted", failed.len());
+                        }
                     }
                 }
             }

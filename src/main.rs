@@ -29,6 +29,7 @@ mod url;
 mod versioning;
 mod pr;
 mod issue;
+mod pipeline;
 mod tui;
 mod archive;
 mod bisect;
