@@ -111,6 +111,7 @@ release:
         --arg name "Gitorii ${TAG}" \
         --arg tag  "${TAG}" \
         --arg desc "${NOTES}" \
+        --arg base "${CI_PROJECT_URL}" \
         --arg lx64  "${BASE}/torii-linux-x86_64" \
         --arg larm  "${BASE}/torii-linux-aarch64" \
         --arg win   "${BASE}/torii-windows-x86_64.exe" \
@@ -124,7 +125,7 @@ release:
               { name: "torii-linux-aarch64",        url: $larm, link_type: "package" },
               { name: "torii-windows-x86_64.exe",   url: $win,  link_type: "package" },
               { name: "Install via cargo",           url: "https://crates.io/crates/gitorii", link_type: "other" },
-              { name: "Changelog",                  url: "https://gitlab.com/paskidev/torii/-/blob/main/CHANGELOG.md", link_type: "other" }
+              { name: "Changelog",                  url: "\($base)/-/blob/main/CHANGELOG.md", link_type: "other" }
             ]
           }
         }')
