@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-05-19
+
+### Changed (CI only — no source-level changes)
+
+- **CI moved back to GitLab.com shared runners.** A ~4h self-hosted runner experiment (registered as `void-torii` with tag `gitorii`, shell executor, Arch host) was abandoned after rustc 1.94.0 reproducibly SIGSEGV'd on this host even in trivial crates like `libc`, `idna`, `fiat-crypto`, `num-traits` — independent of `RUST_MIN_STACK` (tested up to 512 MB), `CARGO_BUILD_JOBS=1`, or `LimitSTACK=infinity` via systemd. The crash also reproduced in a standalone `cargo build` outside gitlab-runner, confirming it's a rustc-1.94/glibc/kernel interaction on that specific Arch host — unrelated to gitorii or the YAML.
+- `.gitlab-ci.yml`: removed `default: tags: [gitorii]` so jobs go to `saas-linux-small-amd64` shared runners. The russh / rsa-rc / sec1 generic-tree stack pressure is covered by the `RUST_MIN_STACK="33554432"` already in the YAML's `variables:` block — shared runners satisfy the request without kernel-cap issues.
+- Removed leftover project-level CI/CD variables (`RUST_MIN_STACK=536870912`, `CARGO_BUILD_JOBS=1`) introduced during the self-hosted debug iteration; they're no longer needed.
+
+This release contains no source-level changes vs 0.7.8. It exists to put the updated `.gitlab-ci.yml` behind a tag so the release pipeline can actually fire — the workflow rules only trigger on tag pushes, so untagged main-branch commits don't validate the new CI shape. If you only consume `gitorii` via `cargo install`, 0.7.8 and 0.7.9 are equivalent.
+
 ## [0.7.8] - 2026-05-19
 
 ### Fixed
