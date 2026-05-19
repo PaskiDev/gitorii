@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Result, ToriiError};
 use crate::core::GitRepo;
 
+/// Recursive directory copy used by the legacy-snapshot migration when
+/// a cross-filesystem `fs::rename` fails. Best-effort — propagates
+/// errors so callers can decide whether to abort or skip the entry.
+fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst)?;
+    for entry in fs::read_dir(src)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let src_p = entry.path();
+        let dst_p = dst.join(entry.file_name());
+        if kind.is_dir() {
+            copy_dir_all(&src_p, &dst_p)?;
+        } else {
+            fs::copy(&src_p, &dst_p)?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SnapshotMetadata {
     pub id: String,
@@ -22,14 +41,69 @@ pub struct SnapshotManager {
 impl SnapshotManager {
     pub fn new<P: AsRef<Path>>(repo_path: P) -> Result<Self> {
         let repo_path = repo_path.as_ref().to_path_buf();
-        let snapshots_dir = repo_path.join(".torii").join("snapshots");
-        
+
+        // 0.7.7: snapshots live INSIDE the gitdir (.git/torii/snapshots/)
+        // rather than in the working tree (.torii/snapshots/). The old
+        // location was traversed by `torii save -a` because nothing put
+        // `.torii/` in .gitignore, so a 681 MB working-tree snapshot got
+        // committed and pushed in the wild. Putting snapshots under the
+        // gitdir mirrors how git itself stores private state (hooks,
+        // refs, objects) where `git add` never reaches. See
+        // docs/fixed/BUG_SNAPSHOT_LEAKS_INTO_COMMITS.md.
+        let gitdir = git2::Repository::discover(&repo_path)
+            .map_err(crate::error::ToriiError::Git)?
+            .path()
+            .to_path_buf();
+        let snapshots_dir = gitdir.join("torii").join("snapshots");
         fs::create_dir_all(&snapshots_dir)?;
+
+        // One-shot migration: pull any pre-0.7.7 snapshots out of the
+        // working tree into the new gitdir location. Idempotent — runs
+        // only if the old dir has entries.
+        let old_dir = repo_path.join(".torii").join("snapshots");
+        if old_dir.exists() && old_dir != snapshots_dir {
+            Self::migrate_legacy_snapshots(&old_dir, &snapshots_dir)?;
+        }
 
         Ok(Self {
             repo_path,
             snapshots_dir,
         })
+    }
+
+    /// Move every `<old>/<id>/` directory into `<new>/<id>/`. Skips
+    /// destinations that already exist. Removes the old parent if it
+    /// ends up empty. Best-effort: copies on cross-FS rename failure,
+    /// never aborts the caller.
+    fn migrate_legacy_snapshots(old: &Path, new: &Path) -> Result<()> {
+        let entries: Vec<PathBuf> = match fs::read_dir(old) {
+            Ok(it) => it.flatten().map(|e| e.path()).collect(),
+            Err(_) => return Ok(()),
+        };
+        if entries.is_empty() {
+            return Ok(());
+        }
+        eprintln!("ℹ Migrating {} snapshot(s) from {} → {}",
+                  entries.len(), old.display(), new.display());
+        for src in entries {
+            let name = match src.file_name() { Some(n) => n.to_owned(), None => continue };
+            let dst = new.join(&name);
+            if dst.exists() { continue; }
+            if fs::rename(&src, &dst).is_err() {
+                // Cross-FS or busy: fall back to copy + remove, never abort.
+                if copy_dir_all(&src, &dst).is_ok() {
+                    let _ = fs::remove_dir_all(&src);
+                }
+            }
+        }
+        // Best-effort cleanup of the now-empty .torii/snapshots/ and
+        // (if empty) .torii/ parent. Failure is fine — config.json or
+        // mirrors.json may still live there legitimately.
+        let _ = fs::remove_dir(old);
+        if let Some(parent) = old.parent() {
+            let _ = fs::remove_dir(parent);
+        }
+        Ok(())
     }
 
     /// Create a new snapshot
@@ -88,9 +162,16 @@ impl SnapshotManager {
         // working-tree content gets copied below alongside it. We do NOT
         // duplicate the linked gitdir because (a) it's shared and (b) the
         // worktree's unique state lives in the working tree.
+        // Exclude our own state directory (<gitdir>/torii/) from the
+        // .git copy. Since 0.7.7 snapshots live INSIDE the gitdir, so
+        // a naive recursive copy of `.git/` into `.git/torii/snapshots/<id>/git_backup`
+        // would walk into its own destination forever. The torii/
+        // subdir of the gitdir is tool-private state — never useful to
+        // include inside a snapshot of itself.
+        let torii_state = git_path.join("torii");
         match fs::symlink_metadata(&git_path) {
             Ok(meta) if meta.is_dir() => {
-                self.copy_dir_recursive(&git_path, &snapshot_git)?;
+                self.copy_dir_recursive_excluding(&git_path, &snapshot_git, Some(&torii_state))?;
             }
             Ok(_) => {
                 // .git is a file (worktree / submodule gitlink). Copy the
@@ -113,18 +194,42 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Recursively copy directory
+    /// Recursively copy `src` into `dst`. Skips any path equal to
+    /// `exclude` (matched by canonical-path comparison when both
+    /// resolve), so a `.git` copy can be written into a destination
+    /// inside `.git/` itself without recursing forever. Used by
+    /// `create_bundle` since 0.7.7 — snapshots now live at
+    /// `<gitdir>/torii/snapshots/`, which is inside the source of the
+    /// bundle's git-dir copy.
     fn copy_dir_recursive(&self, src: &Path, dst: &Path) -> Result<()> {
+        self.copy_dir_recursive_excluding(src, dst, None)
+    }
+
+    fn copy_dir_recursive_excluding(&self, src: &Path, dst: &Path, exclude: Option<&Path>) -> Result<()> {
         fs::create_dir_all(dst)?;
-        
+
+        // Canonicalise the exclude path once. If canonicalisation fails
+        // (path may not exist yet, e.g. dst itself), fall back to the
+        // raw form.
+        let excl_canon = exclude.map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+
         for entry in fs::read_dir(src)? {
             let entry = entry?;
             let file_type = entry.file_type()?;
             let src_path = entry.path();
-            let dst_path = dst.join(entry.file_name());
 
+            // Compare canonical paths so the exclusion catches both
+            // "src/torii" entered via `.git/torii` and via a symlink.
+            if let Some(ref excl) = excl_canon {
+                let src_canon = src_path.canonicalize().unwrap_or_else(|_| src_path.clone());
+                if &src_canon == excl {
+                    continue;
+                }
+            }
+
+            let dst_path = dst.join(entry.file_name());
             if file_type.is_dir() {
-                self.copy_dir_recursive(&src_path, &dst_path)?;
+                self.copy_dir_recursive_excluding(&src_path, &dst_path, exclude)?;
             } else {
                 fs::copy(&src_path, &dst_path)?;
             }
@@ -395,16 +500,92 @@ impl SnapshotManager {
         
         let latest = snapshots.last()
             .ok_or_else(|| ToriiError::Snapshot("No operation to undo".to_string()))?;
-        
+
         let snapshot_id = latest.file_name().to_string_lossy().to_string();
-        
+
         println!("🔄 Undoing last operation...");
         println!("   Restoring snapshot: {}", snapshot_id);
-        
+
         self.restore_snapshot(&snapshot_id)?;
-        
+
         println!("✅ Operation undone");
-        
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod snapshot_location_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn init_repo(dir: &Path) {
+        let repo = git2::Repository::init(dir).unwrap();
+        // SnapshotManager needs HEAD to resolve a branch — make an
+        // empty commit so get_current_branch() doesn't blow up.
+        let sig = git2::Signature::now("T", "t@x").unwrap();
+        let mut idx = repo.index().unwrap();
+        let tree_oid = idx.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+    }
+
+    #[test]
+    fn snapshots_land_under_gitdir_not_working_tree() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+
+        let mgr = SnapshotManager::new(repo_path).unwrap();
+        let id = mgr.create_snapshot(Some("test")).unwrap();
+
+        // Must exist inside .git/torii/snapshots/, NOT .torii/snapshots/
+        let new_loc = repo_path.join(".git/torii/snapshots").join(&id);
+        let old_loc = repo_path.join(".torii/snapshots").join(&id);
+        assert!(new_loc.exists(), "snapshot should be at .git/torii/snapshots/{}", id);
+        assert!(!old_loc.exists(), "snapshot must NOT be in working tree at .torii/snapshots/{}", id);
+    }
+
+    #[test]
+    fn migrates_legacy_snapshots_from_working_tree_to_gitdir() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+
+        // Seed the legacy location with a fake snapshot dir.
+        let legacy = repo_path.join(".torii/snapshots/20200101_000000_000");
+        fs::create_dir_all(&legacy).unwrap();
+        fs::write(legacy.join("metadata.json"), "{}").unwrap();
+
+        // Constructing the manager triggers migration.
+        let _mgr = SnapshotManager::new(repo_path).unwrap();
+
+        let new_loc = repo_path.join(".git/torii/snapshots/20200101_000000_000");
+        assert!(new_loc.exists(), "legacy snapshot should be migrated");
+        assert!(new_loc.join("metadata.json").exists(), "files inside should come along");
+        assert!(!legacy.exists(), "legacy location should be cleaned up");
+    }
+
+    #[test]
+    fn migration_is_idempotent_when_destination_exists() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+
+        // Same id pre-exists in both locations: migration should not
+        // overwrite the new one (preserves whatever 0.7.7+ wrote).
+        let id = "20200101_000000_000";
+        let legacy = repo_path.join(".torii/snapshots").join(id);
+        let new_loc = repo_path.join(".git/torii/snapshots").join(id);
+        fs::create_dir_all(&legacy).unwrap();
+        fs::create_dir_all(&new_loc).unwrap();
+        fs::write(legacy.join("source.json"), "legacy").unwrap();
+        fs::write(new_loc.join("source.json"), "new").unwrap();
+
+        let _mgr = SnapshotManager::new(repo_path).unwrap();
+
+        // New location's content is preserved (not clobbered by legacy).
+        let content = fs::read_to_string(new_loc.join("source.json")).unwrap();
+        assert_eq!(content, "new");
     }
 }

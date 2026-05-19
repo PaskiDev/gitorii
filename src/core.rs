@@ -68,13 +68,39 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Add all changes to staging, respecting .toriignore
+    /// Add all changes to staging, respecting .toriignore.
+    ///
+    /// 0.7.7: `.torii/` is treated as reserved internal state and is
+    /// never staged by `-a`, the same way `git add .` skips `.git/`.
+    /// Before 0.7.7 snapshots lived in `.torii/snapshots/` inside the
+    /// working tree, and a follow-up `torii save -am` silently
+    /// absorbed the entire snapshot (one case in the wild was 681 MB
+    /// pushed to origin before the receiving end aborted with a zlib
+    /// stream error). Fix #1 in 0.7.7 moved snapshots out of the
+    /// working tree; this skip is the defense-in-depth so anything
+    /// else under `.torii/` (config.json, mirrors.json) is also kept
+    /// out of `-a`. To stage a path under `.torii/` deliberately,
+    /// pass it explicitly: `torii save .torii/config.json -m "..."`.
     pub fn add_all(&self) -> Result<()> {
         self.sync_toriignore()?;
 
         let mut index = self.repo.index()?;
-        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None)?;
+        let mut skipped_torii = false;
+        let cb = &mut |path: &Path, _matched: &[u8]| -> i32 {
+            let s = path.to_string_lossy();
+            if s == ".torii" || s.starts_with(".torii/") || s.starts_with(".torii\\") {
+                skipped_torii = true;
+                1 // skip
+            } else {
+                0 // add
+            }
+        };
+        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(cb as &mut git2::IndexMatchedPath<'_>))?;
         index.write()?;
+        if skipped_torii {
+            eprintln!("ℹ Skipped `.torii/` from staging (reserved for torii internal state). \
+                       Pass paths explicitly if you really want to stage something inside it.");
+        }
         Ok(())
     }
 
@@ -718,4 +744,40 @@ pub fn resolve_signature(repo: &git2::Repository) -> Result<Signature<'static>> 
         })?;
 
     Ok(Signature::now(&name, &email)?)
+}
+
+#[cfg(test)]
+mod add_all_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn add_all_skips_dot_torii_directory() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        // Bare-minimum init: a regular non-bare repo with no initial
+        // commit (add_all only writes the index, doesn't require HEAD).
+        let _ = git2::Repository::init(repo_path).unwrap();
+        let gitorii = GitRepo::open(repo_path).unwrap();
+
+        // Real change that SHOULD be staged.
+        fs::write(repo_path.join("README.md"), "hello").unwrap();
+        // Bogus .torii/ content that must NEVER be staged by -a.
+        fs::create_dir_all(repo_path.join(".torii/snapshots/x")).unwrap();
+        fs::write(repo_path.join(".torii/snapshots/x/big.bin"), vec![0u8; 1024]).unwrap();
+        fs::write(repo_path.join(".torii/config.json"), "{}").unwrap();
+
+        gitorii.add_all().unwrap();
+
+        let index = gitorii.repo.index().unwrap();
+        let staged: Vec<String> = index.iter()
+            .map(|e| String::from_utf8_lossy(&e.path).into_owned())
+            .collect();
+
+        assert!(staged.iter().any(|p| p == "README.md"),
+                "README.md should be staged, got: {:?}", staged);
+        assert!(!staged.iter().any(|p| p.starts_with(".torii")),
+                ".torii/* must not be staged by add_all, got: {:?}", staged);
+    }
 }

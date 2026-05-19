@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-05-18
+
+### Fixed
+
+- **Safety snapshots no longer leak into the next commit.** Severity: **high**. History-rewriting commands (`torii history reauthor`, `rebase`, `mailmap apply`) wrote their pre-op backups to `.torii/snapshots/<id>/git_backup/` *inside the working tree*. Nothing in `torii init` or in the snapshot-writing path added `.torii/` to `.gitignore`, so the directory looked like ordinary untracked project files. The very next `torii save -am ...` then staged everything new — including the full `.git` clone the snapshot contains. In the wild on `syrakon/tramuntana` this produced a single commit carrying 10,269 unrelated objects (~681 MB); the push died with `failed to finish zlib inflation: stream aborted prematurely`. Git's own `push --dry-run` reported "fast-forward, 1 commit", hiding the payload (dry-run enumerates refs, not packfile contents) — making the cause non-obvious during debugging. Full report in `docs/BUG_SNAPSHOT_LEAKS_INTO_COMMITS.md`.
+
+  Two fixes landed, the second as defense-in-depth so future torii-internal files can't repeat the pattern:
+
+  1. **Snapshots moved out of the working tree.** `SnapshotManager::new` now writes to `<gitdir>/torii/snapshots/<id>/` — i.e. under `.git/` itself, where `git add` cannot reach. The gitdir is resolved via `git2::Repository::discover().path()` so worktrees (`.git` is a file pointing into `.git/worktrees/<name>`) and submodules (similar gitlink indirection) end up with their own private snapshot directory rather than fighting over a shared one. This is the canonical convention git itself uses for tool-private state (hooks, refs, packed-refs, objects).
+
+  2. **`torii save -a` now skips `.torii/`** the same way it implicitly skips `.git/`. Implemented via the `IndexMatchedPath` callback on `index.add_all()`: any path equal to `.torii` or starting with `.torii/` returns 1 (skip). When something is skipped, `add_all` prints a one-line hint telling the user — explicit paths still work (`torii save .torii/config.json -m "..."` will stage that one file). This protects the remaining legitimate working-tree files like `.torii/config.json` and `.torii/mirrors.json` from accidental capture too, since the `-a` flag is what users actually reach for day-to-day.
+
+- **Auto-migration for pre-0.7.7 snapshots.** When `SnapshotManager::new` finds an old `.torii/snapshots/` directory in a working tree, it moves every snapshot under it into the new `<gitdir>/torii/snapshots/` location, then removes the empty `.torii/snapshots/` (and the `.torii/` parent if nothing else lives there). Idempotent — destinations that already exist are preserved (the new location wins). Cross-filesystem rename failures fall back to a recursive copy + remove. Prints a one-line `ℹ Migrating N snapshot(s) from … → …` notice. Runs on every `SnapshotManager` instantiation but is a no-op when the legacy directory is empty or absent.
+
+### Added
+
+- **`torii pipeline {list, cancel, retry, delete}` — CI pipeline / workflow-run management for GitLab Pipelines and GitHub Actions.** Symmetric surface across both platforms, auto-detects which one from the `origin` remote URL. Common shapes:
+
+  ```sh
+  torii pipeline list                              # recent on current repo
+  torii pipeline list --status failed              # only failed
+  torii pipeline list --limit 50                   # up to 50 (clamped to 100)
+  torii pipeline cancel 12345                      # one
+  torii pipeline retry 12345                       # one
+  torii pipeline delete 12345                      # one (prompts unless --yes)
+  torii pipeline delete --status failed --yes      # batch: every failed
+  torii pipeline delete --status failed --older-than 7d --yes
+  ```
+
+  `--status` is a single normalized value (`success | failed | running | canceled | pending`) that each backend translates to its own filter parameter — GitLab uses `?status=` directly, GitHub Actions accepts `status=failure|in_progress|...` on the `workflow_runs` endpoint. The `Pipeline` struct keeps both the normalized status (for filtering) and the platform-native `raw_status` string (for display, so "timed_out" stays "timed_out" in the list output instead of collapsing into a generic "failed").
+
+  `delete` has two mutually exclusive shapes: `delete <id>` (single pipeline, prompts unless `--yes`) and `delete --status ... [--older-than ...]` (filter-driven batch). Batch mode lists candidates, prints a preview of the first 10 + count of remaining, prompts unless `--yes`, then iterates one-by-one — per-id failures are reported but do **not** abort the rest, so a single 403 doesn't strand the remaining deletions. Exit code reflects "any failures" so CI/scripts can detect partial success.
+
+  `--older-than` reuses the existing `crate::duration::parse_duration` (`7d`, `12h30m`, etc.). The filter is applied client-side over the listed page, so it composes cleanly with `--status` without needing platform-specific query params.
+
+  Token resolution goes through the same `torii auth set <platform>` path used by `pr` and `issue` — no new env-var or config knob.
+
+  Internals live in `src/pipeline.rs` (~370 lines, mirrors the `src/pr.rs` shape: `PipelineClient` trait + `GitHubPipelineClient` + `GitLabPipelineClient` + `get_pipeline_client` factory). Status-normalization tables in `parse_github_run` / `parse_gitlab_pipeline` cover the platform-specific values; unit tests in the same file verify the normalization (`completed`+`failure` → `failed`, `in_progress` → `running`, etc.) and the `filter_older_than` semantics — including the conservative "keep entries with unparseable timestamps" rule (we don't act on state we can't reason about).
+
+### Audit — non-changes
+
+- **Fix #4 from the snapshot bug report (warn on suspicious commit size — `> 50 MB` or `> 500 files`) was deferred.** The root cause is gone after fixes #1 + #3; a generic large-commit warning is general hardening worth doing on its own merit and not as a backstop for this bug. Tracked for a future release.
+
 ## [0.7.6] - 2026-05-18
 
 ### Added
