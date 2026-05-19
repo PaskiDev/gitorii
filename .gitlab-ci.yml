@@ -41,11 +41,15 @@ variables:
   stage: build
   before_script:
     # Shell executor on a host where rust+cargo+rustup+cross-toolchains
-    # are pre-installed: skip apt-install + rustup-init. We still ensure
-    # the per-target rustup component is present (idempotent if already
-    # installed) and write the per-target linker into a job-local
-    # .cargo/config.toml so concurrent jobs targeting different arches
-    # don't stomp each other's linker setting.
+    # are pre-installed. The runner may not start a login shell, so
+    # `~/.cargo/env` isn't auto-sourced for the job user — load it
+    # explicitly when it exists. This is what makes `rustup target add`
+    # below work without requiring the runner host to ship rustup in
+    # /usr/local/bin. If the user account that runs jobs doesn't have
+    # rustup at all, this is a no-op and the next line will fail with
+    # a clear `rustup: command not found` (which is the right signal
+    # to fix the runner's `user =` setting in /etc/gitlab-runner/config.toml).
+    - "[ -f $HOME/.cargo/env ] && . $HOME/.cargo/env || true"
     - rustup target add $TARGET
     - |
       if [ -n "$LINKER" ]; then
