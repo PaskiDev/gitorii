@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-05-20
+
+### Added — Platform Management Surface
+
+Three new top-level commands giving CLI access to GitLab/GitHub platform-side state we previously had to reach with `curl` + the web UI. All three auto-detect the platform from the `origin` remote, mirroring the pattern from `torii pipeline` (0.7.7) and `torii pr` / `torii issue`.
+
+- **`torii job {list, log, retry, cancel, artifacts, erase}` — individual CI job control.** Sibling to `torii pipeline` (which manages whole pipelines / workflow runs); `torii job` drills into the jobs inside a pipeline.
+  - `torii job list --pipeline <id> [--status STATUS]` — enumerate jobs of one pipeline, optionally filtered. Output is a one-line-per-job table with icon, raw status, name, stage, duration. The status filter is normalized (`success | failed | running | canceled | pending`) and applied client-side after the fetch so the same flag means the same thing on both backends.
+  - `torii job log <id> [--tail N]` — **the killer feature.** Fetches the raw trace and prints it. With `--tail N` only the last N lines are printed, which is the common case during failure post-mortems. Replaces the previous "open the UI, click into the job, scroll to the bottom of the log" round-trip. During the v0.7.9 saga this would have saved ~30 minutes of `curl /jobs/<id>/trace | tail -20` repetition.
+  - `torii job retry <id>` — GitLab only. Re-runs a single failed job without re-running the entire pipeline (which on a 25-minute matrix is the difference between "5 min retry" and "25 min retry"). GitHub Actions doesn't support per-job retry (only `/runs/:run_id/rerun-failed-jobs` at the run level); the GitHub backend returns a hint pointing at `torii pipeline retry <run-id>`.
+  - `torii job cancel <id>` — GitLab only, same asymmetry as `retry`.
+  - `torii job artifacts <id> [-o <path>]` — GitLab only. Downloads the per-job artifacts archive to disk. On GitHub artifacts are run-scoped, not job-scoped; the backend returns an error explaining this. Default output path is `./<job-id>-artifacts.zip`.
+  - `torii job erase <id> [--yes]` — GitLab only. Clears a job's log + artifacts but keeps the job entry visible in the UI (useful for storage cleanup when you want history). GitHub returns unsupported.
+  - Trait impl in `src/pipeline.rs` — extends the existing `PipelineClient` trait rather than adding a parallel `JobClient` trait, since jobs are conceptually under pipelines and share the same auth + base URL. Asymmetric capabilities are handled by `Err` returns with self-explanatory hints (no silent fallback, no panics on unsupported ops).
+
+- **`torii package {list, files, delete}` — GitLab Package Registry management.** GitLab's Generic Package Registry stores release binaries between runs (gitorii's release pipeline uploads three cross-compiled binaries per tag — linux x86_64, linux aarch64, windows x86_64). Without cleanup, this accumulates against the namespace's 5 GB free-tier storage cap.
+  - `torii package list [--type TYPE] [--name SUBSTR] [--limit N]` — enumerate packages. `--type generic` is the gitorii case; the surface also supports the other types GitLab exposes (npm, maven, conan, pypi, composer, nuget, helm) without code changes — the parser is type-agnostic.
+  - `torii package files <package-id>` — list files inside a package with their sizes (in MB). Useful for understanding what's stored before deleting.
+  - `torii package delete <id> | --version vX.Y.Z | --older-than 90d --yes` — three modes: single-id, by-exact-version, by-age. The filter modes are mutually exclusive with the explicit id (clap-enforced). Batch mode previews up to 10 entries before confirmation, then iterates one-by-one with per-id success/failure reporting — same pattern as `torii pipeline delete`.
+  - Implementation in `src/package.rs` (~280 lines, follows the `pipeline.rs` shape). GitLab-only on purpose: GitHub's binary-distribution model is Release Assets attached to Releases, which is `torii release`'s scope below.
+
+- **`torii release {list, show, edit, delete}` — Release page management.** Both backends.
+  - `torii release list [--limit N]` — recent releases. One-line-per-release.
+  - `torii release show <tag>` — full details (description body, web URL, created date). Useful for previewing what's published before editing or for grabbing the URL to paste somewhere.
+  - `torii release edit <tag> [--name X] [--notes notes.md | -]` — patch the release name and/or description without re-tagging or re-running CI. `--notes` accepts either a path to a markdown file or `-` for stdin (so you can pipe in dynamically-generated notes). Fixes the workflow of "oops I had a typo in the CHANGELOG section that got copied to the GitLab Release" without forcing a re-release.
+  - `torii release delete <tag> [--yes]` — removes the Release entity (the underlying tag stays — use `torii tag delete <tag>` if you also want the tag gone). Useful when CI auto-created a release with garbage in the description because of an interrupted run.
+  - Both backends supported with appropriate asymmetries: GitHub's edit API needs the numeric release id (fetched via the get-by-tag call); GitLab's API uses the tag directly in the path. CLI surface is identical from the user's POV.
+  - Implementation in `src/release.rs` (~340 lines).
+
+### Tests added
+
+10+ inline unit tests across the three new modules — parsing logic for both backends, filter semantics (`older_than` keeps unparseable timestamps for safety), version matching, and `parse_github_job` status-normalization edge cases (`completed` + `failure` → `failed`, `completed` + `timed_out` → `failed`, `completed` + `cancelled` → `canceled`).
+
+### Why this release
+
+The v0.7.9 saga (~13 hours of CI debugging on 2026-05-19) exposed how thin our tooling was for the GitLab platform side — we had to reach for `curl` for every diagnostic (`/jobs/<id>/trace`, `/pipelines/<id>/jobs`, `/releases/<tag>`, etc.). 0.7.10 closes that gap so the next time something breaks, the diagnostic path is `torii job log <id> --tail 50` instead of three nested shell commands. The platform surface is now: `pipeline` (whole-pipeline ops, 0.7.7), `job` (individual job ops, this release), `package` (binary storage, this release), `release` (release-page metadata, this release).
+
 ## [0.7.9] - 2026-05-19
 
 ### Changed (CI only — no source-level changes)

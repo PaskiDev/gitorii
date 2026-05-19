@@ -14,6 +14,8 @@ use crate::scanner;
 use crate::issue::{get_issue_client, CreateIssueOptions};
 use crate::pr::detect_platform_from_remote;
 use crate::pipeline::{get_pipeline_client, ListFilters, filter_older_than};
+use crate::package::{get_package_client, PackageListFilters, filter_older_than as pkg_filter_older_than, filter_by_version as pkg_filter_by_version};
+use crate::release::get_release_client;
 
 /// Template `policies/commits.toml` written by `torii init`. Conservative
 /// defaults so a fresh repo doesn't fail every save out of the box — users
@@ -752,6 +754,60 @@ origin remote (github / gitlab).")]
         action: PipelineCommands,
     },
 
+    /// Drill into individual CI jobs (GitLab Pipelines / GitHub Actions workflow_runs jobs)
+    #[command(after_help = "Examples:
+  torii job list --pipeline 1234                     Jobs in a pipeline
+  torii job list --pipeline 1234 --status failed     Only failed jobs
+  torii job log 5678                                 Print full log
+  torii job log 5678 --tail 50                       Last 50 lines (handy for failures)
+  torii job retry 5678                               Re-run one job (GitLab only)
+  torii job cancel 5678                              Cancel a running job (GitLab only)
+  torii job artifacts 5678 -o artifacts.zip          Download per-job artifacts (GitLab only)
+  torii job erase 5678                               Clear log + artifacts but keep metadata (GitLab only)
+
+Platform notes — GitHub Actions:
+  Some operations (`retry`, `cancel`, `artifacts`, `erase`) are scoped to the
+  workflow run on GitHub, not individual jobs. Those subcommands return an
+  error pointing at the equivalent `torii pipeline` operation.")]
+    Job {
+        #[command(subcommand)]
+        action: JobCommands,
+    },
+
+    /// Manage the Package Registry — release binaries / artifacts stored on the platform.
+    #[command(after_help = "Examples:
+  torii package list                                 List packages in the project
+  torii package list --type generic                  Filter by package type
+  torii package list --name gitorii                  Substring search on package name
+  torii package files 12345                          Files inside a package
+  torii package delete 12345                          Delete one package
+  torii package delete --version v0.7.0 --yes        Batch delete all v0.7.0 packages
+  torii package delete --older-than 90d --yes        Batch delete packages older than 90 days
+
+Platform notes: gitlab-only (Generic Package Registry). On GitHub, binary
+release assets are managed through `torii release` since GitHub doesn't
+expose a standalone package registry equivalent.")]
+    Package {
+        #[command(subcommand)]
+        action: PackageCommands,
+    },
+
+    /// Manage Release pages (GitLab Releases / GitHub Releases)
+    #[command(after_help = "Examples:
+  torii release list                                 Recent releases
+  torii release show v0.7.9                          One release's details
+  torii release edit v0.7.9 --name 'New title'       Rename
+  torii release edit v0.7.9 --notes notes.md         Replace description (file)
+  torii release edit v0.7.9 --notes - <<< 'inline'   Replace description (inline via stdin)
+  torii release delete v0.7.9 --yes                  Delete release entity (leaves the tag)
+
+The release identifier is the tag name (`v0.7.9`), not a numeric id —
+matches how both GitLab and GitHub address releases in their UIs.")]
+    Release {
+        #[command(subcommand)]
+        action: ReleaseCommands,
+    },
+
     /// Manage .toriignore rules (paths, secrets, size, hooks)
     #[command(after_help = "Examples:
   torii ignore add 'build/'                         Add path to public .toriignore
@@ -1414,6 +1470,110 @@ enum PipelineCommands {
         #[arg(long, conflicts_with = "id")]
         older_than: Option<String>,
         /// Skip the confirmation prompt. Required for non-interactive use.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum JobCommands {
+    /// List jobs in a pipeline / workflow run
+    List {
+        /// Pipeline (GitLab) / workflow-run (GitHub) id to list jobs from.
+        #[arg(long)]
+        pipeline: String,
+        /// Optional status filter: success|failed|running|canceled|pending|other
+        #[arg(long)]
+        status: Option<String>,
+    },
+    /// Print a job's log/trace. The killer feature — replaces
+    /// "open browser, find job, click logs, scroll".
+    Log {
+        id: String,
+        /// Show only the last N lines of the log (good for failure
+        /// post-mortems, since the actual error usually lives at the tail).
+        #[arg(long)]
+        tail: Option<usize>,
+    },
+    /// Re-run a single job. GitLab only — GitHub Actions doesn't support
+    /// per-job retry; use `torii pipeline retry <run-id>` there.
+    Retry { id: String },
+    /// Cancel a running job. GitLab only — GitHub Actions cancels at the
+    /// workflow-run level; use `torii pipeline cancel <run-id>`.
+    Cancel { id: String },
+    /// Download a job's artifacts archive to a local path. GitLab only —
+    /// GitHub artifacts are scoped to the workflow run, not the job.
+    Artifacts {
+        id: String,
+        /// Output path for the artifacts zip. Defaults to `./<job-id>-artifacts.zip`.
+        #[arg(short = 'o', long)]
+        output: Option<String>,
+    },
+    /// Erase a job's log + artifacts but keep the job entry in the UI.
+    /// GitLab only.
+    Erase {
+        id: String,
+        /// Skip the confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum PackageCommands {
+    /// List packages in the project registry
+    List {
+        /// Filter by package type (e.g. "generic")
+        #[arg(long = "type")]
+        package_type: Option<String>,
+        /// Substring search on package name
+        #[arg(long)]
+        name: Option<String>,
+        /// Max entries to return (1..=100)
+        #[arg(long, default_value = "100")]
+        limit: usize,
+    },
+    /// List files inside a package
+    Files { id: String },
+    /// Delete one package (`<id>`) or many (use `--version` / `--older-than`).
+    Delete {
+        /// Explicit package id. Mutually exclusive with the filter flags.
+        id: Option<String>,
+        /// Delete every package matching this version
+        #[arg(long, conflicts_with = "id")]
+        version: Option<String>,
+        /// Delete only packages older than this duration (e.g. `90d`, `7d`)
+        #[arg(long, conflicts_with = "id")]
+        older_than: Option<String>,
+        /// Skip the confirmation prompt
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ReleaseCommands {
+    /// List recent releases
+    List {
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+    /// Show one release's full details (description, web URL, etc.)
+    Show { tag: String },
+    /// Edit release metadata. Pass `--name` and/or `--notes`.
+    Edit {
+        tag: String,
+        /// New release name/title.
+        #[arg(long)]
+        name: Option<String>,
+        /// Path to a markdown file with the new description. Use `-` for stdin.
+        #[arg(long)]
+        notes: Option<String>,
+    },
+    /// Delete the release entity (leaves the tag intact).
+    Delete {
+        tag: String,
+        /// Skip the confirmation prompt.
         #[arg(short = 'y', long)]
         yes: bool,
     },
@@ -3584,6 +3744,256 @@ impl Cli {
                         if !failed.is_empty() {
                             anyhow::bail!("{} pipeline(s) could not be deleted", failed.len());
                         }
+                    }
+                }
+            }
+
+            Commands::Job { action } => {
+                let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
+                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let client = get_pipeline_client(&platform)?;
+                match action {
+                    JobCommands::List { pipeline, status } => {
+                        let jobs = client.list_jobs(&owner, &repo_name, pipeline, status.as_deref())?;
+                        if jobs.is_empty() {
+                            println!("No jobs found for pipeline {}.", pipeline);
+                        } else {
+                            println!("{:<14} {:<10} {:<24} {:<12} {}", "ID", "STATUS", "NAME", "STAGE", "DURATION");
+                            for j in &jobs {
+                                let icon = match j.status.as_str() {
+                                    "success"  => "✅",
+                                    "failed"   => "❌",
+                                    "running"  => "🟡",
+                                    "canceled" => "⚪",
+                                    "pending"  => "⏳",
+                                    _          => "·",
+                                };
+                                let dur = j.duration_seconds.map(|d| format!("{}s", d as i64)).unwrap_or_else(|| "—".into());
+                                println!("{:<14} {} {:<8} {:<24} {:<12} {}",
+                                         j.id, icon, j.raw_status, j.name, j.stage, dur);
+                            }
+                        }
+                    }
+                    JobCommands::Log { id, tail } => {
+                        let log = client.job_log(&owner, &repo_name, id)?;
+                        if let Some(n) = tail {
+                            let lines: Vec<&str> = log.lines().collect();
+                            let start = lines.len().saturating_sub(*n);
+                            for line in &lines[start..] {
+                                println!("{}", line);
+                            }
+                        } else {
+                            println!("{}", log);
+                        }
+                    }
+                    JobCommands::Retry { id } => {
+                        client.job_retry(&owner, &repo_name, id)?;
+                        println!("✅ Retried job {}", id);
+                    }
+                    JobCommands::Cancel { id } => {
+                        client.job_cancel(&owner, &repo_name, id)?;
+                        println!("✅ Cancelled job {}", id);
+                    }
+                    JobCommands::Artifacts { id, output } => {
+                        let default_path = format!("./{}-artifacts.zip", id);
+                        let out = output.clone().unwrap_or(default_path);
+                        let path = std::path::Path::new(&out);
+                        client.job_artifacts_download(&owner, &repo_name, id, path)?;
+                        println!("✅ Downloaded job {} artifacts → {}", id, out);
+                    }
+                    JobCommands::Erase { id, yes } => {
+                        if !*yes {
+                            print!("Erase log + artifacts of job {}? (job metadata kept) [y/N] ", id);
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        client.job_erase(&owner, &repo_name, id)?;
+                        println!("✅ Erased job {} log + artifacts", id);
+                    }
+                }
+            }
+
+            Commands::Package { action } => {
+                let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
+                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let client = get_package_client(&platform)?;
+                match action {
+                    PackageCommands::List { package_type, name, limit } => {
+                        let filters = PackageListFilters {
+                            package_type: package_type.clone(),
+                            name_search: name.clone(),
+                            per_page: *limit,
+                        };
+                        let packages = client.list(&owner, &repo_name, &filters)?;
+                        if packages.is_empty() {
+                            println!("No packages found.");
+                        } else {
+                            println!("{:<8} {:<20} {:<16} {:<10} {}", "ID", "NAME", "VERSION", "TYPE", "CREATED");
+                            for p in &packages {
+                                let created = p.created_at.get(..10).unwrap_or(&p.created_at);
+                                println!("{:<8} {:<20} {:<16} {:<10} {}",
+                                         p.id, p.name, p.version, p.package_type, created);
+                            }
+                        }
+                    }
+                    PackageCommands::Files { id } => {
+                        let files = client.list_files(&owner, &repo_name, id)?;
+                        if files.is_empty() {
+                            println!("No files in package {}.", id);
+                        } else {
+                            println!("{:<10} {:<40} {}", "FILE-ID", "NAME", "SIZE");
+                            for f in &files {
+                                let size_mb = f.size_bytes as f64 / 1_048_576.0;
+                                println!("{:<10} {:<40} {:.2} MB",
+                                         f.id, f.file_name, size_mb);
+                            }
+                        }
+                    }
+                    PackageCommands::Delete { id, version, older_than, yes } => {
+                        if let Some(pid) = id {
+                            if !*yes {
+                                print!("Delete package {}? [y/N] ", pid);
+                                use std::io::Write;
+                                std::io::stdout().flush()?;
+                                let mut input = String::new();
+                                std::io::stdin().read_line(&mut input)?;
+                                if !input.trim().eq_ignore_ascii_case("y") {
+                                    println!("❌ Cancelled.");
+                                    return Ok(());
+                                }
+                            }
+                            client.delete(&owner, &repo_name, pid)?;
+                            println!("✅ Deleted package {}", pid);
+                            return Ok(());
+                        }
+                        if version.is_none() && older_than.is_none() {
+                            anyhow::bail!(
+                                "`package delete` needs either an explicit id or at least one of --version / --older-than"
+                            );
+                        }
+                        // List ALL packages (no API-side version filter needed,
+                        // we narrow client-side for predictable semantics).
+                        let filters = PackageListFilters { per_page: 100, ..PackageListFilters::default() };
+                        let mut targets = client.list(&owner, &repo_name, &filters)?;
+                        if let Some(v) = version {
+                            targets = pkg_filter_by_version(targets, v);
+                        }
+                        if let Some(d) = older_than.as_deref() {
+                            let mins = crate::duration::parse_duration(d)? as i64;
+                            let days = std::cmp::max(1, mins / (60 * 24));
+                            targets = pkg_filter_older_than(targets, days);
+                        }
+                        if targets.is_empty() {
+                            println!("No packages matched the filter.");
+                            return Ok(());
+                        }
+                        if !*yes {
+                            println!("Will delete {} package(s):", targets.len());
+                            for p in targets.iter().take(10) {
+                                println!("  {} {} {} {} {}",
+                                         p.id, p.name, p.version, p.package_type,
+                                         &p.created_at[..p.created_at.len().min(10)]);
+                            }
+                            if targets.len() > 10 {
+                                println!("  ... and {} more", targets.len() - 10);
+                            }
+                            print!("Proceed? [y/N] ");
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        let mut ok = 0usize;
+                        let mut failed: Vec<(String, String)> = Vec::new();
+                        for p in &targets {
+                            match client.delete(&owner, &repo_name, &p.id) {
+                                Ok(_) => { ok += 1; println!("  ✅ {} {} {}", p.id, p.name, p.version); }
+                                Err(e) => { failed.push((p.id.clone(), e.to_string())); println!("  ❌ {}: {}", p.id, e); }
+                            }
+                        }
+                        println!("Done: {} deleted, {} failed.", ok, failed.len());
+                        if !failed.is_empty() {
+                            anyhow::bail!("{} package(s) could not be deleted", failed.len());
+                        }
+                    }
+                }
+            }
+
+            Commands::Release { action } => {
+                let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
+                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let client = get_release_client(&platform)?;
+                match action {
+                    ReleaseCommands::List { limit } => {
+                        let rels = client.list(&owner, &repo_name, *limit)?;
+                        if rels.is_empty() {
+                            println!("No releases found.");
+                        } else {
+                            println!("{:<14} {:<32} {}", "TAG", "NAME", "CREATED");
+                            for r in &rels {
+                                let created = r.created_at.get(..10).unwrap_or(&r.created_at);
+                                println!("{:<14} {:<32} {}", r.tag, r.name, created);
+                            }
+                        }
+                    }
+                    ReleaseCommands::Show { tag } => {
+                        let r = client.get(&owner, &repo_name, tag)?;
+                        println!("Tag:         {}", r.tag);
+                        println!("Name:        {}", r.name);
+                        println!("Created:     {}", r.created_at);
+                        if !r.web_url.is_empty() {
+                            println!("URL:         {}", r.web_url);
+                        }
+                        if let Some(id) = &r.id {
+                            println!("ID:          {}", id);
+                        }
+                        println!("\n--- Description ---\n{}", r.description);
+                    }
+                    ReleaseCommands::Edit { tag, name, notes } => {
+                        // Resolve `--notes` source: file path, `-` for stdin, or absent.
+                        let body = match notes.as_deref() {
+                            Some("-") => {
+                                use std::io::Read;
+                                let mut buf = String::new();
+                                std::io::stdin().read_to_string(&mut buf)?;
+                                Some(buf)
+                            }
+                            Some(path) => {
+                                Some(std::fs::read_to_string(path)
+                                    .map_err(|e| anyhow::anyhow!("Failed to read notes file {}: {}", path, e))?)
+                            }
+                            None => None,
+                        };
+                        client.edit(&owner, &repo_name, tag, name.as_deref(), body.as_deref())?;
+                        println!("✅ Edited release {}", tag);
+                    }
+                    ReleaseCommands::Delete { tag, yes } => {
+                        if !*yes {
+                            print!("Delete release {} (tag stays, only the release entity is removed)? [y/N] ", tag);
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        client.delete(&owner, &repo_name, tag)?;
+                        println!("✅ Deleted release {}", tag);
                     }
                 }
             }
