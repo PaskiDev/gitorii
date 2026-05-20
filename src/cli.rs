@@ -12,7 +12,7 @@ use crate::duration::parse_duration;
 use crate::versioning::AutoTagger;
 use crate::scanner;
 use crate::issue::{get_issue_client, CreateIssueOptions};
-use crate::pr::detect_platform_from_remote;
+use crate::pr::{detect_platform_from_remote, detect_platform_from_remote_named};
 use crate::pipeline::{get_pipeline_client, ListFilters, filter_older_than};
 use crate::package::{get_package_client, PackageListFilters, filter_older_than as pkg_filter_older_than, filter_by_version as pkg_filter_by_version};
 use crate::release::get_release_client;
@@ -752,6 +752,11 @@ origin remote (github / gitlab).")]
     Pipeline {
         #[command(subcommand)]
         action: PipelineCommands,
+        /// Which git remote to use for platform detection. Default is
+        /// `origin`. Set to e.g. `github-paskidev` to manage the
+        /// pipeline on the GitHub mirror of a multi-platform project.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
     },
 
     /// Drill into individual CI jobs (GitLab Pipelines / GitHub Actions workflow_runs jobs)
@@ -772,6 +777,10 @@ Platform notes — GitHub Actions:
     Job {
         #[command(subcommand)]
         action: JobCommands,
+        /// Which git remote to use for platform detection. Default
+        /// is `origin`. See `torii pipeline --help` for context.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
     },
 
     /// Manage the Package Registry — release binaries / artifacts stored on the platform.
@@ -790,6 +799,9 @@ expose a standalone package registry equivalent.")]
     Package {
         #[command(subcommand)]
         action: PackageCommands,
+        /// Which git remote to use for platform detection. Default `origin`.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
     },
 
     /// Manage Release pages (GitLab Releases / GitHub Releases)
@@ -806,6 +818,9 @@ matches how both GitLab and GitHub address releases in their UIs.")]
     Release {
         #[command(subcommand)]
         action: ReleaseCommands,
+        /// Which git remote to use for platform detection. Default `origin`.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
     },
 
     /// Manage .toriignore rules (paths, secrets, size, hooks)
@@ -3631,12 +3646,13 @@ impl Cli {
                 }
             }
 
-            Commands::Pipeline { action } => {
+            Commands::Pipeline { action, remote } => {
                 let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
-                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
+                let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
                     .ok_or_else(|| anyhow::anyhow!(
-                        "Could not detect platform from remote origin. \
-                         Supported: github, gitlab."
+                        "Could not detect platform from remote `{}`. \
+                         Check the remote exists (`torii remote local`) and points to github/gitlab.",
+                        remote
                     ))?;
                 let client = get_pipeline_client(&platform)?;
                 match action {
@@ -3748,10 +3764,10 @@ impl Cli {
                 }
             }
 
-            Commands::Job { action } => {
+            Commands::Job { action, remote } => {
                 let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
-                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
-                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote `{}`.", remote))?;
                 let client = get_pipeline_client(&platform)?;
                 match action {
                     JobCommands::List { pipeline, status } => {
@@ -3820,10 +3836,10 @@ impl Cli {
                 }
             }
 
-            Commands::Package { action } => {
+            Commands::Package { action, remote } => {
                 let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
-                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
-                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote `{}`.", remote))?;
                 let client = get_package_client(&platform)?;
                 match action {
                     PackageCommands::List { package_type, name, limit } => {
@@ -3931,10 +3947,10 @@ impl Cli {
                 }
             }
 
-            Commands::Release { action } => {
+            Commands::Release { action, remote } => {
                 let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
-                let (platform, owner, repo_name) = detect_platform_from_remote(&repo_path)
-                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote origin."))?;
+                let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote `{}`.", remote))?;
                 let client = get_release_client(&platform)?;
                 match action {
                     ReleaseCommands::List { limit } => {

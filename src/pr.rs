@@ -491,10 +491,22 @@ pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
     }
 }
 
-/// Detect platform + owner/repo from git remote URL
+/// Detect platform + owner/repo from the `origin` remote URL.
+/// Convenience wrapper around `detect_platform_from_remote_named` for
+/// callers that don't need to choose which remote to inspect.
 pub fn detect_platform_from_remote(repo_path: &str) -> Option<(String, String, String)> {
+    detect_platform_from_remote_named(repo_path, "origin")
+}
+
+/// Same as `detect_platform_from_remote` but takes the remote name
+/// explicitly. Used by the platform-management commands
+/// (`pipeline`, `job`, `package`, `release`) to support managing a
+/// project mirrored across multiple platforms — e.g. gitorii itself
+/// has `origin → gitlab` and `github-paskidev → github`, and a user
+/// may want to query either via `--remote NAME`.
+pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> Option<(String, String, String)> {
     let repo = git2::Repository::discover(repo_path).ok()?;
-    let remote = repo.find_remote("origin").ok()?;
+    let remote = repo.find_remote(remote_name).ok()?;
     let url = remote.url()?.to_string();
 
     let platform = if url.contains("github.com") { "github" }
