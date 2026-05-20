@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.11] - 2026-05-20
+
+### Added
+
+- **`--remote NAME` on every platform-management command.** The four CLI surfaces added in 0.7.7 and 0.7.10 (`torii pipeline`, `torii job`, `torii package`, `torii release`) all auto-detected the platform from the `origin` remote URL. That works when there's only one platform — most projects — but breaks the multi-platform case where a repo is mirrored across e.g. GitLab (`origin`) and GitHub (`github-paskidev`). Each backend has its own releases, its own pipeline runs, its own packages; both should be reachable from the CLI.
+
+  All four commands now accept an optional `--remote NAME` flag (global within the subcommand, so it can appear before or after the operation verb). Default `origin` — no breaking change for existing users.
+
+  ```sh
+  # Default: origin
+  torii release list
+
+  # Explicit: same as default
+  torii release list --remote origin
+
+  # The mirror's side
+  torii release list --remote github-paskidev
+
+  # Works inside subcommands too thanks to `global = true`
+  torii pipeline delete --status failed --remote github-paskidev --yes
+  ```
+
+  Internals: a new `detect_platform_from_remote_named(repo_path, remote_name)` in `src/pr.rs` wraps the existing detection logic with the remote name as a parameter; the original `detect_platform_from_remote` becomes a thin shim that delegates with `"origin"`. The four dispatch arms in `src/cli.rs` were updated to destructure `remote` from their `Commands::*` variant and pass it through.
+
+### Why this release exists
+
+This is a small targeted patch that lays the groundwork for two larger pieces of work coming up:
+
+1. **TUI Platform hub (0.7.12)** — a single sidebar entry that wraps all four surfaces with tabs per remote. The auto-discovery of the user's configured remotes drives the per-remote tabs, and the underlying CLI now actually supports per-remote dispatch (which it didn't before).
+
+2. **`torii ci configure` + `~/.config/torii/platforms.toml` (0.8.0)** — elevates platforms to first-class citizens with an explicit config rather than always inferring from `origin`. The `--remote NAME` flag stays as the per-invocation override.
+
 ## [0.7.10] - 2026-05-20
 
 ### Added — Platform Management Surface
