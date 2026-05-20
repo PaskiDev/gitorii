@@ -735,20 +735,33 @@ Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo")]
     },
 
     /// Manage CI pipelines (GitLab Pipelines / GitHub Actions workflow runs)
-    #[command(after_help = "Examples:
-  torii pipeline list                                  Recent pipelines on origin
-  torii pipeline list --status failed                  Only failed
-  torii pipeline list --limit 50                       Up to 50 entries
-  torii pipeline cancel 12345                          Cancel one
-  torii pipeline retry 12345                           Re-run one
-  torii pipeline delete 12345                          Delete one
-  torii pipeline delete --status failed --yes          Batch delete all failed
+    #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
+  torii pipeline list                                       Recent pipelines
+  torii pipeline list --status failed                       Only failed
+  torii pipeline list --limit 50                            Up to 50 entries
+  torii pipeline cancel 12345                               Cancel one
+  torii pipeline retry 12345                                Re-run failed jobs
+  torii pipeline delete 12345                                Delete one
+  torii pipeline delete --status failed --yes               Batch: every failed
   torii pipeline delete --status failed --older-than 7d --yes
+
+Examples — multi-platform with `--remote NAME`:
+  torii pipeline list --remote origin                       Same as default
+  torii pipeline list --remote github-paskidev              GitHub mirror's pipelines
+  torii pipeline retry 8421 --remote github-paskidev        Retry on GitHub side
+  torii pipeline delete --status canceled --remote origin --yes
+
+  By default the platform (github / gitlab) is auto-detected from the
+  `origin` remote URL. For repos mirrored across platforms each backend
+  has its own pipeline runs — use `--remote NAME` to target a specific
+  remote. The flag is global within the command so it can appear before
+  or after the subcommand verb. Each platform has its own auth token
+  via `torii auth set <platform>`. See `README.md` for the full
+  multi-platform doc.
 
 `--status` accepts: success | failed | running | canceled | pending.
 `delete` requires either an explicit ID or at least one filter; `--yes`
-skips the confirmation prompt. Platform is auto-detected from the
-origin remote (github / gitlab).")]
+skips the confirmation prompt.")]
     Pipeline {
         #[command(subcommand)]
         action: PipelineCommands,
@@ -760,15 +773,25 @@ origin remote (github / gitlab).")]
     },
 
     /// Drill into individual CI jobs (GitLab Pipelines / GitHub Actions workflow_runs jobs)
-    #[command(after_help = "Examples:
-  torii job list --pipeline 1234                     Jobs in a pipeline
-  torii job list --pipeline 1234 --status failed     Only failed jobs
-  torii job log 5678                                 Print full log
-  torii job log 5678 --tail 50                       Last 50 lines (handy for failures)
-  torii job retry 5678                               Re-run one job (GitLab only)
-  torii job cancel 5678                              Cancel a running job (GitLab only)
-  torii job artifacts 5678 -o artifacts.zip          Download per-job artifacts (GitLab only)
-  torii job erase 5678                               Clear log + artifacts but keep metadata (GitLab only)
+    #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
+  torii job list --pipeline 1234                      Jobs in a pipeline
+  torii job list --pipeline 1234 --status failed      Only failed jobs
+  torii job log 5678                                  Print full log
+  torii job log 5678 --tail 50                        Last 50 lines (failure post-mortem)
+  torii job retry 5678                                Re-run one job  (GitLab only)
+  torii job cancel 5678                               Cancel a job    (GitLab only)
+  torii job artifacts 5678 -o artifacts.zip           Per-job download (GitLab only)
+  torii job erase 5678                                Clear log + artifacts, keep entry (GitLab only)
+
+Examples — multi-platform with `--remote NAME`:
+  torii job list --pipeline 9876 --remote github-paskidev   Jobs in the GitHub run
+  torii job log 87654 --remote github-paskidev --tail 30    Last 30 lines from GitHub
+  torii job retry 5678 --remote origin                       Default is origin, equivalent
+
+  Default platform is auto-detected from the `origin` remote. For
+  multi-platform repos use `--remote NAME` to target a specific
+  remote. See `README.md` (CI / platform management section) for
+  the full multi-platform doc.
 
 Platform notes — GitHub Actions:
   Some operations (`retry`, `cancel`, `artifacts`, `erase`) are scoped to the
@@ -784,18 +807,30 @@ Platform notes — GitHub Actions:
     },
 
     /// Manage the Package Registry — release binaries / artifacts stored on the platform.
-    #[command(after_help = "Examples:
-  torii package list                                 List packages in the project
-  torii package list --type generic                  Filter by package type
-  torii package list --name gitorii                  Substring search on package name
-  torii package files 12345                          Files inside a package
-  torii package delete 12345                          Delete one package
-  torii package delete --version v0.7.0 --yes        Batch delete all v0.7.0 packages
-  torii package delete --older-than 90d --yes        Batch delete packages older than 90 days
+    #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
+  torii package list                                       List packages
+  torii package list --type generic                        Filter by package type
+  torii package list --name gitorii                        Substring search on name
+  torii package files 12345                                Files inside a package
+  torii package delete 12345                                Delete one
+  torii package delete --version v0.7.0 --yes              Batch delete all v0.7.0
+  torii package delete --older-than 90d --yes              Batch delete > 90 days old
 
-Platform notes: gitlab-only (Generic Package Registry). On GitHub, binary
-release assets are managed through `torii release` since GitHub doesn't
-expose a standalone package registry equivalent.")]
+Examples — multi-platform with `--remote NAME`:
+  torii package list --remote origin                       Same as default
+  torii package list --remote github-paskidev              GitHub side (returns error
+                                                            because GitHub has no
+                                                            Generic Package Registry)
+  torii package delete --version v0.7.0 --remote origin --yes
+
+  Default platform is auto-detected from the `origin` remote. See
+  `README.md` for the full multi-platform doc.
+
+Platform notes:
+  gitlab-only. On GitHub, binary release assets are managed through
+  `torii release` since GitHub doesn't expose a standalone package
+  registry equivalent. Using `--remote NAME` on a github-pointing remote
+  returns an error suggesting `torii release` instead.")]
     Package {
         #[command(subcommand)]
         action: PackageCommands,
@@ -805,13 +840,24 @@ expose a standalone package registry equivalent.")]
     },
 
     /// Manage Release pages (GitLab Releases / GitHub Releases)
-    #[command(after_help = "Examples:
-  torii release list                                 Recent releases
-  torii release show v0.7.9                          One release's details
-  torii release edit v0.7.9 --name 'New title'       Rename
-  torii release edit v0.7.9 --notes notes.md         Replace description (file)
-  torii release edit v0.7.9 --notes - <<< 'inline'   Replace description (inline via stdin)
-  torii release delete v0.7.9 --yes                  Delete release entity (leaves the tag)
+    #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
+  torii release list                                       Recent releases
+  torii release show v0.7.9                                One release's details
+  torii release edit v0.7.9 --name 'New title'             Rename
+  torii release edit v0.7.9 --notes notes.md               Replace description (file)
+  torii release edit v0.7.9 --notes - <<< 'inline'         Replace description (stdin)
+  torii release delete v0.7.9 --yes                        Delete release entity (tag stays)
+
+Examples — multi-platform with `--remote NAME`:
+  torii release list --remote origin                       Same as default
+  torii release list --remote github-paskidev              GitHub releases
+  torii release edit v0.7.9 --notes new.md --remote github-paskidev
+  torii release delete v0.7.9 --remote origin --yes        Only the gitlab side
+
+  Each platform stores releases independently — editing the description
+  on gitlab doesn't sync to github (yet — that's torii-cloud territory).
+  Default platform is auto-detected from the `origin` remote URL. See
+  `README.md` for the full multi-platform doc.
 
 The release identifier is the tag name (`v0.7.9`), not a numeric id —
 matches how both GitLab and GitHub address releases in their UIs.")]

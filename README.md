@@ -458,6 +458,119 @@ torii issue close 42
 torii issue comment 42 -m "Fixed in v0.6.6"
 ```
 
+### CI / platform management
+
+Four top-level commands wrap the platform-side APIs of GitLab and
+GitHub for the work that lives next to (but not inside) git history:
+CI pipelines, individual jobs, binary registries, and release pages.
+
+All four:
+
+- Auto-detect the platform (github / gitlab) from the URL of the git
+  remote they're targeting.
+- Use the platform's token from `torii auth set <platform>` for
+  authentication.
+- Accept `--remote NAME` to target a specific git remote when the
+  project is mirrored across multiple platforms — see
+  **multi-platform** below.
+
+**Pipelines** — whole CI runs (GitLab Pipelines / GitHub Actions workflow runs):
+
+```bash
+torii pipeline list                            # current branch's recent pipelines
+torii pipeline list --status failed            # only failed
+torii pipeline list --limit 50                 # up to 50 (clamped to 100)
+torii pipeline cancel <id>                     # cancel a running pipeline
+torii pipeline retry <id>                      # retry failed jobs in a pipeline
+torii pipeline delete <id>                     # delete one
+torii pipeline delete --status failed --yes    # batch: every failed
+torii pipeline delete --status failed --older-than 7d --yes
+```
+
+`--status` accepts `success | failed | running | canceled | pending`.
+
+**Jobs** — drill into individual CI jobs inside a pipeline:
+
+```bash
+torii job list --pipeline 1234                 # jobs in a pipeline
+torii job list --pipeline 1234 --status failed
+torii job log <id>                             # print job log
+torii job log <id> --tail 50                   # last 50 lines (post-mortem mode)
+torii job retry <id>                           # retry one job        (GitLab only)
+torii job cancel <id>                          # cancel one job       (GitLab only)
+torii job artifacts <id> -o artifacts.zip      # download artifacts   (GitLab only)
+torii job erase <id>                           # clear log + artifacts (GitLab only)
+```
+
+GitHub Actions scopes retry / cancel / artifacts to the *workflow run*,
+not the job — those subcommands return an error pointing at the
+equivalent `torii pipeline` operation.
+
+**Packages** — GitLab Package Registry (binary artifacts uploaded by CI):
+
+```bash
+torii package list                             # all packages
+torii package list --type generic              # filter by type
+torii package list --name gitorii              # substring match
+torii package files <package-id>               # files inside a package
+torii package delete <id>                       # delete one
+torii package delete --version v0.7.0 --yes    # batch by version
+torii package delete --older-than 90d --yes    # batch by age
+```
+
+GitLab-only. GitHub's binary distribution is via Release Assets,
+covered by `torii release`.
+
+**Releases** — release pages with notes + asset links:
+
+```bash
+torii release list                             # recent releases
+torii release show v0.7.9                      # full details (description, URL)
+torii release edit v0.7.9 --name "New title"   # rename
+torii release edit v0.7.9 --notes notes.md     # replace description from file
+torii release edit v0.7.9 --notes -            # replace from stdin
+torii release delete v0.7.9 --yes              # delete release entity (tag stays)
+```
+
+Both GitLab and GitHub.
+
+#### Multi-platform with `--remote NAME`
+
+By default, the platform commands auto-detect from the URL of the
+`origin` remote. For repos mirrored across multiple platforms — e.g.
+`origin → gitlab.com` and `github-paskidev → github.com` — each
+backend has its own pipelines, packages, and releases. Use
+`--remote NAME` to target a specific one:
+
+```bash
+torii pipeline list --remote origin                  # same as default
+torii pipeline list --remote github-paskidev         # GitHub side
+torii release edit v0.7.9 --notes new.md --remote github-paskidev
+torii package delete --version v0.7.0 --remote origin --yes
+```
+
+The `--remote` flag is *global within the command*, so these are
+equivalent:
+
+```bash
+torii pipeline --remote NAME list
+torii pipeline list --remote NAME
+```
+
+Each platform has its own auth token (`torii auth set github`,
+`torii auth set gitlab`) — to operate on both, both tokens must be
+configured.
+
+**Today (0.7.11):** each invocation targets one remote at a time.
+**Coming in 0.7.12:** `--remote all` to iterate every configured
+remote, plus multi-occurrence (`--remote a --remote b`) for an
+arbitrary subset. The TUI Platform view consolidates everything into
+tabs per remote.
+
+**Coming in 0.8.0+:** `~/.config/torii/platforms.toml` to elevate
+platforms to first-class citizens — `--remote NAME` stays as the
+per-invocation override.
+
 ### Other
 
 ```bash
