@@ -478,6 +478,196 @@ fn parse_gitlab_mr(json: &serde_json::Value) -> Result<PullRequest> {
 }
 
 // ============================================================================
+// Gitea / Codeberg / Forgejo
+// ============================================================================
+//
+// Gitea's pulls API is GitHub-shaped at `/api/v1/...`. Same `number`
+// identifier, same `head`/`base`/`draft` fields, same `merge_method`
+// values for merge — auth header is `token <token>` like GitHub.
+// `mergeable` is exposed as a boolean rather than GitHub's null/true
+// while-computing dance, so we surface it directly.
+
+pub struct GiteaPrClient {
+    token: String,
+    base_url: String,
+}
+
+impl GiteaPrClient {
+    pub fn new() -> Result<Self> {
+        Self::new_with_host(gitea_base_url())
+    }
+
+    pub fn new_with_host(base_url: &str) -> Result<Self> {
+        let token = resolve_gitea_token()?;
+        Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
+    }
+
+    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn auth(&self) -> String { format!("token {}", self.token) }
+}
+
+impl PrClient for GiteaPrClient {
+    fn create(&self, owner: &str, repo: &str, opts: CreatePrOptions) -> Result<PullRequest> {
+        let url = format!("{}/api/v1/repos/{}/{}/pulls", self.base_url, owner, repo);
+        let mut title = opts.title.clone();
+        // Gitea has no draft flag — convention is `WIP:` prefix.
+        if opts.draft && !title.to_lowercase().starts_with("wip:") {
+            title = format!("WIP: {}", title);
+        }
+        let body = serde_json::json!({
+            "title": title,
+            "body":  opts.body.unwrap_or_default(),
+            "head":  opts.head,
+            "base":  opts.base,
+        });
+        let resp = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("unknown error");
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {}: {}", status, msg)));
+        }
+        parse_gitea_pr(&json)
+    }
+
+    fn list(&self, owner: &str, repo: &str, state: &str) -> Result<Vec<PullRequest>> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/pulls?state={}&limit=50",
+            self.base_url, owner, repo, state
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        let arr = json.as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Gitea returned non-array for {}. Body: {}", url, json
+            )))?;
+        arr.iter().map(parse_gitea_pr).collect()
+    }
+
+    fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
+        let url = format!("{}/api/v1/repos/{}/{}/pulls/{}", self.base_url, owner, repo, number);
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        parse_gitea_pr(&json)
+    }
+
+    fn merge(&self, owner: &str, repo: &str, number: u64, method: MergeMethod) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/pulls/{}/merge", self.base_url, owner, repo, number);
+        let do_param = match method {
+            MergeMethod::Merge  => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        };
+        let body = serde_json::json!({ "Do": do_param });
+        let resp = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} merge failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/pulls/{}", self.base_url, owner, repo, number);
+        let body = serde_json::json!({ "state": "closed" });
+        let resp = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} close failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/pulls/{}", self.base_url, owner, repo, number);
+        let mut body = serde_json::Map::new();
+        if let Some(t) = opts.title { body.insert("title".into(), serde_json::Value::String(t)); }
+        if let Some(b) = opts.body  { body.insert("body".into(),  serde_json::Value::String(b)); }
+        if let Some(base) = opts.base { body.insert("base".into(), serde_json::Value::String(base)); }
+        if body.is_empty() { return Ok(()); }
+        let resp = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} update failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/branches/{}", self.base_url, owner, repo, branch);
+        let resp = self.client().delete(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} delete branch failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn checkout_branch(&self, pr: &PullRequest) -> String {
+        pr.head.clone()
+    }
+}
+
+fn parse_gitea_pr(json: &serde_json::Value) -> Result<PullRequest> {
+    Ok(PullRequest {
+        number:     json["number"].as_u64().unwrap_or(0),
+        title:      json["title"].as_str().unwrap_or("").to_string(),
+        body:       json["body"].as_str().map(|s| s.to_string()),
+        state:      json["state"].as_str().unwrap_or("").to_string(),
+        head:       json["head"]["ref"].as_str().unwrap_or("").to_string(),
+        base:       json["base"]["ref"].as_str().unwrap_or("").to_string(),
+        author:     json["user"]["login"].as_str().unwrap_or("").to_string(),
+        url:        json["html_url"].as_str().unwrap_or("").to_string(),
+        // Gitea convention: WIP: prefix marks drafts (no native flag pre-1.19).
+        draft:      json["title"].as_str().map(|s| {
+                        let l = s.to_lowercase();
+                        l.starts_with("wip:") || l.starts_with("[wip]") || l.starts_with("draft:")
+                    }).unwrap_or(false),
+        mergeable:  json["mergeable"].as_bool(),
+        created_at: json["created_at"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -485,8 +675,9 @@ pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
     match platform.to_lowercase().as_str() {
         "github" => Ok(Box::new(GitHubPrClient::new()?)),
         "gitlab" => Ok(Box::new(GitLabPrClient::new()?)),
+        "gitea"  => Ok(Box::new(GiteaPrClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
         )),
     }
 }
@@ -509,8 +700,13 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     let remote = repo.find_remote(remote_name).ok()?;
     let url = remote.url()?.to_string();
 
+    // 0.7.13: Codeberg (Forgejo-based) detected as "gitea" — they share
+    // the same API surface. Self-hosted Gitea/Forgejo instances need
+    // explicit declaration via ~/.config/torii/platforms.toml (coming
+    // in 0.8.0); for now they fall through to None.
     let platform = if url.contains("github.com") { "github" }
         else if url.contains("gitlab.com") { "gitlab" }
+        else if url.contains("codeberg.org") { "gitea" }
         else { return None; };
 
     let path = if url.contains('@') {
@@ -527,4 +723,32 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     let repo_name = parts.next()?.to_string();
 
     Some((platform.to_string(), owner, repo_name))
+}
+
+/// Map a "gitea" platform value to its base URL. Today this is always
+/// `https://codeberg.org`; in 0.8.0 with `platforms.toml` support, the
+/// caller will be able to resolve self-hosted instances per-remote.
+///
+/// Centralised here so adding a per-host map later only touches one site.
+pub fn gitea_base_url() -> &'static str {
+    "https://codeberg.org"
+}
+
+/// Resolve the Gitea / Codeberg / Forgejo token. The auth subsystem
+/// accepts all three names as distinct providers (because users like
+/// to call them by their brand), but the API surface is the same — so
+/// we try all three in order and return the first one set.
+///
+/// Used by every Gitea* client (release / issue / pr / pipeline) so
+/// `torii auth set codeberg YOUR_TOKEN` works without forcing the user
+/// to learn that "the canonical provider is gitea".
+pub fn resolve_gitea_token() -> Result<String> {
+    for provider in ["gitea", "codeberg", "forgejo"] {
+        if let Some(t) = crate::auth::resolve_token(provider, ".").value {
+            return Ok(t);
+        }
+    }
+    Err(ToriiError::InvalidConfig(
+        "Gitea / Codeberg / Forgejo token not found. Run: torii auth set codeberg YOUR_TOKEN".to_string()
+    ))
 }

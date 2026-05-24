@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.13] - 2026-05-20
+
+### Added
+
+- **Gitea / Codeberg / Forgejo support** — first new platform since
+  0.1.x. All four platform-side surfaces (`pr`, `issue`, `pipeline`,
+  `release`) get a Gitea client; the four `torii pipeline / job /
+  package / release` CLI commands and the corresponding TUI Platform
+  view recognise `codeberg.org` remotes automatically and route
+  through it. Self-hosted Gitea / Forgejo instances need explicit
+  declaration via `~/.config/torii/platforms.toml` — that arrives in
+  0.8.0; for now they fall through with "platform not detected".
+- **`torii auth set codeberg <token>`** (or `gitea` / `forgejo`) all
+  share the same client — set the token under whichever name fits
+  your mental model. Env-var fallbacks: `CODEBERG_TOKEN`,
+  `GITEA_TOKEN`, `FORGEJO_TOKEN`.
+- **Gitea Actions** (CI runs in Gitea ≥ 1.19 / Forgejo) supported by
+  `torii pipeline list / cancel / retry / delete` and `torii job
+  list / log / retry`. `job cancel` / `job artifacts download` /
+  `job erase` are not exposed by the Gitea v1 API and return a clear
+  "use the run-level op instead" error.
+
+### Notes
+
+- This is the first of the planned **multi-host expansion** (0.7.13
+  Gitea, 0.7.14 Sourcehut, 0.7.15 Radicle). The pattern lets the
+  client surface grow without changing the CLI grammar.
+
 ## [0.7.12] - 2026-05-20
 
 ### Added

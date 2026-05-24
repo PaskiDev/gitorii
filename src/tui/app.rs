@@ -2066,7 +2066,7 @@ impl App {
         let Some((platform, owner, repo_name)) = detect_platform_from_remote(&self.repo_path)
         else {
             self.pr_view.loading = false;
-            self.pr_view.error = Some("no github/gitlab remote detected".to_string());
+            self.pr_view.error = Some("no github / gitlab / codeberg remote detected".to_string());
             return;
         };
         self.pr_view.platform  = platform.clone();
@@ -2123,7 +2123,7 @@ impl App {
         let Some((platform, owner, repo_name)) = detect_platform_from_remote(&self.repo_path)
         else {
             self.issue_view.loading = false;
-            self.issue_view.error = Some("no github/gitlab remote detected".to_string());
+            self.issue_view.error = Some("no github / gitlab / codeberg remote detected".to_string());
             return;
         };
         self.issue_view.platform  = platform.clone();

@@ -751,13 +751,17 @@ Examples — multi-platform with `--remote NAME`:
   torii pipeline retry 8421 --remote github-paskidev        Retry on GitHub side
   torii pipeline delete --status canceled --remote origin --yes
 
-  By default the platform (github / gitlab) is auto-detected from the
-  `origin` remote URL. For repos mirrored across platforms each backend
-  has its own pipeline runs — use `--remote NAME` to target a specific
-  remote. The flag is global within the command so it can appear before
-  or after the subcommand verb. Each platform has its own auth token
-  via `torii auth set <platform>`. See `README.md` for the full
-  multi-platform doc.
+  By default the platform (github / gitlab / gitea) is auto-detected
+  from the `origin` remote URL. For repos mirrored across platforms
+  each backend has its own pipeline runs — use `--remote NAME` to
+  target a specific remote. The flag is global within the command so
+  it can appear before or after the subcommand verb. Each platform
+  has its own auth token via `torii auth set <platform>`. See
+  `README.md` for the full multi-platform doc.
+
+  Gitea / Codeberg / Forgejo: detected from `codeberg.org` URLs
+  automatically (added in 0.7.13); self-hosted instances require
+  explicit declaration via `~/.config/torii/platforms.toml` (0.8.0).
 
 `--status` accepts: success | failed | running | canceled | pending.
 `delete` requires either an explicit ID or at least one filter; `--yes`
@@ -3697,7 +3701,7 @@ impl Cli {
                 let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
                     .ok_or_else(|| anyhow::anyhow!(
                         "Could not detect platform from remote `{}`. \
-                         Check the remote exists (`torii remote local`) and points to github/gitlab.",
+                         Check the remote exists (`torii remote local`) and points to github / gitlab / codeberg.",
                         remote
                     ))?;
                 let client = get_pipeline_client(&platform)?;

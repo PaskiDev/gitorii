@@ -315,14 +315,141 @@ fn parse_gitlab_issue(json: &serde_json::Value) -> Result<Issue> {
     })
 }
 
+// ── Gitea / Codeberg / Forgejo ────────────────────────────────────────────────
+//
+// Gitea's issues API mirrors GitHub's at `/api/v1/...` — same field
+// names, same `number` identifier (per-repo), same auth header.
+
+pub struct GiteaIssueClient {
+    token: String,
+    base_url: String,
+}
+
+impl GiteaIssueClient {
+    pub fn new() -> Result<Self> {
+        Self::new_with_host(crate::pr::gitea_base_url())
+    }
+
+    pub fn new_with_host(base_url: &str) -> Result<Self> {
+        let token = crate::pr::resolve_gitea_token()?;
+        Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
+    }
+
+    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn auth(&self) -> String { format!("token {}", self.token) }
+}
+
+impl IssueClient for GiteaIssueClient {
+    fn list(&self, owner: &str, repo: &str, state: &str) -> Result<Vec<Issue>> {
+        // Gitea uses `type=issues` to exclude PRs from the listing.
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/issues?state={}&type=issues&limit=50",
+            self.base_url, owner, repo, state
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        let arr = json.as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Gitea returned non-array for {}. Body: {}", url, json
+            )))?;
+        Ok(arr.iter().filter_map(|v| parse_gitea_issue(v).ok()).collect())
+    }
+
+    fn create(&self, owner: &str, repo: &str, opts: CreateIssueOptions) -> Result<Issue> {
+        let url = format!("{}/api/v1/repos/{}/{}/issues", self.base_url, owner, repo);
+        let body = serde_json::json!({
+            "title": opts.title,
+            "body":  opts.body.unwrap_or_default(),
+        });
+        let resp = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        parse_gitea_issue(&json)
+    }
+
+    fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/issues/{}", self.base_url, owner, repo, number);
+        let body = serde_json::json!({ "state": "closed" });
+        let resp = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} close failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
+        let url = format!("{}/api/v1/repos/{}/{}/issues/{}/comments", self.base_url, owner, repo, number);
+        let payload = serde_json::json!({ "body": body });
+        let resp = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&payload)
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} comment failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+}
+
+fn parse_gitea_issue(json: &serde_json::Value) -> Result<Issue> {
+    Ok(Issue {
+        number:     json["number"].as_u64().unwrap_or(0),
+        title:      json["title"].as_str().unwrap_or("").to_string(),
+        body:       json["body"].as_str().map(|s| s.to_string()),
+        state:      json["state"].as_str().unwrap_or("").to_string(),
+        author:     json["user"]["login"].as_str().unwrap_or("").to_string(),
+        url:        json["html_url"].as_str().unwrap_or("").to_string(),
+        labels:     json["labels"].as_array().map(|a| {
+            a.iter().filter_map(|l| l["name"].as_str().map(|s| s.to_string())).collect()
+        }).unwrap_or_default(),
+        assignees:  json["assignees"].as_array().map(|a| {
+            a.iter().filter_map(|u| u["login"].as_str().map(|s| s.to_string())).collect()
+        }).unwrap_or_default(),
+        created_at: json["created_at"].as_str().unwrap_or("").to_string(),
+        comments:   json["comments"].as_u64().unwrap_or(0),
+    })
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn get_issue_client(platform: &str) -> Result<Box<dyn IssueClient>> {
     match platform.to_lowercase().as_str() {
         "github" => Ok(Box::new(GitHubIssueClient::new()?)),
         "gitlab" => Ok(Box::new(GitLabIssueClient::new()?)),
+        "gitea"  => Ok(Box::new(GiteaIssueClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
         )),
     }
 }
