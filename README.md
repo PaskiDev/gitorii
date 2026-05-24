@@ -48,16 +48,10 @@ cargo install gitorii --locked
 **Arch Linux (AUR)** — published since 0.7.12:
 
 ```bash
-# Stable: source-build of the latest tagged release
+# Source-build of the latest tagged release
 yay -S gitorii
 # or: paru -S gitorii
-
-# Experimental: HEAD of main, rebuilt on every commit
-yay -S gitorii-experimental
 ```
-
-> Both packages provide the `torii` binary and conflict with each
-> other (and with `gitorii-bin`). Pick whichever cadence you want.
 
 > Note `--locked` — respects the committed `Cargo.lock` so you build the exact
 > dep graph the maintainer tested with. See **Known issue** below if you hit a
