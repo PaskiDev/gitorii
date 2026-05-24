@@ -468,9 +468,10 @@ torii issue comment 42 -m "Fixed in v0.6.6"
 
 ### CI / platform management
 
-Four top-level commands wrap the platform-side APIs of GitLab and
-GitHub for the work that lives next to (but not inside) git history:
-CI pipelines, individual jobs, binary registries, and release pages.
+Four top-level commands wrap the platform-side APIs of GitLab, GitHub,
+and Codeberg (Gitea / Forgejo, since 0.7.13) for the work that lives
+next to (but not inside) git history: CI pipelines, individual jobs,
+binary registries, and release pages.
 
 All four:
 

@@ -317,6 +317,155 @@ fn parse_gitlab_release(v: &serde_json::Value) -> Result<Release> {
 }
 
 // ============================================================================
+// Gitea / Codeberg / Forgejo Releases
+// ============================================================================
+//
+// Gitea exposes a GitHub-shaped REST API at `/api/v1/...`. Forgejo (the
+// Codeberg fork) is API-compatible. Auth header is `token <token>`, same
+// as GitHub. Releases carry an integer `id` separate from the tag,
+// matching GitHub's model — `delete` requires the id, not the tag.
+
+pub struct GiteaReleaseClient {
+    token: String,
+    base_url: String,
+}
+
+impl GiteaReleaseClient {
+    pub fn new() -> Result<Self> {
+        Self::new_with_host(crate::pr::gitea_base_url())
+    }
+
+    /// Construct against an arbitrary Gitea/Forgejo host. Today only
+    /// called with codeberg.org; in 0.8.0 the platforms.toml resolver
+    /// will pass user-declared self-hosted URLs through here.
+    pub fn new_with_host(base_url: &str) -> Result<Self> {
+        let token = crate::pr::resolve_gitea_token()?;
+        Ok(Self {
+            token,
+            base_url: base_url.trim_end_matches('/').to_string(),
+        })
+    }
+
+    fn client(&self) -> Client {
+        Client::builder().user_agent("gitorii-cli").build().unwrap()
+    }
+    fn auth(&self) -> String { format!("token {}", self.token) }
+}
+
+impl ReleaseClient for GiteaReleaseClient {
+    fn list(&self, owner: &str, repo: &str, limit: usize) -> Result<Vec<Release>> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/releases?limit={}",
+            self.base_url, owner, repo, limit.clamp(1, 50)
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        let arr = json.as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Gitea returned non-array for {}. Body: {}", url, json
+            )))?;
+        arr.iter().map(parse_gitea_release).collect()
+    }
+
+    fn get(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/releases/tags/{}",
+            self.base_url, owner, repo, tag
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        parse_gitea_release(&json)
+    }
+
+    fn edit(&self, owner: &str, repo: &str, tag: &str, name: Option<&str>, description: Option<&str>) -> Result<()> {
+        // Gitea's edit takes the integer release id, not the tag. Resolve
+        // it via `get` first.
+        let release = self.get(owner, repo, tag)?;
+        let id = release.id.ok_or_else(|| ToriiError::InvalidConfig(
+            "Gitea release missing id (cannot edit)".to_string()
+        ))?;
+
+        let mut body = serde_json::Map::new();
+        if let Some(n) = name        { body.insert("name".into(), serde_json::Value::String(n.to_string())); }
+        if let Some(d) = description { body.insert("body".into(), serde_json::Value::String(d.to_string())); }
+        if body.is_empty() { return Ok(()); }
+
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/releases/{}",
+            self.base_url, owner, repo, id
+        );
+        let resp = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .json(&serde_json::Value::Object(body))
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} edit failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+
+    fn delete(&self, owner: &str, repo: &str, tag: &str) -> Result<()> {
+        let release = self.get(owner, repo, tag)?;
+        let id = release.id.ok_or_else(|| ToriiError::InvalidConfig(
+            "Gitea release missing id (cannot delete)".to_string()
+        ))?;
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/releases/{}",
+            self.base_url, owner, repo, id
+        );
+        let resp = self.client().delete(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!("Gitea API {} delete failed: {}", s, txt)));
+        }
+        Ok(())
+    }
+}
+
+fn parse_gitea_release(v: &serde_json::Value) -> Result<Release> {
+    let tag = v["tag_name"].as_str().unwrap_or("").to_string();
+    let id = v["id"].as_u64().map(|n| n.to_string());
+    Ok(Release {
+        tag: tag.clone(),
+        name: v["name"].as_str().unwrap_or(&tag).to_string(),
+        description: v["body"].as_str().unwrap_or("").to_string(),
+        created_at: v["created_at"].as_str().unwrap_or("").to_string(),
+        web_url: v["html_url"].as_str().unwrap_or("").to_string(),
+        id,
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -324,8 +473,9 @@ pub fn get_release_client(platform: &str) -> Result<Box<dyn ReleaseClient>> {
     match platform.to_lowercase().as_str() {
         "github" => Ok(Box::new(GitHubReleaseClient::new()?)),
         "gitlab" => Ok(Box::new(GitLabReleaseClient::new()?)),
+        "gitea"  => Ok(Box::new(GiteaReleaseClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
         )),
     }
 }

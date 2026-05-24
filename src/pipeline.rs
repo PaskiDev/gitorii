@@ -654,12 +654,277 @@ fn parse_gitlab_pipeline(v: &serde_json::Value) -> Result<Pipeline> {
 // Factory + helpers
 // ============================================================================
 
+// ============================================================================
+// Gitea Actions (runs)
+// ============================================================================
+//
+// Gitea Actions is a GitHub-Actions-compatible runner introduced in
+// Gitea 1.19+ / Forgejo (the Codeberg fork). The public REST endpoints
+// at `/api/v1/repos/{owner}/{repo}/actions/runs` mirror GitHub's
+// shape; status enum follows the same `success/failure/in_progress`
+// convention. Older Gitea instances may 404 on these endpoints — we
+// surface the platform error rather than guessing.
+
+pub struct GiteaPipelineClient {
+    token: String,
+    base_url: String,
+}
+
+impl GiteaPipelineClient {
+    pub fn new() -> Result<Self> {
+        Self::new_with_host(crate::pr::gitea_base_url())
+    }
+
+    pub fn new_with_host(base_url: &str) -> Result<Self> {
+        let token = crate::pr::resolve_gitea_token()?;
+        Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
+    }
+
+    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn auth_header(&self) -> String { format!("token {}", self.token) }
+}
+
+impl PipelineClient for GiteaPipelineClient {
+    fn list(&self, owner: &str, repo: &str, filters: &ListFilters) -> Result<Vec<Pipeline>> {
+        let mut url = format!(
+            "{}/api/v1/repos/{}/{}/actions/runs?limit={}",
+            self.base_url, owner, repo, filters.per_page.clamp(1, 50)
+        );
+        if let Some(ref s) = filters.status {
+            // Gitea Actions matches GitHub's vocabulary.
+            let g = match s.as_str() {
+                "success"  => "success",
+                "failed"   => "failure",
+                "running"  => "in_progress",
+                "canceled" => "cancelled",
+                "pending"  => "queued",
+                other      => other,
+            };
+            url.push_str(&format!("&status={}", g));
+        }
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {}). Note: Actions API requires Gitea >=1.19 / recent Forgejo.",
+                status, msg, url
+            )));
+        }
+        let arr = json["workflow_runs"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Gitea returned no workflow_runs array. Body: {}", json
+            )))?;
+        arr.iter().map(parse_gitea_run).collect()
+    }
+
+    fn cancel(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/runs/{}/cancel",
+            self.base_url, owner, repo, id
+        );
+        post_no_body(&self.client(), &url, &self.auth_header(), "cancel")
+    }
+
+    fn retry(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/runs/{}/rerun",
+            self.base_url, owner, repo, id
+        );
+        post_no_body(&self.client(), &url, &self.auth_header(), "retry")
+    }
+
+    fn delete(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/runs/{}",
+            self.base_url, owner, repo, id
+        );
+        let resp = self.client().delete(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {} delete failed: {}", s, body
+            )));
+        }
+        Ok(())
+    }
+
+    fn list_jobs(&self, owner: &str, repo: &str, pipeline_id: &str, status_filter: Option<&str>) -> Result<Vec<Job>> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/runs/{}/jobs",
+            self.base_url, owner, repo, pipeline_id
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        let json: serde_json::Value = resp.json()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        if !status.is_success() {
+            let msg = json["message"].as_str().unwrap_or("(no message)");
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {}: {} (url: {})", status, msg, url
+            )));
+        }
+        let arr = json["jobs"].as_array()
+            .or_else(|| json.as_array())
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Gitea returned no jobs array. Body: {}", json
+            )))?;
+        let mut jobs: Vec<Job> = arr.iter()
+            .filter_map(|v| parse_gitea_job(v, pipeline_id).ok())
+            .collect();
+        if let Some(f) = status_filter {
+            jobs.retain(|j| j.status == f);
+        }
+        Ok(jobs)
+    }
+
+    fn job_log(&self, owner: &str, repo: &str, job_id: &str) -> Result<String> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/jobs/{}/logs",
+            self.base_url, owner, repo, job_id
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let txt = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!(
+                "Gitea API {} log fetch failed: {}", status, txt
+            )));
+        }
+        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Gitea log read error: {}", e)))
+    }
+
+    fn job_retry(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/api/v1/repos/{}/{}/actions/jobs/{}/rerun",
+            self.base_url, owner, repo, job_id
+        );
+        post_no_body(&self.client(), &url, &self.auth_header(), "job retry")
+    }
+
+    fn job_cancel(&self, _owner: &str, _repo: &str, _job_id: &str) -> Result<()> {
+        // Gitea Actions exposes cancel at the run level, not per-job.
+        // Direct callers should cancel the whole run instead.
+        Err(ToriiError::InvalidConfig(
+            "Gitea Actions cancels at run level — use `torii pipeline cancel <id>`".to_string()
+        ))
+    }
+
+    fn job_artifacts_download(&self, _owner: &str, _repo: &str, _job_id: &str, _output_path: &std::path::Path) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Gitea Actions: per-job artifact download not exposed by the v1 API. Fetch the run's artifact from the web UI.".to_string()
+        ))
+    }
+
+    fn job_erase(&self, _owner: &str, _repo: &str, _job_id: &str) -> Result<()> {
+        // GitLab-specific concept — Gitea doesn't model "erase trace +
+        // artifacts but keep job row". Closest analog is deleting the
+        // whole run.
+        Err(ToriiError::InvalidConfig(
+            "Gitea Actions has no per-job erase. Delete the whole run with `torii pipeline delete <id>`.".to_string()
+        ))
+    }
+}
+
+fn parse_gitea_run(v: &serde_json::Value) -> Result<Pipeline> {
+    let raw_status = v["status"].as_str().unwrap_or("").to_string();
+    let conclusion = v["conclusion"].as_str().unwrap_or("");
+    // Gitea mirrors GitHub's status/conclusion split for completed runs.
+    let normalized = match (raw_status.as_str(), conclusion) {
+        ("completed", "success")   => "success",
+        ("completed", "failure")   => "failed",
+        ("completed", "cancelled") => "canceled",
+        ("in_progress", _)         => "running",
+        ("queued", _)              => "pending",
+        ("waiting", _)             => "pending",
+        (other, _)                 => other,
+    }.to_string();
+    let raw_display = if !conclusion.is_empty() {
+        format!("{} ({})", raw_status, conclusion)
+    } else {
+        raw_status
+    };
+    Ok(Pipeline {
+        id:         v["id"].as_u64().map(|n| n.to_string())
+                        .or_else(|| v["id"].as_str().map(String::from))
+                        .unwrap_or_default(),
+        status:     normalized,
+        raw_status: raw_display,
+        branch:     v["head_branch"].as_str().unwrap_or("").to_string(),
+        sha:        v["head_sha"].as_str().unwrap_or("").to_string(),
+        web_url:    v["html_url"].as_str().unwrap_or("").to_string(),
+        created_at: v["created_at"].as_str().unwrap_or("").to_string(),
+        updated_at: v["updated_at"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+fn parse_gitea_job(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
+    let raw_status = v["status"].as_str().unwrap_or("").to_string();
+    let conclusion = v["conclusion"].as_str().unwrap_or("");
+    let normalized = match (raw_status.as_str(), conclusion) {
+        ("completed", "success")   => "success",
+        ("completed", "failure")   => "failed",
+        ("completed", "cancelled") => "canceled",
+        ("in_progress", _)         => "running",
+        ("queued", _)              => "pending",
+        ("waiting", _)             => "pending",
+        (other, _)                 => other,
+    }.to_string();
+    let raw_display = if !conclusion.is_empty() {
+        format!("{} ({})", raw_status, conclusion)
+    } else {
+        raw_status
+    };
+    let started  = v["started_at"].as_str().unwrap_or("");
+    let finished = v["completed_at"].as_str().unwrap_or("");
+    let duration_seconds = if !started.is_empty() && !finished.is_empty() {
+        match (DateTime::parse_from_rfc3339(started), DateTime::parse_from_rfc3339(finished)) {
+            (Ok(s), Ok(f)) => Some((f - s).num_seconds() as f64),
+            _ => None,
+        }
+    } else { None };
+    Ok(Job {
+        id:               v["id"].as_u64().map(|n| n.to_string())
+                              .or_else(|| v["id"].as_str().map(String::from))
+                              .unwrap_or_default(),
+        pipeline_id:      pipeline_id.to_string(),
+        name:             v["name"].as_str().unwrap_or("").to_string(),
+        status:           normalized,
+        raw_status:       raw_display,
+        stage:            v["workflow_name"].as_str().unwrap_or("").to_string(),
+        web_url:          v["html_url"].as_str().unwrap_or("").to_string(),
+        created_at:       v["created_at"].as_str().unwrap_or("").to_string(),
+        finished_at:      v["completed_at"].as_str().map(String::from),
+        duration_seconds,
+    })
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
 pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
     match platform.to_lowercase().as_str() {
         "github" => Ok(Box::new(GitHubPipelineClient::new()?)),
         "gitlab" => Ok(Box::new(GitLabPipelineClient::new()?)),
+        "gitea"  => Ok(Box::new(GiteaPipelineClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
         )),
     }
 }
