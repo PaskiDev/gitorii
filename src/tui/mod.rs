@@ -139,6 +139,73 @@ fn run_loop(
             }
         }
 
+        // ── Platform view (0.7.12) ───────────────────────────────────────────
+        // Each sub-tab has its own background loader. The list is cleared
+        // by the loader before spawning; here we just commit the result
+        // (or expose the error).
+        if let Some(rx) = &app.platform_pipelines_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_pipelines_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(items) => {
+                        app.platform_view.pipelines = items;
+                        app.platform_view.pipelines_idx = 0;
+                    }
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
+        if let Some(rx) = &app.platform_jobs_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_jobs_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(items) => {
+                        app.platform_view.jobs = items;
+                        app.platform_view.jobs_idx = 0;
+                    }
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
+        if let Some(rx) = &app.platform_releases_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_releases_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(items) => {
+                        app.platform_view.releases = items;
+                        app.platform_view.releases_idx = 0;
+                    }
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
+        if let Some(rx) = &app.platform_packages_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_packages_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(items) => {
+                        app.platform_view.packages = items;
+                        app.platform_view.packages_idx = 0;
+                    }
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
+        if let Some(rx) = &app.platform_job_log_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_job_log_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(log) => app.platform_view.job_log = Some(log),
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
+
         // Auto-snapshot check
         if let Some(interval_secs) = app.snapshot_view.auto_interval.secs() {
             let now = std::time::SystemTime::now()

@@ -50,6 +50,8 @@ const TABS: &[Tab] = &[
     Tab { key: "i", label: "issues",    view: View::Issue      },
     Tab { key: "v", label: "bisect",    view: View::Bisect     },
     Tab { key: "a", label: "auth",      view: View::Auth       },
+    // 0.7.12: unified CI/CD surface (pipelines/jobs/releases/packages).
+    Tab { key: "y", label: "platform",  view: View::Platform   },
     Tab { key: "g", label: "config",    view: View::Config     },
     // History merged into Log (0.7.2); Mirror merged into Remote;
     // Settings merged into Config (as a tab). Old entries removed from
@@ -121,6 +123,8 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Submodule => views::submodule::render(f, app, content_rows[0]),
         View::Bisect    => views::bisect::render(f, app, content_rows[0]),
         View::Auth      => views::auth::render(f, app, content_rows[0]),
+        // 0.7.12: unified Platform view.
+        View::Platform  => views::platform::render(f, app, content_rows[0]),
         // Config absorbs Settings via tabs since 0.7.2.
         View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
         View::Diff | View::Help => {}

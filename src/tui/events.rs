@@ -364,6 +364,34 @@ impl EventHandler {
                             }
                         }
 
+                        // 0.7.12 — Platform: Esc walks back through the
+                        // drill-down (popup → JobLog → JobsOfPipeline →
+                        // List, then defers to the global handler which
+                        // returns focus to the sidebar).
+                        View::Platform  => {
+                            use crate::tui::app::PlatformFocus;
+                            match app.platform_view.focus {
+                                PlatformFocus::RemotePopup => {
+                                    app.platform_view.focus = PlatformFocus::List;
+                                    true
+                                }
+                                PlatformFocus::JobLog => {
+                                    app.platform_view.focus = PlatformFocus::JobsOfPipeline;
+                                    app.platform_view.job_log = None;
+                                    true
+                                }
+                                PlatformFocus::JobsOfPipeline => {
+                                    use crate::tui::app::PlatformSubTab;
+                                    app.platform_view.focus = PlatformFocus::List;
+                                    app.platform_view.active_pipeline_id = None;
+                                    app.platform_view.jobs.clear();
+                                    app.platform_view.sub_tab = PlatformSubTab::Pipelines;
+                                    true
+                                }
+                                PlatformFocus::List => false,
+                            }
+                        }
+
                         _               => false,
                     };
                     if !handled_by_view {
@@ -390,6 +418,8 @@ impl EventHandler {
                     // they're informative and refresh on entry. ↑/↓ etc. are
                     // handled in the generic list navigation block above.
                     View::Worktree | View::Submodule | View::Bisect | View::Auth => None,
+                    // 0.7.12 — unified Platform view.
+                    View::Platform  => handle_platform(key, app),
                     View::Config    => handle_config(key, app),
                     View::Settings  => handle_config(key, app), // fused into Config
                     View::Help      => handle_help(key, app),
@@ -1371,7 +1401,10 @@ fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     // ops dropdown
     if app.remote_view.ops_mode {
         let is_mirror = app.remote_view.selected_is_mirror();
-        let ops_len = if is_mirror { 6 } else { 6 };
+        // mirror dropdown: 6 ops; git-remote dropdown: 7 ops (gained "add
+        // mirror" in 0.7.12 so users can create the first mirror without
+        // already having one selected).
+        let ops_len = if is_mirror { 6 } else { 7 };
         match (key.modifiers, key.code) {
             (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                 if app.remote_view.ops_idx > 0 { app.remote_view.ops_idx -= 1; }
@@ -1405,7 +1438,7 @@ fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                         _ => None,
                     };
                 } else {
-                    // git remote ops: fetch(0), add remote(1), rename(2), edit url(3), remove(4), open(5)
+                    // git remote ops: fetch(0), add remote(1), add mirror(2), rename(3), edit url(4), remove(5), open(6)
                     return match idx {
                         0 => Some(Action::RemoteFetch),
                         1 => {
@@ -1414,20 +1447,28 @@ fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                             None
                         }
                         2 => {
+                            app.remote_view.new_mirror_platform.clear();
+                            app.remote_view.new_mirror_account.clear();
+                            app.remote_view.new_mirror_repo.clear();
+                            app.remote_view.new_mirror_type = 0;
+                            app.remote_view.confirm = RemoteConfirm::MirrorAddPlatform;
+                            None
+                        }
+                        3 => {
                             app.remote_view.new_name.clear();
                             app.remote_view.confirm = RemoteConfirm::Rename;
                             None
                         }
-                        3 => {
+                        4 => {
                             app.remote_view.new_url.clear();
                             app.remote_view.confirm = RemoteConfirm::EditUrl;
                             None
                         }
-                        4 => {
+                        5 => {
                             app.remote_view.confirm = RemoteConfirm::Remove;
                             None
                         }
-                        5 => Some(Action::RemoteOpenBrowser),
+                        6 => Some(Action::RemoteOpenBrowser),
                         _ => None,
                     };
                 }
@@ -2256,5 +2297,179 @@ fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         _ => {}
     }
     None
+}
+
+// ── Platform view (0.7.12) ────────────────────────────────────────────────────
+//
+// Sub-tabs: 1/2/3/4 → pipelines/jobs/releases/packages.
+// 'r' opens the remote-selector popup (centred over the view); inside the
+// popup ↑/↓ navigates, Enter selects, Esc closes.
+// On the Pipelines list, Enter drills into the selected pipeline's Jobs.
+// On the Jobs list (drill-down), Enter fetches the job log into a
+// scrollable panel; Esc walks the drill-down back (handled outside).
+// Ctrl-R re-runs the loader for whatever sub-tab is active.
+fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    use crate::tui::app::{PlatformFocus, PlatformSubTab};
+
+    // Remote popup grabs everything when active.
+    if app.platform_view.focus == PlatformFocus::RemotePopup {
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                if app.platform_view.remote_popup_idx > 0 {
+                    app.platform_view.remote_popup_idx -= 1;
+                }
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                if app.platform_view.remote_popup_idx + 1 < app.platform_view.remotes.len() {
+                    app.platform_view.remote_popup_idx += 1;
+                }
+            }
+            (_, KeyCode::Enter) => {
+                if let Some(name) = app.platform_view.remotes
+                    .get(app.platform_view.remote_popup_idx)
+                    .cloned()
+                {
+                    app.platform_view.remote = name;
+                    app.platform_view.active_pipeline_id = None;
+                    app.platform_view.sub_tab = PlatformSubTab::Pipelines;
+                }
+                app.platform_view.focus = PlatformFocus::List;
+                app.load_platform_active_sub_tab();
+            }
+            _ => {}
+        }
+        return None;
+    }
+
+    // JobLog drill-down: scroll only.
+    if app.platform_view.focus == PlatformFocus::JobLog {
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up)   | (_, KeyCode::Char('k')) => {
+                app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_sub(1);
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_add(1);
+            }
+            (_, KeyCode::PageUp) => {
+                app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_sub(20);
+            }
+            (_, KeyCode::PageDown) => {
+                app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_add(20);
+            }
+            (_, KeyCode::Home) => {
+                app.platform_view.job_log_scroll = 0;
+            }
+            _ => {}
+        }
+        return None;
+    }
+
+    if let Some(a) = handle_global_nav(key, app) { return Some(a); }
+
+    // Ctrl-R reloads the active sub-tab.
+    if key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('r') {
+        app.load_platform_active_sub_tab();
+        return None;
+    }
+
+    match (key.modifiers, key.code) {
+        // Sub-tab switching.
+        (_, KeyCode::Char('1')) => {
+            app.platform_view.sub_tab = PlatformSubTab::Pipelines;
+            app.platform_view.active_pipeline_id = None;
+            app.load_platform_pipelines();
+        }
+        (_, KeyCode::Char('2')) => {
+            // Jobs without a pipeline context = not meaningful; user must
+            // drill from a pipeline. We keep the empty list as a hint.
+            app.platform_view.sub_tab = PlatformSubTab::Jobs;
+            if app.platform_view.active_pipeline_id.is_none() {
+                app.platform_view.jobs.clear();
+            }
+        }
+        (_, KeyCode::Char('3')) => {
+            app.platform_view.sub_tab = PlatformSubTab::Releases;
+            app.load_platform_releases();
+        }
+        (_, KeyCode::Char('4')) => {
+            app.platform_view.sub_tab = PlatformSubTab::Packages;
+            app.load_platform_packages();
+        }
+
+        // Remote-selector popup.
+        (_, KeyCode::Char('r')) => {
+            // Position cursor on the current remote so Enter is a no-op
+            // if the user just wants to peek.
+            let cur = app.platform_view.remote.clone();
+            app.platform_view.remote_popup_idx = app.platform_view.remotes
+                .iter()
+                .position(|n| n == &cur)
+                .unwrap_or(0);
+            app.platform_view.focus = PlatformFocus::RemotePopup;
+        }
+
+        // List navigation.
+        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+            let idx = current_list_idx_mut(app);
+            if *idx > 0 { *idx -= 1; }
+        }
+        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+            let len = current_list_len(app);
+            let idx = current_list_idx_mut(app);
+            if *idx + 1 < len { *idx += 1; }
+        }
+
+        // Drill-down.
+        (_, KeyCode::Enter) => match app.platform_view.sub_tab {
+            PlatformSubTab::Pipelines => {
+                if let Some(p) = app.platform_view.pipelines.get(app.platform_view.pipelines_idx) {
+                    if let Ok(pid) = p.id.parse::<u64>() {
+                        app.platform_view.active_pipeline_id = Some(pid);
+                        app.platform_view.sub_tab = PlatformSubTab::Jobs;
+                        app.platform_view.focus = PlatformFocus::JobsOfPipeline;
+                        app.platform_view.jobs_idx = 0;
+                        app.load_platform_jobs_for_pipeline(p.id.clone());
+                    } else {
+                        // GitHub workflow runs use string ids — pass through.
+                        let id = p.id.clone();
+                        app.platform_view.active_pipeline_id = None;
+                        app.platform_view.sub_tab = PlatformSubTab::Jobs;
+                        app.platform_view.focus = PlatformFocus::JobsOfPipeline;
+                        app.platform_view.jobs_idx = 0;
+                        app.load_platform_jobs_for_pipeline(id);
+                    }
+                }
+            }
+            PlatformSubTab::Jobs => {
+                if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
+                    app.platform_view.focus = PlatformFocus::JobLog;
+                    app.load_platform_job_log(j.id.clone());
+                }
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+    None
+}
+
+fn current_list_idx_mut(app: &mut App) -> &mut usize {
+    use crate::tui::app::PlatformSubTab;
+    match app.platform_view.sub_tab {
+        PlatformSubTab::Pipelines => &mut app.platform_view.pipelines_idx,
+        PlatformSubTab::Jobs      => &mut app.platform_view.jobs_idx,
+        PlatformSubTab::Releases  => &mut app.platform_view.releases_idx,
+        PlatformSubTab::Packages  => &mut app.platform_view.packages_idx,
+    }
+}
+
+fn current_list_len(app: &App) -> usize {
+    use crate::tui::app::PlatformSubTab;
+    match app.platform_view.sub_tab {
+        PlatformSubTab::Pipelines => app.platform_view.pipelines.len(),
+        PlatformSubTab::Jobs      => app.platform_view.jobs.len(),
+        PlatformSubTab::Releases  => app.platform_view.releases.len(),
+        PlatformSubTab::Packages  => app.platform_view.packages.len(),
+    }
 }
 
