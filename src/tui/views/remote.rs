@@ -181,6 +181,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             (&[
                 ("fetch",           false),
                 ("add remote",      false),
+                ("add mirror",      false),
                 ("rename",          false),
                 ("edit url",        false),
                 ("remove ⚠",       true),

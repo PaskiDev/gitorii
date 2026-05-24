@@ -45,6 +45,20 @@ cargo binstall gitorii
 cargo install gitorii --locked
 ```
 
+**Arch Linux (AUR)** — published since 0.7.12:
+
+```bash
+# Stable: source-build of the latest tagged release
+yay -S gitorii
+# or: paru -S gitorii
+
+# Experimental: HEAD of main, rebuilt on every commit
+yay -S gitorii-experimental
+```
+
+> Both packages provide the `torii` binary and conflict with each
+> other (and with `gitorii-bin`). Pick whichever cadence you want.
+
 > Note `--locked` — respects the committed `Cargo.lock` so you build the exact
 > dep graph the maintainer tested with. See **Known issue** below if you hit a
 > rustc ICE or SIGSEGV.
@@ -473,6 +487,9 @@ All four:
 - Accept `--remote NAME` to target a specific git remote when the
   project is mirrored across multiple platforms — see
   **multi-platform** below.
+- Are also available interactively from the **platform** view in
+  `torii tui` (0.7.12+): four sub-tabs with drill-down from pipelines
+  into their jobs and per-job logs.
 
 **Pipelines** — whole CI runs (GitLab Pipelines / GitHub Actions workflow runs):
 
@@ -599,23 +616,29 @@ Full-screen interface with sidebar navigation. All views accessible from keyboar
 | `e` | Toggle event log |
 | `?` | Help |
 
-**Views** (navigate with sidebar or shortcut key):
+**Views** (navigate with `↑/↓` in the sidebar; views load on selection):
 
-| Key | View | Description |
-|-----|------|-------------|
-| `f` | files | Staged / unstaged / untracked files. `Space` to stage/unstage, `d` for diff |
-| `c` | save | Commit staged files. Optional conventional commit type selector |
-| `s` | sync | Pull, push, fetch, force-push. Animated progress, non-blocking |
-| `p` | snapshot | Create, restore, delete snapshots. Auto-snapshot with configurable interval |
-| `l` | log | Commit history. `Enter` diff, `r` reset soft, `b` new branch |
-| `b` | branch | List branches, checkout with `Enter` |
-| `t` | tags | List tags, push/delete |
-| `h` | history | Reflog and history rewrite operations |
-| `r` | remote | Remote repository info |
-| `m` | mirror | Mirror sync |
-| `w` | workspace | Multi-repo workspace management |
-| `g` | config | Edit repo/global config inline |
-| `x` | settings | TUI appearance, keybinds, visible views |
+| View | Description |
+|------|-------------|
+| files | Staged / unstaged / untracked files. `Space` to stage/unstage, `d` for diff |
+| save | Commit staged files. Optional conventional commit type selector |
+| sync | Pull, push, fetch, force-push. Animated progress, non-blocking |
+| snapshot | Create, restore, delete snapshots. Auto-snapshot with configurable interval |
+| log | Commit history. `Enter` diff, `r` reset soft, `b` new branch |
+| branch | List branches, checkout with `Enter` |
+| tags | List, push, delete tags |
+| worktrees | Per-repo and global worktrees |
+| submodules | Submodule management |
+| remote | Remote info + mirror sync (mirror tab inside) |
+| workspace | Multi-repo workspace management |
+| pr/mr | Pull requests / merge requests across platforms |
+| issues | Issues across platforms |
+| bisect | `git bisect` state machine |
+| auth | Cloud key + platform tokens |
+| platform | **0.7.12** — unified CI/CD surface: pipelines, jobs, releases, packages |
+| config | Edit repo/global config inline |
+
+**Platform view (0.7.12)** — four sub-tabs (`1` pipelines, `2` jobs, `3` releases, `4` packages) over a single remote. Enter on a pipeline drills into its jobs; Enter on a job streams the log into a scrollable panel; `Esc` walks back. `r` opens a centred popup to switch the remote (auto-discovered from the repo). `Ctrl+R` reloads the active sub-tab.
 
 **Diff view** — LCS-based inline char highlighting, paired +/- lines, hunk separators, line numbers.
 

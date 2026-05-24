@@ -17,5 +17,7 @@ pub mod worktree;
 pub mod submodule;
 pub mod bisect;
 pub mod auth;
+// 0.7.12 — unified Platform view (pipelines/jobs/releases/packages).
+pub mod platform;
 // `history` and `settings` modules removed in 0.7.3 — their renders are
 // now served from `log` and `config` respectively (see ui.rs dispatcher).

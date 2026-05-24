@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.12] - 2026-05-20
+
+### Added
+
+- **TUI: unified Platform view.** New `platform` entry in the sidebar
+  (between `auth` and `config`) groups the four platform-side surfaces
+  (`pipeline` / `job` / `release` / `package`) into one drill-down view
+  with horizontal sub-tabs:
+  - `1` Pipelines, `2` Jobs, `3` Releases, `4` Packages
+  - **Enter on a pipeline** drills into its jobs (sub-tab auto-switches
+    to Jobs, populated with that pipeline's jobs).
+  - **Enter on a job** fetches and shows its log in a scrollable panel
+    (PageUp / PageDown / Home for navigation; Esc walks back).
+  - **`r` opens a centred popup** to switch the remote
+    (auto-discovered from the repo); `Enter` selects, `Esc` cancels.
+  - **`Ctrl-R` reloads** the active sub-tab.
+  - All loads happen on background threads — the TUI stays responsive
+    while pipelines / jobs / releases / packages are fetched.
+
+### Fixed
+
+- **TUI: `add mirror` was unreachable.** The "add mirror" entry only
+  appeared in the ops dropdown when a mirror was already selected,
+  making it impossible to create the first mirror from the TUI. It's
+  now also exposed from the git-remote ops dropdown, so users can
+  bootstrap mirroring from scratch.
+
+### Docs
+
+- README: refreshed the **Views** table (was missing worktrees /
+  submodules / pr / issues / bisect / auth from earlier releases) and
+  added the new `platform` row + short Platform-view description.
+- README: cross-linked the **CI / platform management** CLI section to
+  the new TUI Platform view.
+
 ## [0.7.11] - 2026-05-20
 
 ### Added

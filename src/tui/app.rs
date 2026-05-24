@@ -31,6 +31,9 @@ pub enum View {
     Bisect,
     /// New in 0.7.2 — credentials (cloud key + platform tokens).
     Auth,
+    /// New in 0.7.12 — unified CI/CD surface: pipelines, jobs, releases,
+    /// packages across the active remote (and `--remote all` aggregations).
+    Platform,
     Config,
     /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
     #[allow(dead_code)]
@@ -1012,6 +1015,92 @@ impl Default for AuthState {
     }
 }
 
+// -- Platform view (0.7.12) ------------------------------------------------
+//
+// Unified surface for the per-platform CI/CD objects exposed by the CLI
+// (`torii pipeline|job|release|package`). The view groups the four into
+// horizontal sub-tabs and lets you drill from a pipeline into its jobs
+// and from a job into its trace.
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlatformSubTab { Pipelines, Jobs, Releases, Packages }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlatformFocus {
+    /// Browsing the active sub-tab list.
+    List,
+    /// Drill-down inside Jobs (entered from a pipeline). The list now
+    /// shows jobs of `active_pipeline_id`; Esc returns to Pipelines.
+    JobsOfPipeline,
+    /// Drill-down inside a single job's log/trace.
+    JobLog,
+    /// Remote-selector popup is open over the view.
+    RemotePopup,
+}
+
+pub struct PlatformState {
+    pub sub_tab: PlatformSubTab,
+    pub focus: PlatformFocus,
+
+    /// Remote name currently consulted (e.g. "origin", "github", "upstream").
+    /// Always one concrete remote in 0.7.12; `--remote all` is CLI-only.
+    pub remote: String,
+    /// Auto-discovered remote list (populated on view enter).
+    pub remotes: Vec<String>,
+    pub remote_popup_idx: usize,
+
+    /// Resolved platform/owner/repo for `remote`. Updated when remote changes.
+    pub platform: String,
+    pub owner: String,
+    pub repo_name: String,
+
+    pub pipelines: Vec<crate::pipeline::Pipeline>,
+    pub pipelines_idx: usize,
+    pub jobs: Vec<crate::pipeline::Job>,
+    pub jobs_idx: usize,
+    pub releases: Vec<crate::release::Release>,
+    pub releases_idx: usize,
+    pub packages: Vec<crate::package::Package>,
+    pub packages_idx: usize,
+
+    /// Set when we drilled from a pipeline row into its jobs.
+    pub active_pipeline_id: Option<u64>,
+    /// Job trace text + scroll, when focus == JobLog.
+    pub job_log: Option<String>,
+    pub job_log_scroll: u16,
+
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
+impl Default for PlatformState {
+    fn default() -> Self {
+        Self {
+            sub_tab: PlatformSubTab::Pipelines,
+            focus: PlatformFocus::List,
+            remote: "origin".to_string(),
+            remotes: vec![],
+            remote_popup_idx: 0,
+            platform: String::new(),
+            owner: String::new(),
+            repo_name: String::new(),
+            pipelines: vec![],
+            pipelines_idx: 0,
+            jobs: vec![],
+            jobs_idx: 0,
+            releases: vec![],
+            releases_idx: 0,
+            packages: vec![],
+            packages_idx: 0,
+            active_pipeline_id: None,
+            job_log: None,
+            job_log_scroll: 0,
+            loading: false,
+            error: None,
+        }
+    }
+}
+
 #[derive(Clone, PartialEq)]
 pub enum EventKind { Error, Success, Info }
 
@@ -1070,11 +1159,21 @@ pub struct App {
     pub bisect_view: BisectState,
     pub auth_view: AuthState,
 
+    /// 0.7.12 — unified Platform view (pipelines/jobs/releases/packages).
+    pub platform_view: PlatformState,
+
     pub event_log: Vec<EventEntry>,
     pub show_event_log: bool,
     pub sync_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
     pub pr_rx: Option<std::sync::mpsc::Receiver<Result<Vec<PrEntry>>>>,
     pub issue_rx: Option<std::sync::mpsc::Receiver<Result<Vec<IssueEntry>>>>,
+
+    /// 0.7.12 — background loaders for the Platform view.
+    pub platform_pipelines_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::pipeline::Pipeline>>>>,
+    pub platform_jobs_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::pipeline::Job>>>>,
+    pub platform_releases_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::release::Release>>>>,
+    pub platform_packages_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::package::Package>>>>,
+    pub platform_job_log_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
 
     pub repo_picker_open: bool,
     pub repo_picker_idx: usize,
@@ -1124,11 +1223,17 @@ impl App {
             submodule_view: SubmoduleState::default(),
             bisect_view: BisectState::default(),
             auth_view: AuthState::default(),
+            platform_view: PlatformState::default(),
             event_log: vec![],
             show_event_log: false,
             sync_rx: None,
             pr_rx: None,
             issue_rx: None,
+            platform_pipelines_rx: None,
+            platform_jobs_rx: None,
+            platform_releases_rx: None,
+            platform_packages_rx: None,
+            platform_job_log_rx: None,
             repo_picker_open: false,
             repo_picker_idx: 0,
             active_workspace: None,
@@ -1155,7 +1260,7 @@ impl App {
 
     /// Sidebar order in 0.7.2+ (must stay in sync with TABS in
     /// src/tui/ui.rs and the sidebar_idx assignments in `go_to`).
-    /// Total: 16 entries, max valid index = 15.
+    /// 0.7.12 adds View::Platform at idx 15, before Config.
     fn view_for_idx(idx: usize) -> View {
         match idx {
             0  => View::Dashboard,
@@ -1173,14 +1278,15 @@ impl App {
             12 => View::Issue,
             13 => View::Bisect,
             14 => View::Auth,
-            15 => View::Config,
+            15 => View::Platform,
+            16 => View::Config,
             _  => View::Dashboard,
         }
     }
 
     /// Total entries in the sidebar — keep in sync with `view_for_idx`
     /// and TABS in ui.rs.
-    const SIDEBAR_LEN: usize = 16;
+    const SIDEBAR_LEN: usize = 17;
 
     pub fn sidebar_up(&mut self) {
         if self.sidebar_idx > 0 {
@@ -1241,6 +1347,9 @@ impl App {
             View::Submodule => crate::tui::views::submodule::refresh(self),
             View::Bisect    => crate::tui::views::bisect::refresh(self),
             View::Auth      => crate::tui::views::auth::refresh(self),
+            // 0.7.12 — unified Platform view: discover remotes + load the
+            // current sub-tab in the background.
+            View::Platform  => self.load_platform_enter(),
             _ => {}
         }
         // Sidebar order in 0.7.2 (16 entries, see TABS in ui.rs).
@@ -1265,8 +1374,9 @@ impl App {
             View::Issue     => 12,
             View::Bisect    => 13,
             View::Auth      => 14,
-            View::Config    => 15,
-            View::Settings  => 15, // fused into Config
+            View::Platform  => 15,
+            View::Config    => 16,
+            View::Settings  => 16, // fused into Config
             _               => self.sidebar_idx,
         };
         self.view = view;
@@ -1295,8 +1405,9 @@ impl App {
                 View::Issue     => 12,
                 View::Bisect    => 13,
                 View::Auth      => 14,
-                View::Config    => 15,
-                View::Settings  => 15, // fused into Config
+                View::Platform  => 15,
+                View::Config    => 16,
+                View::Settings  => 16, // fused into Config
                 _               => 0,
             };
             // If returning to a view with its own content, keep focus in the view
@@ -2387,6 +2498,227 @@ impl App {
     pub fn settings_move_down(&mut self) {
         if self.settings_view.idx < 19 { self.settings_view.idx += 1; }
     }
+
+    // ── Platform view (0.7.12) ───────────────────────────────────────────────
+    //
+    // load_platform_enter is called from `go_to(View::Platform)`. It
+    // discovers remotes, picks one if the current selection is invalid,
+    // and triggers the loader for the active sub-tab. Each loader runs
+    // on its own thread and writes back through a per-channel receiver.
+
+    pub fn load_platform_enter(&mut self) {
+        self.platform_view.remotes = discover_remotes(&self.repo_path);
+        // If `remote` isn't in the discovered list, fall back to the
+        // first remote that points to a supported platform.
+        if !self.platform_view.remotes.contains(&self.platform_view.remote) {
+            let pick = self.platform_view.remotes.first().cloned()
+                .unwrap_or_else(|| "origin".to_string());
+            self.platform_view.remote = pick;
+        }
+        self.load_platform_active_sub_tab();
+    }
+
+    pub fn load_platform_active_sub_tab(&mut self) {
+        match self.platform_view.sub_tab {
+            PlatformSubTab::Pipelines => self.load_platform_pipelines(),
+            PlatformSubTab::Jobs      => {
+                if let Some(pid) = self.platform_view.active_pipeline_id {
+                    self.load_platform_jobs_for_pipeline(pid.to_string());
+                } else {
+                    // No drill-down context: fall back to Pipelines.
+                    self.platform_view.sub_tab = PlatformSubTab::Pipelines;
+                    self.load_platform_pipelines();
+                }
+            }
+            PlatformSubTab::Releases  => self.load_platform_releases(),
+            PlatformSubTab::Packages  => self.load_platform_packages(),
+        }
+    }
+
+    fn resolve_platform_target(&mut self) -> Option<(String, String, String)> {
+        let res = crate::pr::detect_platform_from_remote_named(
+            &self.repo_path,
+            &self.platform_view.remote,
+        );
+        match res {
+            Some((p, o, r)) => {
+                self.platform_view.platform  = p.clone();
+                self.platform_view.owner     = o.clone();
+                self.platform_view.repo_name = r.clone();
+                Some((p, o, r))
+            }
+            None => {
+                self.platform_view.error = Some(format!(
+                    "remote '{}' is not a github/gitlab URL",
+                    self.platform_view.remote,
+                ));
+                None
+            }
+        }
+    }
+
+    pub fn load_platform_pipelines(&mut self) {
+        self.platform_view.pipelines.clear();
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_pipelines_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        let client = match crate::pipeline::get_pipeline_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_pipelines_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let filters = crate::pipeline::ListFilters { status: None, per_page: 50 };
+            let _ = tx.send(client.list(&owner, &repo, &filters));
+        });
+    }
+
+    pub fn load_platform_jobs_for_pipeline(&mut self, pipeline_id: String) {
+        self.platform_view.jobs.clear();
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_jobs_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        let client = match crate::pipeline::get_pipeline_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_jobs_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let _ = tx.send(client.list_jobs(&owner, &repo, &pipeline_id, None));
+        });
+    }
+
+    pub fn load_platform_releases(&mut self) {
+        self.platform_view.releases.clear();
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_releases_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        let client = match crate::release::get_release_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_releases_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let _ = tx.send(client.list(&owner, &repo, 50));
+        });
+    }
+
+    pub fn load_platform_packages(&mut self) {
+        self.platform_view.packages.clear();
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_packages_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        // Packages are GitLab-only in 0.7.12 (GitHub Packages API requires
+        // package_type+username scoping that doesn't map cleanly to the
+        // CI surface — the CLI returns an error pointing at `release` for
+        // GitHub, we mirror that here so the view doesn't appear broken).
+        if platform != "gitlab" {
+            self.platform_view.loading = false;
+            self.platform_view.error = Some(
+                "Packages are GitLab-only here. For GitHub, see Releases (assets).".to_string()
+            );
+            return;
+        }
+
+        let client = match crate::package::get_package_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_packages_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let filters = crate::package::PackageListFilters::default();
+            let _ = tx.send(client.list(&owner, &repo, &filters));
+        });
+    }
+
+    pub fn load_platform_job_log(&mut self, job_id: String) {
+        self.platform_view.job_log = None;
+        self.platform_view.job_log_scroll = 0;
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_job_log_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        let client = match crate::pipeline::get_pipeline_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_job_log_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let _ = tx.send(client.job_log(&owner, &repo, &job_id));
+        });
+    }
+}
+
+/// List all remote names declared in the repo at `repo_path`. Empty if
+/// the repo isn't discoverable. Order is whatever libgit2 returns.
+fn discover_remotes(repo_path: &str) -> Vec<String> {
+    let Ok(repo) = git2::Repository::discover(repo_path) else { return vec![] };
+    let Ok(names) = repo.remotes() else { return vec![] };
+    names.iter().flatten().map(|s| s.to_string()).collect()
 }
 
 // ── Git helpers ───────────────────────────────────────────────────────────────
