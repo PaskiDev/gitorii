@@ -1010,6 +1010,229 @@ impl PipelineClient for RadiclePipelineClient {
 }
 
 // ============================================================================
+// Bitbucket Pipelines (REST v2)
+// ============================================================================
+//
+// Bitbucket runs CI via pipelines + steps. Pipeline ≈ pipeline, step ≈
+// job. UUIDs are the canonical identifiers (build_number works too).
+// `retry` and `delete` aren't exposed via the public REST API — return
+// clear errors.
+
+pub struct BitbucketPipelineClient {
+    token: String,
+}
+
+impl BitbucketPipelineClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("bitbucket", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Bitbucket token not found. Create an app password at \
+                 https://bitbucket.org/account/settings/app-passwords/ \
+                 and run: torii auth set bitbucket USERNAME:APP_PASSWORD".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+    fn auth_header(&self) -> String {
+        if self.token.contains(':') {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&self.token);
+            format!("Basic {}", b64)
+        } else {
+            format!("Bearer {}", self.token)
+        }
+    }
+}
+
+impl PipelineClient for BitbucketPipelineClient {
+    fn list(&self, owner: &str, repo: &str, filters: &ListFilters) -> Result<Vec<Pipeline>> {
+        let mut url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pipelines/?sort=-created_on&pagelen={}",
+            owner, repo, filters.per_page.clamp(1, 100)
+        );
+        if let Some(ref s) = filters.status {
+            // Bitbucket: PENDING / IN_PROGRESS / SUCCESSFUL / FAILED /
+            // STOPPED / PAUSED / HALTED.
+            let bb = match s.as_str() {
+                "success"  => "SUCCESSFUL",
+                "failed"   => "FAILED",
+                "running"  => "IN_PROGRESS",
+                "canceled" => "STOPPED",
+                "pending"  => "PENDING",
+                other      => other,
+            };
+            url.push_str(&format!("&status={}", bb));
+        }
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Bitbucket (url: {})", url))?;
+        let arr = json["values"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Bitbucket returned no `values` array. Body: {}", json
+            )))?;
+        arr.iter().map(parse_bitbucket_pipeline).collect()
+    }
+
+    fn cancel(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pipelines/{}/stopPipeline",
+            owner, repo, id
+        );
+        let req = self.client().post(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Bitbucket cancel pipeline")
+    }
+
+    fn retry(&self, _o: &str, _r: &str, _id: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Bitbucket Pipelines doesn't expose a retry endpoint. Resubmit by pushing a \
+             new commit or triggering a custom pipeline via the web UI.".to_string()
+        ))
+    }
+
+    fn delete(&self, _o: &str, _r: &str, _id: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Bitbucket Pipelines doesn't allow deleting pipeline runs — they're \
+             retained per the workspace's data-retention policy.".to_string()
+        ))
+    }
+
+    fn list_jobs(&self, owner: &str, repo: &str, pipeline_id: &str, status_filter: Option<&str>) -> Result<Vec<Job>> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pipelines/{}/steps/?pagelen=100",
+            owner, repo, pipeline_id
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Bitbucket (url: {})", url))?;
+        let arr = json["values"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Bitbucket returned no `values` array. Body: {}", json
+            )))?;
+        let mut jobs: Vec<Job> = arr.iter()
+            .filter_map(|v| parse_bitbucket_step(v, pipeline_id).ok())
+            .collect();
+        if let Some(s) = status_filter {
+            jobs.retain(|j| j.status == s);
+        }
+        Ok(jobs)
+    }
+
+    fn job_log(&self, owner: &str, repo: &str, job_id: &str) -> Result<String> {
+        // Plain-text log — bypass send_json.
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pipelines/{}/log",
+            owner, repo, job_id
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Bitbucket API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!(
+                "Bitbucket API {} log fetch failed: {}", s, body
+            )));
+        }
+        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Bitbucket log read: {}", e)))
+    }
+
+    fn job_retry(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Bitbucket Pipelines has no per-step retry — resubmit the whole pipeline.".to_string()
+        ))
+    }
+
+    fn job_cancel(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
+        self.cancel(owner, repo, job_id)
+    }
+
+    fn job_artifacts_download(&self, _o: &str, _r: &str, _j: &str, _p: &std::path::Path) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Bitbucket Pipelines artifact download isn't exposed cleanly by REST. \
+             Fetch the artifact from the web UI.".to_string()
+        ))
+    }
+
+    fn job_erase(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Bitbucket Pipelines has no log-erase operation.".to_string()
+        ))
+    }
+}
+
+fn parse_bitbucket_pipeline(v: &serde_json::Value) -> Result<Pipeline> {
+    let state_name = v["state"]["name"].as_str().unwrap_or("");
+    let result_name = v["state"]["result"]["name"].as_str().unwrap_or("");
+    let raw = if !result_name.is_empty() {
+        format!("{} ({})", state_name, result_name)
+    } else {
+        state_name.to_string()
+    };
+    let normalized = match (state_name, result_name) {
+        ("COMPLETED", "SUCCESSFUL")   => "success",
+        ("COMPLETED", "FAILED")       => "failed",
+        ("COMPLETED", "STOPPED")      => "canceled",
+        ("IN_PROGRESS", _)            => "running",
+        ("PENDING", _)                => "pending",
+        ("PAUSED", _) | ("HALTED", _) => "pending",
+        _                             => "other",
+    }.to_string();
+    let id = v["uuid"].as_str().unwrap_or("")
+        .trim_matches(|c| c == '{' || c == '}')
+        .to_string();
+    Ok(Pipeline {
+        id: id.clone(),
+        status: normalized,
+        raw_status: raw,
+        branch:     v["target"]["ref_name"].as_str().unwrap_or("").to_string(),
+        sha:        v["target"]["commit"]["hash"].as_str().unwrap_or("").to_string(),
+        web_url:    format!(
+            "https://bitbucket.org/{}/{}/pipelines/results/{}",
+            v["repository"]["workspace"]["slug"].as_str().unwrap_or(""),
+            v["repository"]["name"].as_str().unwrap_or(""),
+            v["build_number"].as_u64().unwrap_or(0)
+        ),
+        created_at: v["created_on"].as_str().unwrap_or("").to_string(),
+        updated_at: v["completed_on"].as_str()
+                        .or_else(|| v["created_on"].as_str())
+                        .unwrap_or("").to_string(),
+    })
+}
+
+fn parse_bitbucket_step(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
+    let state_name = v["state"]["name"].as_str().unwrap_or("");
+    let result_name = v["state"]["result"]["name"].as_str().unwrap_or("");
+    let raw = if !result_name.is_empty() {
+        format!("{} ({})", state_name, result_name)
+    } else {
+        state_name.to_string()
+    };
+    let normalized = match (state_name, result_name) {
+        ("COMPLETED", "SUCCESSFUL") => "success",
+        ("COMPLETED", "FAILED")     => "failed",
+        ("COMPLETED", "STOPPED")    => "canceled",
+        ("IN_PROGRESS", _)          => "running",
+        ("PENDING", _)              => "pending",
+        _                           => "other",
+    }.to_string();
+    let id = v["uuid"].as_str().unwrap_or("")
+        .trim_matches(|c| c == '{' || c == '}')
+        .to_string();
+    Ok(Job {
+        id:               id.clone(),
+        pipeline_id:      pipeline_id.to_string(),
+        name:             v["name"].as_str().unwrap_or("").to_string(),
+        status:           normalized,
+        raw_status:       raw,
+        stage:            String::new(),
+        web_url:          String::new(),
+        created_at:       v["started_on"].as_str().unwrap_or("").to_string(),
+        finished_at:      v["completed_on"].as_str().map(String::from),
+        duration_seconds: v["duration_in_seconds"].as_f64(),
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -1020,8 +1243,9 @@ pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
         "gitea"     => Ok(Box::new(GiteaPipelineClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutPipelineClient::new()?)),
         "radicle"   => Ok(Box::new(RadiclePipelineClient::new()?)),
+        "bitbucket" => Ok(Box::new(BitbucketPipelineClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket", other)
         )),
     }
 }
