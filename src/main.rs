@@ -83,6 +83,7 @@ pub use util::toriignore;
 pub use util::hooks;
 pub use util::updater;
 pub use util::http;
+pub use util::oauth;
 pub use util::ssh;
 pub use util::graph;
 pub use util::gpg;

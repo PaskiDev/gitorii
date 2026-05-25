@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.20] - 2026-05-25
+
+### Added
+
+- **`torii auth oauth <provider>`** — OAuth 2.0 Device Authorization
+  Grant (RFC 8628) for authenticating against GitHub / GitLab /
+  Codeberg without having to create a Personal Access Token in the
+  web UI. Same UX pattern as `gh auth login`:
+  1. Torii prints a short user code + the verification URL.
+  2. You open the URL in any browser (no callback required), enter
+     the code, authorise.
+  3. Torii polls the token endpoint and stores the resulting access
+     token under `~/.config/torii/auth.toml` (or `--local` for the
+     per-repo store).
+- New `src/util/oauth.rs` implements the device flow with proper
+  handling of `authorization_pending` / `slow_down` / `expired_token`
+  / `access_denied` poll responses.
+
+### Requires (one-time setup by the maintainer)
+
+- Each platform needs an OAuth App registered, providing torii with a
+  public `client_id`. Until the registered ids ship bundled, the flow
+  falls back to environment variables: `TORII_GITHUB_CLIENT_ID`,
+  `TORII_GITLAB_CLIENT_ID`, `TORII_CODEBERG_CLIENT_ID`. If neither
+  bundled nor env is available, the command errors with a clear
+  fallback ("create a PAT and run `torii auth set …`").
+
+### Notes
+
+- **Bitbucket Cloud** doesn't implement RFC 8628 — only the
+  Authorization Code grant, which needs a `localhost:PORT` callback
+  server. Tracked for the next release; `torii auth set bitbucket
+  USERNAME:APP_PASSWORD` remains the path there.
+- **Azure DevOps** has Device Code support; wiring it just needs an
+  Azure AD app registration with the right scopes. Tracked.
+- **Sourcehut** uses OAuth 1.0a + a token format with embedded
+  scopes; not a fit for device flow either. PAT remains the path.
+
 ## [0.7.19] - 2026-05-25
 
 ### Added
