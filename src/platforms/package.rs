@@ -179,6 +179,12 @@ pub fn get_package_client(platform: &str) -> Result<Box<dyn PackageClient>> {
             "Bitbucket Cloud has no Package Registry. Binary distribution happens via the \
              Downloads tab (flat file list) or external hosting.".to_string()
         )),
+        "azure"     => Err(ToriiError::InvalidConfig(
+            "Azure Artifacts exists but lives at the organisation level (feeds), not per-repo. \
+             The mapping isn't 1:1 with torii's owner/repo abstraction. Wired in a future release \
+             once the org-feed-package addressing is designed; for now use the Azure DevOps UI \
+             (https://dev.azure.com/{org}/_packaging).".to_string()
+        )),
         other => Err(ToriiError::InvalidConfig(
             format!("Unsupported platform: {}. Supported for `torii package`: gitlab", other)
         )),

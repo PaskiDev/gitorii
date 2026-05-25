@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.18] - 2026-05-25
+
+### Added
+
+- **Azure DevOps support** (7th platform). Detection: `dev.azure.com`,
+  `ssh.dev.azure.com`, and the legacy `*.visualstudio.com` URLs all
+  auto-route through the new Azure client.
+  - **URL parsing** unpacks Azure's three-level path
+    (`org/project/repo`) and packs `org/project` into the `owner`
+    slot of torii's standard `(platform, owner, repo)` triple — the
+    `AzureClient` splits it back via `split_azure_owner()` at call
+    time. Three URL shapes supported:
+    - `https://dev.azure.com/{org}/{project}/_git/{repo}` (modern)
+    - `https://{org}.visualstudio.com/{project}/_git/{repo}` (legacy)
+    - `git@ssh.dev.azure.com:v3/{org}/{project}/{repo}` (SSH)
+  - **Auth**: Personal Access Token via Basic auth with empty
+    username (`Authorization: Basic base64(":PAT")`). Configure:
+    `torii auth set azure YOUR_PAT`. Env fallbacks:
+    `AZURE_DEVOPS_TOKEN`, `AZURE_DEVOPS_EXT_PAT`, `AZDO_TOKEN`.
+  - **PRs**: full surface (`list / create / get / merge / close /
+    update / delete_branch`) via `_apis/git/repositories/{repo}/pullrequests`.
+    Merge methods map: `merge` → `noFastForward`, `squash` →
+    `squash`, `rebase` → `rebase`.
+  - **Work Items** (≈ issues): `list / create / close / comment`
+    via the WIQL (Work Item Query Language) query endpoint plus the
+    JSON-Patch update API. Defaults to the `Issue` work-item type
+    (Basic process); Agile / Scrum projects can extend later.
+    Work items are *project-scoped*, not repo-scoped — the `_repo`
+    arg is ignored.
+  - **Pipelines** (Builds API): `list / cancel / retry / delete +
+    list_jobs / job_log / artifacts download`. `cancel` PATCHes
+    `status: cancelling`; `retry` POSTs a new build with the same
+    `definition.id`. `list_jobs` reads the build's timeline and
+    surfaces the `Job` records.
+  - **Releases** (classic Release Management on `vsrm.dev.azure.com`):
+    `list / get / delete`. `edit` returns a clear error — Azure
+    Releases derive metadata from the definition template, not the
+    release instance.
+  - **Artifacts**: returns a clear error pointing to the web UI.
+    Azure Artifacts feeds live at the *organisation* level, not
+    per-repo — the addressing model doesn't fit cleanly into
+    torii's owner/repo abstraction and needs a separate design
+    pass (tracked for a future release).
+
+### Notes
+
+- Supported platforms now: **GitHub, GitLab, Gitea / Codeberg /
+  Forgejo, Sourcehut, Radicle, Bitbucket Cloud, Azure DevOps** —
+  seven. The expansion arc that started with 0.7.13 (Gitea) is
+  complete.
+
 ## [0.7.17] - 2026-05-25
 
 ### Added

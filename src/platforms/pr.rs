@@ -835,6 +835,248 @@ fn parse_bitbucket_pr(json: &serde_json::Value) -> Result<PullRequest> {
 }
 
 // ============================================================================
+// Azure DevOps Repos
+// ============================================================================
+//
+// Azure DevOps uses a 3-level path (`org/project/repo`). The URL
+// parser packs `org/project` into the `owner` slot and the repo name
+// into `repo`; [`split_azure_owner`] unpacks them.
+//
+// Auth: a Personal Access Token (PAT) sent as Basic auth with an
+// empty username — i.e. `Authorization: Basic base64(":PAT")`.
+//
+// Every call needs an `api-version` query parameter; we use `7.0` as
+// the GA baseline. Newer endpoints may require `7.1-preview`; we
+// stick to 7.0 for the surface we expose.
+
+pub struct AzurePrClient {
+    token: String,
+}
+
+impl AzurePrClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("azure", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Azure DevOps PAT not found. Create one at https://dev.azure.com/{org}/_usersSettings/tokens \
+                 with scopes `Code (read/write)`, `Build (read/execute)`, `Work Items (read/write)`, \
+                 `Release (read/write)` and run: torii auth set azure YOUR_PAT".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+
+    /// Azure PATs go in the password slot with an empty username.
+    /// Equivalent to `Authorization: Basic <base64(":PAT")>`.
+    fn auth(&self) -> String {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(format!(":{}", self.token));
+        format!("Basic {}", b64)
+    }
+}
+
+/// Split the packed `org/project` owner back into its parts. Returns
+/// a clear error if the owner doesn't contain a `/` — that means the
+/// URL parser saw something unexpected.
+pub(crate) fn split_azure_owner(owner: &str) -> Result<(String, String)> {
+    let mut parts = owner.splitn(2, '/');
+    let org = parts.next().filter(|s| !s.is_empty()).ok_or_else(|| ToriiError::InvalidConfig(
+        format!("Azure: cannot parse organisation from owner '{}'", owner)
+    ))?;
+    let project = parts.next().filter(|s| !s.is_empty()).ok_or_else(|| ToriiError::InvalidConfig(
+        format!("Azure: cannot parse project from owner '{}' — \
+                 expected 'org/project' (URL parser should populate both)", owner)
+    ))?;
+    Ok((org.to_string(), project.to_string()))
+}
+
+impl PrClient for AzurePrClient {
+    fn create(&self, owner: &str, repo: &str, opts: CreatePrOptions) -> Result<PullRequest> {
+        let (org, project) = split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests?api-version=7.0",
+            org, project, repo
+        );
+        // Azure expects fully-qualified ref names.
+        let body = serde_json::json!({
+            "title":         opts.title,
+            "description":   opts.body.unwrap_or_default(),
+            "sourceRefName": format!("refs/heads/{}", opts.head),
+            "targetRefName": format!("refs/heads/{}", opts.base),
+            "isDraft":       opts.draft,
+        });
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        let json = crate::http::send_json(req, "Azure create PR")?;
+        parse_azure_pr(&json)
+    }
+
+    fn list(&self, owner: &str, repo: &str, state: &str) -> Result<Vec<PullRequest>> {
+        let (org, project) = split_azure_owner(owner)?;
+        let az_state = match state {
+            "open"   => "active",
+            "closed" => "abandoned",
+            "merged" => "completed",
+            _        => "active",
+        };
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests\
+             ?searchCriteria.status={}&$top=50&api-version=7.0",
+            org, project, repo, az_state
+        );
+        let req = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &format!("Azure (url: {})", url))?;
+        let arr = json["value"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Azure returned no `value` array. Body: {}", json
+            )))?;
+        arr.iter().map(parse_azure_pr).collect()
+    }
+
+    fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
+        let (org, project) = split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests/{}?api-version=7.0",
+            org, project, repo, number
+        );
+        let req = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &format!("Azure PR #{}", number))?;
+        parse_azure_pr(&json)
+    }
+
+    fn merge(&self, owner: &str, repo: &str, number: u64, method: MergeMethod) -> Result<()> {
+        let (org, project) = split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests/{}?api-version=7.0",
+            org, project, repo, number
+        );
+        // Azure merges by transitioning status → "completed" with a
+        // completionOptions block. mergeStrategy: noFastForward (≈ merge
+        // commit) / squash / rebase / rebaseMerge.
+        let strategy = match method {
+            MergeMethod::Merge  => "noFastForward",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        };
+        let body = serde_json::json!({
+            "status": "completed",
+            "completionOptions": { "mergeStrategy": strategy }
+        });
+        let req = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        crate::http::send_empty(req, "Azure merge PR")
+    }
+
+    fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        let (org, project) = split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests/{}?api-version=7.0",
+            org, project, repo, number
+        );
+        let body = serde_json::json!({ "status": "abandoned" });
+        let req = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        crate::http::send_empty(req, "Azure abandon PR")
+    }
+
+    fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
+        let (org, project) = split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/pullrequests/{}?api-version=7.0",
+            org, project, repo, number
+        );
+        let mut body = serde_json::Map::new();
+        if let Some(t) = opts.title { body.insert("title".into(), serde_json::Value::String(t)); }
+        if let Some(b) = opts.body  { body.insert("description".into(), serde_json::Value::String(b)); }
+        if let Some(base) = opts.base {
+            body.insert("targetRefName".into(), serde_json::Value::String(format!("refs/heads/{}", base)));
+        }
+        if body.is_empty() { return Ok(()); }
+        let req = self.client().patch(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "Azure update PR")
+    }
+
+    fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
+        // Azure deletes a ref by POSTing the refUpdates list with the
+        // old object id and an all-zeros new object id. This needs the
+        // current SHA of the ref, which means an extra round-trip.
+        let (org, project) = split_azure_owner(owner)?;
+        let lookup_url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/refs?filter=heads/{}&api-version=7.0",
+            org, project, repo, branch
+        );
+        let lookup_req = self.client().get(&lookup_url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        let lookup_json = crate::http::send_json(lookup_req, "Azure lookup ref")?;
+        let old_oid = lookup_json["value"][0]["objectId"].as_str()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Azure: branch '{}' not found on remote", branch
+            )))?;
+
+        let update_url = format!(
+            "https://dev.azure.com/{}/{}/_apis/git/repositories/{}/refs?api-version=7.0",
+            org, project, repo
+        );
+        let body = serde_json::json!([{
+            "name":        format!("refs/heads/{}", branch),
+            "oldObjectId": old_oid,
+            "newObjectId": "0000000000000000000000000000000000000000",
+        }]);
+        let req = self.client().post(&update_url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        crate::http::send_empty(req, "Azure delete branch")
+    }
+
+    fn checkout_branch(&self, pr: &PullRequest) -> String {
+        pr.head.clone()
+    }
+}
+
+fn parse_azure_pr(json: &serde_json::Value) -> Result<PullRequest> {
+    // Azure surfaces ref names as `refs/heads/foo` — strip the prefix
+    // so the value matches how every other client reports it.
+    fn strip_ref(s: &str) -> String {
+        s.trim_start_matches("refs/heads/").to_string()
+    }
+    Ok(PullRequest {
+        number:     json["pullRequestId"].as_u64().unwrap_or(0),
+        title:      json["title"].as_str().unwrap_or("").to_string(),
+        body:       json["description"].as_str().map(String::from),
+        state:      match json["status"].as_str().unwrap_or("") {
+            "active"     => "open".to_string(),
+            "abandoned"  => "closed".to_string(),
+            "completed"  => "merged".to_string(),
+            other        => other.to_string(),
+        },
+        head:       strip_ref(json["sourceRefName"].as_str().unwrap_or("")),
+        base:       strip_ref(json["targetRefName"].as_str().unwrap_or("")),
+        author:     json["createdBy"]["displayName"].as_str()
+                        .or_else(|| json["createdBy"]["uniqueName"].as_str())
+                        .unwrap_or("").to_string(),
+        url:        json["url"].as_str().unwrap_or("").to_string(),
+        draft:      json["isDraft"].as_bool().unwrap_or(false),
+        mergeable:  json["mergeStatus"].as_str().map(|s| s == "succeeded"),
+        created_at: json["creationDate"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -846,8 +1088,9 @@ pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
         "sourcehut" => Ok(Box::new(SourcehutPrClient::new()?)),
         "radicle"   => Ok(Box::new(RadiclePrClient::new()?)),
         "bitbucket" => Ok(Box::new(BitbucketPrClient::new()?)),
+        "azure"     => Ok(Box::new(AzurePrClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket, azure", other)
         )),
     }
 }
@@ -882,12 +1125,18 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     // 0.7.17: bitbucket.org detected as "bitbucket". Bitbucket Cloud
     // only — self-hosted Bitbucket Data Center has a different URL
     // shape and API surface, falls through to None for now.
+    // 0.7.18: Azure DevOps detected from `dev.azure.com`,
+    // `ssh.dev.azure.com`, or the legacy `*.visualstudio.com`. Azure
+    // uses a 3-level path (org/project/repo) which doesn't fit the
+    // owner/repo shape — we pack `org/project` into `owner` and let
+    // the AzureClient split it back. See parser below.
     let platform = if url.contains("github.com") { "github" }
         else if url.contains("gitlab.com") { "gitlab" }
         else if url.contains("codeberg.org") { "gitea" }
         else if url.contains("git.sr.ht") { "sourcehut" }
         else if url.starts_with("rad://") || url.starts_with("rad@") { "radicle" }
         else if url.contains("bitbucket.org") { "bitbucket" }
+        else if url.contains("dev.azure.com") || url.contains(".visualstudio.com") { "azure" }
         else { return None; };
 
     // Radicle URLs are `rad://<seed-host>/<RID>` — there's no
@@ -904,6 +1153,18 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
         return Some((platform.to_string(), rid, String::new()));
     }
 
+    // Azure DevOps URL shapes:
+    //   HTTPS modern:  https://dev.azure.com/{org}/{project}/_git/{repo}
+    //   HTTPS legacy:  https://{org}.visualstudio.com/{project}/_git/{repo}
+    //   SSH modern:    git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+    // We pack `org/project` into the `owner` slot — the AzureClient
+    // splits it on `/` at call time so api-url construction has all
+    // three parts.
+    if platform == "azure" {
+        let (org, project, repo_name) = parse_azure_url(&url)?;
+        return Some((platform.to_string(), format!("{}/{}", org, project), repo_name));
+    }
+
     let path = if url.contains('@') {
         url.splitn(2, ':').nth(1)?
     } else {
@@ -918,6 +1179,48 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     let repo_name = parts.next()?.to_string();
 
     Some((platform.to_string(), owner, repo_name))
+}
+
+/// Extract `(org, project, repo)` from any of the three Azure DevOps
+/// URL shapes. Returns `None` if the URL doesn't match a known shape.
+fn parse_azure_url(url: &str) -> Option<(String, String, String)> {
+    // SSH: git@ssh.dev.azure.com:v3/<org>/<project>/<repo>
+    if let Some(rest) = url.strip_prefix("git@ssh.dev.azure.com:") {
+        let rest = rest.trim_start_matches("v3/").trim_end_matches(".git");
+        let mut parts = rest.splitn(3, '/');
+        let org = parts.next()?.to_string();
+        let project = parts.next()?.to_string();
+        let repo = parts.next()?.to_string();
+        return Some((org, project, repo));
+    }
+    // HTTPS legacy: https://<org>.visualstudio.com/<project>/_git/<repo>
+    if let Some(after_scheme) = url.split("://").nth(1) {
+        if let Some(host_end) = after_scheme.find('/') {
+            let host = &after_scheme[..host_end];
+            let path = &after_scheme[host_end + 1..].trim_end_matches(".git");
+            if let Some(org) = host.strip_suffix(".visualstudio.com") {
+                // path = "<project>/_git/<repo>"
+                let mut parts = path.splitn(3, '/');
+                let project = parts.next()?.to_string();
+                let _git_marker = parts.next()?;
+                let repo = parts.next()?.to_string();
+                return Some((org.to_string(), project, repo));
+            }
+            // HTTPS modern: dev.azure.com/<org>/<project>/_git/<repo>
+            // (host might also include "<org>@dev.azure.com" for legacy
+            // basic-auth-in-URL — strip the userinfo.)
+            let host = host.split('@').last().unwrap_or(host);
+            if host == "dev.azure.com" {
+                let mut parts = path.splitn(4, '/');
+                let org = parts.next()?.to_string();
+                let project = parts.next()?.to_string();
+                let _git_marker = parts.next()?;
+                let repo = parts.next()?.to_string();
+                return Some((org, project, repo));
+            }
+        }
+    }
+    None
 }
 
 /// Map a "gitea" platform value to its base URL. Today this is always
