@@ -377,14 +377,49 @@ impl ReleaseClient for SourcehutReleaseClient {
 // Factory
 // ============================================================================
 
+// ============================================================================
+// Radicle (peer-to-peer, no native release object)
+// ============================================================================
+//
+// Radicle has no Release-page concept — same as Sourcehut. Annotated
+// tags travel via the gossip protocol; binary distribution happens off
+// the network (project's own website, IPFS, etc.).
+
+pub struct RadicleReleaseClient;
+
+impl RadicleReleaseClient {
+    pub fn new() -> Result<Self> { Ok(Self) }
+}
+
+fn radicle_release_unsupported() -> ToriiError {
+    ToriiError::InvalidConfig(
+        "Radicle has no Release-page object. A release on radicle is \
+         just an annotated git tag (`torii tag create vX --release`); \
+         binaries live outside the network. Mirror to GitLab/GitHub/Codeberg \
+         if you need a hosted release page with notes + assets.".to_string()
+    )
+}
+
+impl ReleaseClient for RadicleReleaseClient {
+    fn list(&self, _o: &str, _r: &str, _l: usize) -> Result<Vec<Release>> { Err(radicle_release_unsupported()) }
+    fn get(&self, _o: &str, _r: &str, _t: &str) -> Result<Release> { Err(radicle_release_unsupported()) }
+    fn edit(&self, _o: &str, _r: &str, _t: &str, _n: Option<&str>, _d: Option<&str>) -> Result<()> { Err(radicle_release_unsupported()) }
+    fn delete(&self, _o: &str, _r: &str, _t: &str) -> Result<()> { Err(radicle_release_unsupported()) }
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
 pub fn get_release_client(platform: &str) -> Result<Box<dyn ReleaseClient>> {
     match platform.to_lowercase().as_str() {
         "github"    => Ok(Box::new(GitHubReleaseClient::new()?)),
         "gitlab"    => Ok(Box::new(GitLabReleaseClient::new()?)),
         "gitea"     => Ok(Box::new(GiteaReleaseClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutReleaseClient::new()?)),
+        "radicle"   => Ok(Box::new(RadicleReleaseClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle", other)
         )),
     }
 }

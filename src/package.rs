@@ -171,6 +171,10 @@ pub fn get_package_client(platform: &str) -> Result<Box<dyn PackageClient>> {
             "Sourcehut has no Package Registry concept. Binaries are distributed via the \
              project's own homepage or builds.sr.ht's `triggers` (uploaded externally).".to_string()
         )),
+        "radicle"   => Err(ToriiError::InvalidConfig(
+            "Radicle is peer-to-peer and has no central package registry. \
+             Distribute binaries via the project's own channel or mirror to a registry host.".to_string()
+        )),
         other => Err(ToriiError::InvalidConfig(
             format!("Unsupported platform: {}. Supported for `torii package`: gitlab", other)
         )),

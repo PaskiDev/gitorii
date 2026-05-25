@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use reqwest::blocking::Client;
 use crate::error::{Result, ToriiError};
 
@@ -437,6 +438,99 @@ fn parse_sourcehut_issue(json: &serde_json::Value) -> Result<Issue> {
     })
 }
 
+// ── Radicle (peer-to-peer, via `rad` CLI) ────────────────────────────────────
+//
+// Radicle stores issues in special refs inside the project itself —
+// no central server. We drive the `rad issue` subcommand directly.
+// owner/repo args from the URL parser hold the RID and (empty) repo
+// part; `rad` resolves the project from the current working dir's
+// `.git` config, so we don't need to pass the RID per call.
+
+pub struct RadicleIssueClient;
+
+impl RadicleIssueClient {
+    pub fn new() -> Result<Self> { Ok(Self) }
+}
+
+impl IssueClient for RadicleIssueClient {
+    fn list(&self, _o: &str, _r: &str, state: &str) -> Result<Vec<Issue>> {
+        // `rad issue list --state open|closed|all`. We translate the
+        // platform-agnostic "open" / "closed" / "all" into rad's
+        // matching state names.
+        let st = match state { "open" => "open", "closed" => "closed", _ => "all" };
+        let json = crate::radicle::run_rad_json(&["issue", "list", "--state", st])?;
+        let arr = json.as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig("rad issue list: expected array".into()))?;
+        Ok(arr.iter().filter_map(|v| parse_radicle_issue(v).ok()).collect())
+    }
+
+    fn create(&self, _o: &str, _r: &str, opts: CreateIssueOptions) -> Result<Issue> {
+        let body = opts.body.unwrap_or_default();
+        let stdout = crate::radicle::run_rad(&[
+            "issue", "open",
+            "--title", &opts.title,
+            "--description", &body,
+        ])?;
+        // `rad issue open` prints the new issue id on the last line.
+        let id = stdout.trim().lines().last().unwrap_or("").trim().to_string();
+        Ok(Issue {
+            number:     0, // Radicle issues are identified by hash, not number
+            title:      opts.title,
+            body:       Some(body),
+            state:      "open".to_string(),
+            author:     String::new(),
+            url:        format!("rad:{}", id),
+            labels:     vec![],
+            assignees:  vec![],
+            created_at: String::new(),
+            comments:   0,
+        })
+    }
+
+    fn close(&self, _o: &str, _r: &str, number: u64) -> Result<()> {
+        // Radicle uses string ids, not numbers — torii's IssueClient
+        // signature takes u64 so we can't address a real radicle issue
+        // through this method. Surface a clear error pointing at the
+        // CLI direct path.
+        Err(ToriiError::InvalidConfig(format!(
+            "Radicle issues are identified by hash, not number. `torii issue close {}` \
+             cannot be mapped 1:1 — use `rad issue state <id> --closed` directly until \
+             torii's IssueClient trait grows a string-id variant.",
+            number
+        )))
+    }
+
+    fn comment(&self, _o: &str, _r: &str, number: u64, _body: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(format!(
+            "Radicle issues are identified by hash, not number. `torii issue comment {}` \
+             can't address a hash-id issue — use `rad issue comment <id>` directly.",
+            number
+        )))
+    }
+}
+
+fn parse_radicle_issue(v: &Value) -> Result<Issue> {
+    let id = v["id"].as_str().unwrap_or("");
+    Ok(Issue {
+        number:     0,
+        title:      v["title"].as_str().unwrap_or("").to_string(),
+        body:       v["description"].as_str().map(String::from),
+        state:      v["state"]["status"].as_str().unwrap_or("open").to_string(),
+        author:     v["author"]["alias"].as_str()
+                        .or_else(|| v["author"]["id"].as_str())
+                        .unwrap_or("").to_string(),
+        url:        format!("rad:{}", id),
+        labels:     v["labels"].as_array().map(|a| {
+            a.iter().filter_map(|l| l.as_str().map(String::from)).collect()
+        }).unwrap_or_default(),
+        assignees:  v["assignees"].as_array().map(|a| {
+            a.iter().filter_map(|u| u.as_str().map(String::from)).collect()
+        }).unwrap_or_default(),
+        created_at: v["timestamp"].as_str().unwrap_or("").to_string(),
+        comments:   v["comments"].as_u64().unwrap_or(0),
+    })
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn get_issue_client(platform: &str) -> Result<Box<dyn IssueClient>> {
@@ -445,8 +539,9 @@ pub fn get_issue_client(platform: &str) -> Result<Box<dyn IssueClient>> {
         "gitlab"    => Ok(Box::new(GitLabIssueClient::new()?)),
         "gitea"     => Ok(Box::new(GiteaIssueClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutIssueClient::new()?)),
+        "radicle"   => Ok(Box::new(RadicleIssueClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle", other)
         )),
     }
 }
