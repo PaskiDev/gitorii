@@ -12,24 +12,26 @@ stages:
 
 # Two CI pools (history below):
 #
-#   shared (untagged, saas-linux-small-amd64)
-#     · cross-compile jobs (aarch64, windows) — need apt + mingw-w64 +
-#       nasm + gcc-aarch64-linux-gnu, easiest in the Docker image.
-#     · `release` job (alpine + curl + jq).
-#
 #   self-hosted (tag `gitorii`, runner `void-torii`)
-#     · build-linux-x86_64 — no cross-compile, native build, takes the
-#       compile-heavy load OFF the free 400 min/mo quota.
+#     · build-linux-x86_64    (native)
+#     · build-linux-aarch64   (cross via aarch64-linux-gnu-gcc)
+#     · build-windows-x86_64  (cross via mingw-w64 + nasm)
+#     Saves ~15-20 min/release on the shared-runner quota.
+#
+#   shared (untagged, saas-linux-small-amd64)
+#     · `release` job only (alpine + curl + jq, ~30 s).
 #
 # History: the first self-hosted attempt (May 20, ~4h debug) fought a
-# rustc 1.94 / glibc / kernel interaction on the Arch host that
-# SIGSEGV'd even on trivial crates (`libc`, `idna`) — independent of
-# RUST_MIN_STACK and CARGO_BUILD_JOBS. Suspected root cause was the
-# default pthread stack limit interacting with glibc's heuristics on
-# the Arch kernel. Re-enabled in 0.7.21 with `RUST_MIN_STACK=33554432`
-# (32 MB) which the shared runners proved was enough; if the host
-# repros the SIGSEGV, fall back to shared by removing the `tags:`
-# line on `build-linux-x86_64`.
+# rustc 1.94 / Arch / glibc combo that SIGSEGV'd compiling trivial
+# crates (`libc`, `idna`) even with RUST_MIN_STACK at 16 MB. Root
+# cause turned out to be the default pthread stack limit interacting
+# with glibc's heuristics on the Arch kernel. Re-enabled 2026-05-25
+# with `RUST_MIN_STACK=33554432` (32 MB) — the host validated all
+# three targets build locally before we re-tagged the jobs.
+#
+# If the runner dies or the SIGSEGV ever returns: flip each build
+# job's `extends: .build_linux_self` to `.build_linux` and CI returns
+# to shared runners (Docker image with apt + cross-compile pkgs).
 
 variables:
   # See e297db2 / docs: the deep generic tree pulled in by russh's
@@ -49,6 +51,12 @@ variables:
   # executor wipes the filesystem between jobs, but $CI_PROJECT_DIR
   # is what GitLab caches via the `cache:` key when configured.
 
+# Docker-on-shared-runner template. Currently UNUSED — all three
+# builds switched to .build_linux_self (self-hosted) on 2026-05-25.
+# Kept here as the documented fallback: if the self-hosted runner dies
+# or the rustc 1.94 + Arch host repros the SIGSEGV, flip each job's
+# `extends:` back to `.build_linux` and CI returns to the shared pool
+# (at the cost of 400 min/mo quota).
 .build_linux:
   stage: build
   image: rust:1-bookworm
@@ -82,34 +90,40 @@ variables:
     expire_in: 1 hour
 
 # Self-hosted-runner template. Runs on the `void-torii` shell executor
-# on the user's Arch host. Assumes the host already has cargo, rustc
-# (via rustup honouring rust-toolchain.toml = 1.94.0) and gcc on PATH —
-# no apt-install dance like the Docker template does, because we're not
-# in Debian.
+# on the user's Arch host. Assumes the host already has:
+#   · cargo + rustc (via rustup honouring rust-toolchain.toml = 1.94.0)
+#   · gcc (native)
+#   · aarch64-linux-gnu-gcc  (Arch pkg: aarch64-linux-gnu-gcc)
+#   · x86_64-w64-mingw32-gcc (Arch pkg: mingw-w64-gcc)
+#   · nasm                    (Arch pkg: nasm — only needed for windows)
+#   · rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-pc-windows-gnu
 .build_linux_self:
   stage: build
   tags: [gitorii]
-  variables:
-    # Reuse the runner's cargo cache between jobs (lives in
-    # /home/gitlab-runner/.cargo by default). $CI_PROJECT_DIR/.cargo
-    # would force a full re-download on every job — wasteful on a
-    # local runner where disk + bandwidth are ours.
   before_script:
     - which cargo || { echo "cargo missing on runner host. Install rust via rustup." ; exit 1; }
     - cargo --version
     - rustc --version
+    # Configure cross-compile linker on-the-fly. Mirrors the Docker
+    # template's behaviour so we don't need a host-wide .cargo/config.toml.
+    - |
+      if [ -n "$LINKER" ]; then
+        mkdir -p .cargo
+        printf '[target.%s]\nlinker = "%s"\n' "$TARGET" "$LINKER" >> .cargo/config.toml
+      fi
   retry: 0
   script:
     - cargo build --release --target $TARGET
-    - cp target/$TARGET/release/torii torii-${ASSET_NAME}
+    - cp target/$TARGET/release/torii${EXT:-} torii-${ASSET_NAME}
   artifacts:
     paths:
       - torii-${ASSET_NAME}
     expire_in: 1 hour
 
-# linux-x86_64 runs on the self-hosted runner (no cross-compile needed,
-# the host *is* x86_64 linux). Saves ~5-7 min per release on the
-# shared-runner quota.
+# All three builds run on the self-hosted runner now that the host has
+# the cross-compile toolchains installed (validated 2026-05-25). The
+# shared-runner quota only pays for the tiny `release` job (~30s on
+# alpine).
 build-linux-x86_64:
   extends: .build_linux_self
   variables:
@@ -117,25 +131,24 @@ build-linux-x86_64:
     ASSET_NAME: linux-x86_64
 
 build-linux-aarch64:
-  extends: .build_linux
+  extends: .build_linux_self
   variables:
     TARGET: aarch64-unknown-linux-gnu
     ASSET_NAME: linux-aarch64
-    EXTRA_PKGS: gcc-aarch64-linux-gnu
     LINKER: aarch64-linux-gnu-gcc
 
 build-windows-x86_64:
-  extends: .build_linux
+  extends: .build_linux_self
   variables:
     TARGET: x86_64-pc-windows-gnu
     ASSET_NAME: windows-x86_64.exe
+    LINKER: x86_64-w64-mingw32-gcc
+    EXT: .exe
     # `aws-lc-sys` pulls NASM for x86 assembly optimisations when
     # building for Windows targets (its `nasm_builder.rs` panics with
     # "NASM command not found! Build cannot continue." otherwise). On
-    # Linux/aarch64 it uses regular cc and doesn't need NASM.
-    EXTRA_PKGS: mingw-w64 nasm
-    LINKER: x86_64-w64-mingw32-gcc
-    EXT: .exe
+    # Linux/aarch64 it uses regular cc and doesn't need NASM. The host
+    # must have `nasm` installed (Arch pkg: nasm).
 
 
 release:
