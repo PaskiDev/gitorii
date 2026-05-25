@@ -175,6 +175,10 @@ pub fn get_package_client(platform: &str) -> Result<Box<dyn PackageClient>> {
             "Radicle is peer-to-peer and has no central package registry. \
              Distribute binaries via the project's own channel or mirror to a registry host.".to_string()
         )),
+        "bitbucket" => Err(ToriiError::InvalidConfig(
+            "Bitbucket Cloud has no Package Registry. Binary distribution happens via the \
+             Downloads tab (flat file list) or external hosting.".to_string()
+        )),
         other => Err(ToriiError::InvalidConfig(
             format!("Unsupported platform: {}. Supported for `torii package`: gitlab", other)
         )),

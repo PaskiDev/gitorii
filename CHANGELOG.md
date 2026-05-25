@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.17] - 2026-05-25
+
+### Added
+
+- **Bitbucket Cloud support** (6th platform). Detection: `bitbucket.org`
+  URLs auto-route. Auth heuristic: tokens containing `:` are treated as
+  `username:app_password` (Basic header, base64-encoded); anything else
+  is sent as a `Bearer` token. New dep: `base64 = "0.22"`. Configure
+  with: `torii auth set bitbucket USERNAME:APP_PASSWORD` (create the
+  app password at https://bitbucket.org/account/settings/app-passwords).
+  - **PRs**: full surface — `list / create / get / merge / close /
+    update / delete_branch`. Merge methods map: torii `merge` →
+    Bitbucket `merge_commit`, `squash` → `squash`, `rebase` →
+    `fast_forward` (Bitbucket's closest analog).
+  - **Issues**: `list / create / close / comment` via the deprecated-
+    but-functional Bitbucket Cloud issues API. Repos without issues
+    enabled return 404 with a clear hint.
+  - **Pipelines**: `list / cancel / list_jobs / job_log` work via
+    Bitbucket Pipelines REST. `retry` / `delete` / per-step
+    retry/cancel return clear "not exposed via REST" errors —
+    Bitbucket's API doesn't surface those operations.
+  - **Releases**: returns a clear error — Bitbucket Cloud has no
+    Release-page object, only a "Downloads" tab (flat file list, no
+    notes / tag binding). Use annotated tags + Downloads manually, or
+    mirror to a host with native releases.
+  - **Packages**: returns a clear error — no native Package Registry
+    on Bitbucket Cloud.
+
+### Notes
+
+- Supported platforms now: **GitHub, GitLab, Gitea / Codeberg /
+  Forgejo, Sourcehut, Radicle, Bitbucket Cloud** — six. Azure DevOps
+  arrives in 0.7.18.
+- Self-hosted Bitbucket Data Center has a different URL shape and a
+  partially different API (REST `/rest/api/1.0/`) and will need a
+  separate client. Tracked for after 0.8.0 (`platforms.toml` config).
+
 ## [0.7.16] - 2026-05-25
 
 ### Added

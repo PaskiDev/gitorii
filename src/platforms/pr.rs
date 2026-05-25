@@ -638,6 +638,203 @@ fn parse_radicle_patch(v: &serde_json::Value) -> Result<PullRequest> {
 }
 
 // ============================================================================
+// Bitbucket Cloud
+// ============================================================================
+//
+// Bitbucket Cloud's REST v2 at `api.bitbucket.org/2.0`. Auth is Basic
+// with `user:app_password`; if the user stores the token without the
+// `:` we treat it as a Bearer (OAuth) token instead. The terminology:
+//   workspace ≈ owner   (the org / user slug)
+//   repo_slug ≈ repo    (the project slug)
+//   state strings are UPPERCASE: OPEN / MERGED / DECLINED / SUPERSEDED
+// Pages come wrapped in `{ values: [...], pagelen, next }` — we read
+// just the first page (50 entries) like the other clients do.
+
+pub struct BitbucketPrClient {
+    token: String,
+}
+
+impl BitbucketPrClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("bitbucket", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Bitbucket token not found. Create an app password at \
+                 https://bitbucket.org/account/settings/app-passwords/ \
+                 and run: torii auth set bitbucket USERNAME:APP_PASSWORD".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+
+    /// Bitbucket accepts either `Basic base64(user:apppwd)` for app
+    /// passwords or `Bearer <oauth>` for OAuth tokens. Heuristic: if the
+    /// stored value contains `:`, treat it as `user:pass`; otherwise
+    /// pass it through as a bearer token.
+    fn auth(&self) -> String {
+        if self.token.contains(':') {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&self.token);
+            format!("Basic {}", b64)
+        } else {
+            format!("Bearer {}", self.token)
+        }
+    }
+}
+
+/// Translate torii's normalised state (`open`/`closed`/`merged`/`all`)
+/// into Bitbucket's uppercase enum. `closed` maps to DECLINED because
+/// MERGED is a distinct state on Bitbucket.
+fn bitbucket_state(state: &str) -> &'static str {
+    match state {
+        "open"   => "OPEN",
+        "closed" => "DECLINED",
+        "merged" => "MERGED",
+        _        => "OPEN",
+    }
+}
+
+impl PrClient for BitbucketPrClient {
+    fn create(&self, owner: &str, repo: &str, opts: CreatePrOptions) -> Result<PullRequest> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests",
+            owner, repo
+        );
+        let body = serde_json::json!({
+            "title":       opts.title,
+            "description": opts.body.unwrap_or_default(),
+            "source":      { "branch": { "name": opts.head } },
+            "destination": { "branch": { "name": opts.base } },
+            "draft":       opts.draft,
+        });
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        let json = crate::http::send_json(req, "Bitbucket create PR")?;
+        parse_bitbucket_pr(&json)
+    }
+
+    fn list(&self, owner: &str, repo: &str, state: &str) -> Result<Vec<PullRequest>> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests?state={}&pagelen=50",
+            owner, repo, bitbucket_state(state)
+        );
+        let req = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &format!("Bitbucket (url: {})", url))?;
+        let arr = json["values"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Bitbucket returned no `values` array. Body: {}", json
+            )))?;
+        arr.iter().map(parse_bitbucket_pr).collect()
+    }
+
+    fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests/{}",
+            owner, repo, number
+        );
+        let req = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &format!("Bitbucket PR #{}", number))?;
+        parse_bitbucket_pr(&json)
+    }
+
+    fn merge(&self, owner: &str, repo: &str, number: u64, method: MergeMethod) -> Result<()> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests/{}/merge",
+            owner, repo, number
+        );
+        let strategy = match method {
+            MergeMethod::Merge  => "merge_commit",
+            MergeMethod::Squash => "squash",
+            // Bitbucket's `fast_forward` is the closest analog to git rebase
+            // for a PR merge — it preserves linear history.
+            MergeMethod::Rebase => "fast_forward",
+        };
+        let body = serde_json::json!({ "merge_strategy": strategy });
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&body);
+        crate::http::send_empty(req, "Bitbucket merge PR")
+    }
+
+    fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        // Bitbucket closes PRs by "declining" them.
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests/{}/decline",
+            owner, repo, number
+        );
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        crate::http::send_empty(req, "Bitbucket decline PR")
+    }
+
+    fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/pullrequests/{}",
+            owner, repo, number
+        );
+        let mut body = serde_json::Map::new();
+        if let Some(t) = opts.title { body.insert("title".into(), serde_json::Value::String(t)); }
+        if let Some(b) = opts.body  { body.insert("description".into(), serde_json::Value::String(b)); }
+        if let Some(base) = opts.base {
+            body.insert("destination".into(), serde_json::json!({ "branch": { "name": base } }));
+        }
+        if body.is_empty() { return Ok(()); }
+        let req = self.client().put(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json")
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "Bitbucket update PR")
+    }
+
+    fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}/refs/branches/{}",
+            owner, repo, branch
+        );
+        let req = self.client().delete(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", "application/json");
+        crate::http::send_empty(req, "Bitbucket delete branch")
+    }
+
+    fn checkout_branch(&self, pr: &PullRequest) -> String {
+        pr.head.clone()
+    }
+}
+
+fn parse_bitbucket_pr(json: &serde_json::Value) -> Result<PullRequest> {
+    Ok(PullRequest {
+        number:     json["id"].as_u64().unwrap_or(0),
+        title:      json["title"].as_str().unwrap_or("").to_string(),
+        body:       json["description"].as_str().map(String::from),
+        // Normalise back to lowercase to match the rest of torii.
+        state:      match json["state"].as_str().unwrap_or("") {
+            "OPEN"     => "open".to_string(),
+            "MERGED"   => "merged".to_string(),
+            "DECLINED" => "closed".to_string(),
+            other      => other.to_lowercase(),
+        },
+        head:       json["source"]["branch"]["name"].as_str().unwrap_or("").to_string(),
+        base:       json["destination"]["branch"]["name"].as_str().unwrap_or("").to_string(),
+        author:     json["author"]["display_name"].as_str()
+                        .or_else(|| json["author"]["username"].as_str())
+                        .unwrap_or("").to_string(),
+        url:        json["links"]["html"]["href"].as_str().unwrap_or("").to_string(),
+        draft:      json["draft"].as_bool().unwrap_or(false),
+        mergeable:  None, // Bitbucket doesn't surface a mergeable flag on the list endpoint.
+        created_at: json["created_on"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -648,8 +845,9 @@ pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
         "gitea"     => Ok(Box::new(GiteaPrClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutPrClient::new()?)),
         "radicle"   => Ok(Box::new(RadiclePrClient::new()?)),
+        "bitbucket" => Ok(Box::new(BitbucketPrClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket", other)
         )),
     }
 }
@@ -681,11 +879,15 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     // 0.7.16: rad:// URLs detected as "radicle" — fully peer-to-peer,
     // all ops drive the local `rad` CLI. owner is the RID; repo is
     // unused (Radicle is per-project, not per-repo-within-org).
+    // 0.7.17: bitbucket.org detected as "bitbucket". Bitbucket Cloud
+    // only — self-hosted Bitbucket Data Center has a different URL
+    // shape and API surface, falls through to None for now.
     let platform = if url.contains("github.com") { "github" }
         else if url.contains("gitlab.com") { "gitlab" }
         else if url.contains("codeberg.org") { "gitea" }
         else if url.contains("git.sr.ht") { "sourcehut" }
         else if url.starts_with("rad://") || url.starts_with("rad@") { "radicle" }
+        else if url.contains("bitbucket.org") { "bitbucket" }
         else { return None; };
 
     // Radicle URLs are `rad://<seed-host>/<RID>` — there's no
