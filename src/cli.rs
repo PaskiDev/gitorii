@@ -3543,7 +3543,7 @@ impl Cli {
             }
 
             Commands::Workspace { action } => {
-                use crate::workspace::WorkspaceManager;
+                use crate::workspace::workspace::WorkspaceManager;
                 match action {
                     WorkspaceCommands::Add { workspace, path } => {
                         WorkspaceManager::add(workspace, path)?;

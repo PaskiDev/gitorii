@@ -3,51 +3,90 @@
 // See LICENSE file in the project root for full license information.
 // Commercial use is prohibited without explicit written permission from the copyright holder.
 
-mod auth;
+// ── Core ─────────────────────────────────────────────────────────────────────
 mod cli;
-mod cloud;
-mod config;
-mod core;
-mod core_extensions;
-mod core_tag;
-mod duration;
 mod error;
-mod gpg;
-mod http;
-mod mirror;
-mod remote;
-mod hooks;
-mod scanner;
-mod snapshot;
-mod ssh;
-mod tag;
-mod commit_scan;
-mod graph;
-mod history_reauthor;
-mod toriignore;
-mod transport;
-mod updater;
-mod url;
-mod versioning;
-mod pr;
-mod issue;
-mod pipeline;
-mod package;
-mod release;
-mod tui;
-mod archive;
-mod bisect;
-mod clean;
-mod describe;
-mod fileops;
-mod grep;
-mod notes;
-mod patch;
-mod radicle;
-mod submodule;
-mod subtree;
+
+// ── Top-level modules (organised by concern) ─────────────────────────────────
+//
+// Each subdir owns one slice of the codebase:
+//   - platforms/ : github/gitlab/gitea/sourcehut/radicle clients
+//   - vcs/       : libgit2 wrappers around the object database
+//   - cmd/       : thin wrappers around `git` subcommands
+//   - workspace/ : remote, mirror, multi-repo orchestration
+//   - util/      : config, auth, URL parsing, HTTP/SSH/gpg/radicle helpers
+//   - tui/       : interactive terminal UI
+//   - cloud/     : gitorii.com cloud (api key, sync)
+//   - transport/ : libgit2 transport plumbing
+//   - versioning/: SemVer + conventional commits helpers
+mod platforms;
+mod vcs;
+mod cmd;
 mod workspace;
-mod worktree;
+mod util;
+mod tui;
+mod cloud;
+mod transport;
+mod versioning;
+
+// ── Backwards-compatible re-exports ─────────────────────────────────────────
+//
+// Until 0.7.16 every module sat directly under `src/`. Hundreds of
+// `use crate::pr::` / `use crate::core::` / etc. call-sites depend on
+// those paths. Rather than sweep every file, we re-expose each moved
+// module at the crate root with `pub use`. New code should prefer the
+// canonical `crate::platforms::pr` etc. paths.
+
+// platforms/
+pub use platforms::pr;
+pub use platforms::issue;
+pub use platforms::pipeline;
+pub use platforms::package;
+pub use platforms::release;
+
+// vcs/
+pub use vcs::core;
+pub use vcs::core_extensions;
+pub use vcs::core_tag;
+pub use vcs::tag;
+pub use vcs::snapshot;
+pub use vcs::patch;
+pub use vcs::history_reauthor;
+pub use vcs::commit_scan;
+pub use vcs::scanner;
+
+// cmd/
+pub use cmd::archive;
+pub use cmd::bisect;
+pub use cmd::clean;
+pub use cmd::describe;
+pub use cmd::fileops;
+pub use cmd::grep;
+pub use cmd::notes;
+pub use cmd::submodule;
+pub use cmd::subtree;
+pub use cmd::worktree;
+
+// workspace/
+pub use workspace::mirror;
+pub use workspace::remote;
+// `workspace::workspace` keeps its nested name to avoid colliding with
+// the parent module; the single call-site that needs `WorkspaceManager`
+// already references the long path.
+
+// util/
+pub use util::auth;
+pub use util::config;
+pub use util::duration;
+pub use util::url;
+pub use util::toriignore;
+pub use util::hooks;
+pub use util::updater;
+pub use util::http;
+pub use util::ssh;
+pub use util::graph;
+pub use util::gpg;
+pub use util::radicle;
 
 use anyhow::Result;
 use cli::Cli;
