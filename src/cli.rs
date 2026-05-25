@@ -4527,9 +4527,24 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
             }
         }
         AuthCommands::Oauth { provider, local } => {
-            // Use the dedicated, public-doc'd entry point so a future
-            // refactor of the oauth module doesn't touch this dispatch.
-            let token = crate::oauth::run_device_flow(provider)?;
+            // Pick the right OAuth flow for the provider. Most platforms
+            // support RFC 8628 Device Flow; a few (e.g. Bitbucket) only
+            // support Authorization Code Grant and need a localhost
+            // loopback server. Both end at the same point: an access
+            // token saved under the same provider key.
+            let token = if crate::oauth::device_flow_supported(provider) {
+                crate::oauth::run_device_flow(provider)?
+            } else if crate::oauth::auth_code_flow_supported(provider) {
+                crate::oauth::run_auth_code_flow(provider)?
+            } else {
+                anyhow::bail!(
+                    "OAuth flow not configured for `{}`. \
+                     Device flow supports: github, gitlab, codeberg. \
+                     Auth-code flow supports: bitbucket. \
+                     For other providers, create a PAT manually and run `torii auth set {} ...`.",
+                    provider, provider
+                );
+            };
             let repo: Option<&std::path::Path> = if *local {
                 Some(std::path::Path::new("."))
             } else {

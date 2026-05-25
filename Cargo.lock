@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "gitorii"
-version = "0.7.20"
+version = "0.7.21"
 dependencies = [
  "anyhow",
  "base64",
@@ -1211,6 +1211,7 @@ dependencies = [
  "russh",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 1.0.69",
  "tokio",
