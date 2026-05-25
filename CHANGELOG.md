@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.16] - 2026-05-25
+
+### Added
+
+- **Radicle support** (5th platform, peer-to-peer). Detection: any
+  remote URL starting with `rad://` or `rad@` routes through the
+  Radicle client. RID is parsed into the `owner` slot; `repo` is left
+  empty because Radicle projects are flat (no owner/repo split).
+  - New `src/radicle.rs` module wraps the local `rad` binary via
+    `run_rad(args)` and `run_rad_json(args)`. Same shape as
+    `src/gpg.rs`: subprocess + clear error if the binary is missing
+    (link to https://radicle.xyz).
+  - **Issues**: `rad issue list / open` work. `close` and `comment`
+    return clear errors because Radicle identifies issues by hash,
+    not by `u64`, and torii's `IssueClient` trait still takes
+    `number: u64`. A future revision of the trait (string-id variant)
+    will close that gap.
+  - **Patches** (Radicle's PR equivalent): `rad patch list / open`
+    work. `get / merge / close / update / delete_branch` return clear
+    errors pointing at `rad patch <op> <hash>` for the same hash-vs-
+    number reason.
+  - **Pipelines / Releases / Packages**: clear errors — Radicle has
+    no native CI, no Release-page object, no package registry.
+    Mirror to a host that does, or run CI locally.
+
+### Notes
+
+- Supported platforms now: **GitHub, GitLab, Gitea / Codeberg /
+  Forgejo, Sourcehut, Radicle** — five. The roadmap target for the
+  "0.7.13 → 0.7.16 multi-platform expansion" is complete.
+
 ## [0.7.15] - 2026-05-25
 
 ### Added

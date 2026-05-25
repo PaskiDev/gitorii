@@ -524,6 +524,120 @@ impl PrClient for SourcehutPrClient {
 }
 
 // ============================================================================
+// Radicle (peer-to-peer, via `rad patch` CLI)
+// ============================================================================
+//
+// Radicle calls "pull requests" *patches*. They're stored as refs
+// inside the project's collaborative space (`refs/cobs/xyz.radicle.patch`)
+// and synchronised peer-to-peer. There is no HTTP API; everything goes
+// through the local `rad` binary.
+
+pub struct RadiclePrClient;
+
+impl RadiclePrClient {
+    pub fn new() -> Result<Self> { Ok(Self) }
+}
+
+impl PrClient for RadiclePrClient {
+    fn create(&self, _o: &str, _r: &str, opts: CreatePrOptions) -> Result<PullRequest> {
+        // `rad patch open` creates a patch from the current branch
+        // against the project's default branch. We pass title +
+        // description; head/base are picked up from the current
+        // checkout.
+        let body = opts.body.unwrap_or_default();
+        let stdout = crate::radicle::run_rad(&[
+            "patch", "open",
+            "--message", &opts.title,
+            "--message", &body,
+        ])?;
+        let id = stdout.trim().lines().last().unwrap_or("").trim().to_string();
+        Ok(PullRequest {
+            number:     0,
+            title:      opts.title,
+            body:       Some(body),
+            state:      "open".to_string(),
+            head:       opts.head,
+            base:       opts.base,
+            author:     String::new(),
+            url:        format!("rad:{}", id),
+            draft:      opts.draft,
+            mergeable:  None,
+            created_at: String::new(),
+        })
+    }
+
+    fn list(&self, _o: &str, _r: &str, state: &str) -> Result<Vec<PullRequest>> {
+        let st = match state {
+            "open"   => "open",
+            "closed" => "archived",
+            "merged" => "merged",
+            _        => "all",
+        };
+        let json = crate::radicle::run_rad_json(&["patch", "list", "--state", st])?;
+        let arr = json.as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig("rad patch list: expected array".into()))?;
+        Ok(arr.iter().filter_map(|v| parse_radicle_patch(v).ok()).collect())
+    }
+
+    fn get(&self, _o: &str, _r: &str, _number: u64) -> Result<PullRequest> {
+        Err(ToriiError::InvalidConfig(
+            "Radicle patches are identified by hash, not number. Use \
+             `rad patch show <id>` directly until torii's PrClient trait \
+             grows a string-id variant.".to_string()
+        ))
+    }
+
+    fn merge(&self, _o: &str, _r: &str, _number: u64, _method: MergeMethod) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Radicle patches merge through `rad patch merge <id>` directly. \
+             The CLI's numeric merge surface doesn't apply.".to_string()
+        ))
+    }
+
+    fn close(&self, _o: &str, _r: &str, _number: u64) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Radicle uses `rad patch archive <id>` (by hash) to close a patch.".to_string()
+        ))
+    }
+
+    fn update(&self, _o: &str, _r: &str, _number: u64, _opts: UpdatePrOptions) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Radicle patches are updated by pushing a new revision \
+             (`git push rad HEAD:refs/patches/<id>`). Use the CLI directly.".to_string()
+        ))
+    }
+
+    fn delete_branch(&self, _o: &str, _r: &str, _b: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Radicle patches don't have branches in the github sense; revisions live in COB refs.".to_string()
+        ))
+    }
+
+    fn checkout_branch(&self, pr: &PullRequest) -> String {
+        pr.head.clone()
+    }
+}
+
+fn parse_radicle_patch(v: &serde_json::Value) -> Result<PullRequest> {
+    let id = v["id"].as_str().unwrap_or("");
+    Ok(PullRequest {
+        number:     0,
+        title:      v["title"].as_str().unwrap_or("").to_string(),
+        body:       v["description"].as_str().map(String::from),
+        state:      v["state"]["status"].as_str().unwrap_or("open").to_string(),
+        head:       v["head"].as_str().unwrap_or("").to_string(),
+        base:       v["base"].as_str().unwrap_or("").to_string(),
+        author:     v["author"]["alias"].as_str()
+                        .or_else(|| v["author"]["id"].as_str())
+                        .unwrap_or("").to_string(),
+        url:        format!("rad:{}", id),
+        draft:      v["draft"].as_bool().unwrap_or(false),
+        mergeable:  None,
+        created_at: v["timestamp"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
@@ -533,8 +647,9 @@ pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
         "gitlab"    => Ok(Box::new(GitLabPrClient::new()?)),
         "gitea"     => Ok(Box::new(GiteaPrClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutPrClient::new()?)),
+        "radicle"   => Ok(Box::new(RadiclePrClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle", other)
         )),
     }
 }
@@ -563,11 +678,29 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     // in 0.8.0); for now they fall through to None.
     // 0.7.15: git.sr.ht detected as "sourcehut" — issues + builds
     // supported, PR / release / package have no equivalent there.
+    // 0.7.16: rad:// URLs detected as "radicle" — fully peer-to-peer,
+    // all ops drive the local `rad` CLI. owner is the RID; repo is
+    // unused (Radicle is per-project, not per-repo-within-org).
     let platform = if url.contains("github.com") { "github" }
         else if url.contains("gitlab.com") { "gitlab" }
         else if url.contains("codeberg.org") { "gitea" }
         else if url.contains("git.sr.ht") { "sourcehut" }
+        else if url.starts_with("rad://") || url.starts_with("rad@") { "radicle" }
         else { return None; };
+
+    // Radicle URLs are `rad://<seed-host>/<RID>` — there's no
+    // owner/repo split, the RID identifies the project globally. We
+    // shove the RID into `owner` and leave `repo` empty so callers
+    // have a non-empty key to work with.
+    if platform == "radicle" {
+        let rid = url
+            .trim_start_matches("rad://")
+            .trim_start_matches("rad@")
+            .split('/').last()?
+            .trim_end_matches(".git")
+            .to_string();
+        return Some((platform.to_string(), rid, String::new()));
+    }
 
     let path = if url.contains('@') {
         url.splitn(2, ':').nth(1)?

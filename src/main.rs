@@ -43,6 +43,7 @@ mod fileops;
 mod grep;
 mod notes;
 mod patch;
+mod radicle;
 mod submodule;
 mod subtree;
 mod workspace;
