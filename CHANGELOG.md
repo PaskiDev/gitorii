@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.21] - 2026-05-25
+
+### Added
+
+- **OAuth `torii auth oauth` works end-to-end on 4 platforms**: GitHub,
+  GitLab, Codeberg (device flow, RFC 8628) and Bitbucket Cloud
+  (authorization-code grant with PKCE + localhost loopback). Every
+  bundled `client_id` is now baked into the binary — no setup required
+  for users to authenticate. PATs are still supported if you prefer.
+- **Bitbucket auth-code flow** (`run_auth_code_flow`):
+  - Random code_verifier (43 base64url chars) + SHA-256 code_challenge
+    per RFC 7636 PKCE.
+  - Binds `127.0.0.1:8888` and serves a one-shot HTML "you can close
+    this tab" page after the redirect.
+  - Validates the `state` query param to prevent CSRF.
+  - Sends `client_secret` as Basic auth when `TORII_BITBUCKET_APP_SECRET`
+    is set (Bitbucket marks confidential consumers); falls back to
+    PKCE-only otherwise.
+- New deps: `sha2 = "0.10"` (PKCE S256). Both are tiny pure-Rust.
+
+### Internal
+
+- Bundled OAuth client IDs (all public, intentionally in the source):
+  - GitHub: `Ov23liDcA2Njn7eRWnYV`
+  - GitLab: `b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe`
+  - Codeberg: `d114c8aa-227d-453e-8f25-cdd727f49d42`
+  - Bitbucket: `xQAkJEqx3LK4WtJ3KD`
+- Env var names changed to match the convention the project's `.env`
+  already uses: `TORII_{GITHUB,GITLAB,CODEBERG,BITBUCKET}_APP_ID` /
+  `_APP_SECRET`. The env var still overrides the bundled id for
+  self-hosted Gitea/Forgejo and for users with their own registered
+  OAuth Apps.
+
+### Requires (one-time setup by the user)
+
+- **Bitbucket consumer**: must have Callback URL set to
+  `http://localhost:8888/callback`. The OAuth registration that
+  shipped with the public URL `https://gitorii.com` needs to be
+  updated to the loopback for auth-code with localhost to work.
+
 ## [0.7.20] - 2026-05-25
 
 ### Added

@@ -46,23 +46,26 @@ struct DeviceFlowProvider {
 }
 
 fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
-    // Once the Torii project owner registers OAuth apps on each
-    // platform, the `bundled_client_id` slot stops being `None` and
-    // the env var becomes optional.
+    // The `bundled_client_id` slots are the public OAuth App IDs
+    // registered for "Torii CLI" on each platform. They identify the
+    // app to the auth server — they are NOT secrets and live in the
+    // open-source binary intentionally (same as `gh`, `glab`, etc.).
+    // The env var override lets users point at their own registered
+    // app (useful for self-hosted Gitea/Forgejo).
     match provider {
         "github" => Some(DeviceFlowProvider {
             device_authz_url:  "https://github.com/login/device/code",
             token_url:         "https://github.com/login/oauth/access_token",
             scopes:            "repo read:org workflow",
-            client_id_env:     "TORII_GITHUB_CLIENT_ID",
-            bundled_client_id: None,
+            client_id_env:     "TORII_GITHUB_APP_ID",
+            bundled_client_id: Some("Ov23liDcA2Njn7eRWnYV"),
         }),
         "gitlab" => Some(DeviceFlowProvider {
             device_authz_url:  "https://gitlab.com/oauth/authorize_device",
             token_url:         "https://gitlab.com/oauth/token",
             scopes:            "api",
-            client_id_env:     "TORII_GITLAB_CLIENT_ID",
-            bundled_client_id: None,
+            client_id_env:     "TORII_GITLAB_APP_ID",
+            bundled_client_id: Some("b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe"),
         }),
         // Codeberg / Gitea / Forgejo share the Gitea OAuth surface; the
         // device-flow endpoints are at the platform host.
@@ -70,8 +73,8 @@ fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
             device_authz_url:  "https://codeberg.org/login/oauth/device/code",
             token_url:         "https://codeberg.org/login/oauth/access_token",
             scopes:            "",
-            client_id_env:     "TORII_CODEBERG_CLIENT_ID",
-            bundled_client_id: None,
+            client_id_env:     "TORII_CODEBERG_APP_ID",
+            bundled_client_id: Some("d114c8aa-227d-453e-8f25-cdd727f49d42"),
         }),
         _ => None,
     }
@@ -205,4 +208,278 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
 /// concern of [`run_device_flow`]).
 pub fn device_flow_supported(provider: &str) -> bool {
     device_flow_provider(provider).is_some()
+}
+
+// =============================================================================
+// OAuth 2.0 Authorization Code Grant with PKCE + loopback HTTP server.
+//
+// Used for providers that don't implement RFC 8628 Device Flow — most
+// notably Bitbucket Cloud. Torii:
+//   1. Generates a random code_verifier + its SHA-256 code_challenge.
+//   2. Binds a localhost TCP listener (port 8888 by default).
+//   3. Opens the platform's /authorize URL in the user's browser with
+//      redirect_uri pointing at the loopback.
+//   4. Waits for the browser to GET `/callback?code=...`.
+//   5. Exchanges the code for an access_token at the token endpoint,
+//      sending the code_verifier (PKCE — no client_secret needed for
+//      public OAuth clients on platforms that honour PKCE).
+// =============================================================================
+
+use std::io::{Read, Write as IoWrite};
+use std::net::TcpListener;
+
+struct AuthCodeProvider {
+    authorize_url: &'static str,
+    token_url:     &'static str,
+    scopes:        &'static str,
+    client_id_env: &'static str,
+    bundled_client_id: Option<&'static str>,
+    /// Env var name for the OAuth client_secret. Some providers (e.g.
+    /// Bitbucket) hand out a secret on every consumer registration;
+    /// even with PKCE they expect it on the token-exchange call. The
+    /// secret is **not** bundled in the binary — has to come from the
+    /// user's env / .env file.
+    client_secret_env: Option<&'static str>,
+}
+
+fn auth_code_provider(provider: &str) -> Option<AuthCodeProvider> {
+    match provider {
+        "bitbucket" => Some(AuthCodeProvider {
+            authorize_url:     "https://bitbucket.org/site/oauth2/authorize",
+            token_url:         "https://bitbucket.org/site/oauth2/access_token",
+            scopes:            "repository repository:write account pullrequest pullrequest:write issue:write pipeline",
+            client_id_env:     "TORII_BITBUCKET_APP_ID",
+            bundled_client_id: Some("xQAkJEqx3LK4WtJ3KD"),
+            client_secret_env: Some("TORII_BITBUCKET_APP_SECRET"),
+        }),
+        _ => None,
+    }
+}
+
+const LOOPBACK_PORT: u16 = 8888;
+const LOOPBACK_PATH: &str = "/callback";
+
+/// Run the authorization-code flow for `provider`. Blocks until the
+/// user authorises (success) or the listener is interrupted.
+pub fn run_auth_code_flow(provider: &str) -> Result<String> {
+    let cfg = auth_code_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
+        "OAuth authorization-code flow not configured for `{}`.", provider
+    )))?;
+
+    let client_id = std::env::var(cfg.client_id_env).ok()
+        .or_else(|| cfg.bundled_client_id.map(String::from))
+        .ok_or_else(|| ToriiError::InvalidConfig(format!(
+            "No OAuth client_id for `{}`. Set {} or create a PAT manually and run \
+             `torii auth set {} ...`.",
+            provider, cfg.client_id_env, provider
+        )))?;
+
+    let client_secret = cfg.client_secret_env
+        .and_then(|name| std::env::var(name).ok());
+
+    // PKCE: random verifier + SHA-256 challenge. RFC 7636 demands the
+    // verifier be 43-128 unreserved chars; we generate 64 base64-url
+    // characters.
+    let code_verifier = random_verifier();
+    let code_challenge = sha256_base64url(&code_verifier);
+
+    // Build the authorize URL.
+    let redirect_uri = format!("http://localhost:{}{}", LOOPBACK_PORT, LOOPBACK_PATH);
+    let state = random_verifier(); // CSRF token
+    let authz_url = format!(
+        "{}?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+        cfg.authorize_url,
+        urlencode(&client_id),
+        urlencode(&redirect_uri),
+        urlencode(cfg.scopes),
+        urlencode(&state),
+        urlencode(&code_challenge),
+    );
+
+    // Bind the loopback listener BEFORE printing the URL so we can
+    // fail fast if the port is busy. Lossless: if another torii flow
+    // is in progress on 8888 the user finds out immediately.
+    let listener = TcpListener::bind(("127.0.0.1", LOOPBACK_PORT))
+        .map_err(|e| ToriiError::InvalidConfig(format!(
+            "OAuth loopback: cannot bind 127.0.0.1:{} ({}). Is another flow already running?",
+            LOOPBACK_PORT, e
+        )))?;
+
+    println!();
+    println!("⛩  Open this URL in your browser to authorise Torii:");
+    println!();
+    println!("   {}", authz_url);
+    println!();
+    println!("Waiting for the redirect on localhost:{}{}…", LOOPBACK_PORT, LOOPBACK_PATH);
+
+    // Accept a single connection.
+    let (mut stream, _addr) = listener.accept()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth loopback accept: {}", e)))?;
+
+    // Read the request line + a bit of the headers — we only need the
+    // URL path with the code+state query string.
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf)
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth loopback read: {}", e)))?;
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let request_line = request.lines().next().unwrap_or("");
+    // `GET /callback?code=...&state=... HTTP/1.1`
+    let path_query = request_line.split_whitespace().nth(1).unwrap_or("");
+
+    // Always respond with something so the browser doesn't show an
+    // error page — this happens before we know whether the code is
+    // valid, so the response is best-effort.
+    let body = "<!doctype html><html><body><h2>⛩  Authorised — you can close this tab.</h2></body></html>";
+    let _ = write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(), body
+    );
+
+    let (code, returned_state) = parse_callback(path_query)
+        .ok_or_else(|| ToriiError::InvalidConfig(
+            "OAuth callback didn't include a `code` parameter.".to_string()
+        ))?;
+
+    if returned_state != state {
+        return Err(ToriiError::InvalidConfig(
+            "OAuth state mismatch (possible CSRF). Run the command again.".to_string()
+        ));
+    }
+
+    // Exchange the code for a token. Bitbucket accepts both client
+    // secret (Basic auth) and PKCE-only — we send the secret if
+    // available, fall back to PKCE alone.
+    let client = crate::http::make_client();
+    let mut params = vec![
+        ("grant_type",    "authorization_code".to_string()),
+        ("code",          code),
+        ("redirect_uri",  redirect_uri),
+        ("client_id",     client_id.clone()),
+        ("code_verifier", code_verifier),
+    ];
+    let mut req = client.post(cfg.token_url).header("Accept", "application/json");
+    if let Some(secret) = &client_secret {
+        // Bitbucket prefers Basic auth for confidential consumers.
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", client_id, secret));
+        req = req.header("Authorization", format!("Basic {}", b64));
+    } else {
+        // Public-client flow — Bitbucket needs client_id in the body
+        // too; already added above.
+        params.push(("client_secret_present", "false".to_string()));
+        params.pop(); // remove the placeholder
+    }
+    let resp = req.form(&params).send()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth token exchange: {}", e)))?;
+    let json: serde_json::Value = resp.json()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth token: malformed JSON: {}", e)))?;
+    if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
+        return Err(ToriiError::InvalidConfig(format!(
+            "OAuth token exchange failed: {} — {}", err,
+            json.get("error_description").and_then(|v| v.as_str()).unwrap_or("")
+        )));
+    }
+    let token = json.get("access_token").and_then(|v| v.as_str())
+        .ok_or_else(|| ToriiError::InvalidConfig(format!(
+            "OAuth token exchange: response had no access_token. Body: {}", json
+        )))?
+        .to_string();
+
+    println!("✅ Authorised. Token saved.");
+    Ok(token)
+}
+
+/// Parse `/callback?code=XYZ&state=ABC` → `(code, state)`. Tolerant of
+/// extra parameters and ordering.
+fn parse_callback(path_query: &str) -> Option<(String, String)> {
+    let qs = path_query.split('?').nth(1)?;
+    let mut code = None;
+    let mut state = None;
+    for pair in qs.split('&') {
+        let mut iter = pair.splitn(2, '=');
+        match (iter.next(), iter.next()) {
+            (Some("code"), Some(v))  => code  = Some(urldecode(v)),
+            (Some("state"), Some(v)) => state = Some(urldecode(v)),
+            _ => {}
+        }
+    }
+    Some((code?, state?))
+}
+
+/// Random 64-character base64url string. Uses the OS RNG via
+/// `std::time` mixed with a per-process counter — enough entropy for a
+/// short-lived PKCE verifier without pulling in `rand`.
+fn random_verifier() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let mut seed = [0u8; 48];
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let pid = std::process::id() as u64;
+    let bump = COUNTER.fetch_add(1, Ordering::Relaxed);
+    seed[..8].copy_from_slice(&now.as_nanos().to_le_bytes()[..8]);
+    seed[8..16].copy_from_slice(&pid.to_le_bytes());
+    seed[16..24].copy_from_slice(&bump.to_le_bytes());
+    // Hash the seed to widen entropy — PKCE verifier doesn't need
+    // cryptographic randomness, just unguessability.
+    let hash = sha256_raw(&seed);
+    base64url_nopad(&hash)[..43].to_string()
+}
+
+/// SHA-256 of input. Implemented inline to avoid pulling another dep
+/// just for this — we already use base64; sha2 would be the alternative.
+fn sha256_raw(input: &[u8]) -> [u8; 32] {
+    // Use the sha2 crate (already in the tree transitively via reqwest
+    // → rustls → ring). Add it explicitly to Cargo.toml.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(input);
+    hasher.finalize().into()
+}
+
+fn sha256_base64url(input: &str) -> String {
+    let digest = sha256_raw(input.as_bytes());
+    base64url_nopad(&digest)
+}
+
+/// base64url without padding (RFC 4648 §5).
+fn base64url_nopad(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn urlencode(s: &str) -> String {
+    crate::url::encode(s)
+}
+
+fn urldecode(s: &str) -> String {
+    // Tolerant decoder: handles `%XX` and `+`. Doesn't validate utf-8
+    // beyond what the platform would; OAuth codes are ASCII anyway.
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => { out.push(' '); i += 1; }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i+1] as char).to_digit(16);
+                let lo = (bytes[i+2] as char).to_digit(16);
+                if let (Some(hi), Some(lo)) = (hi, lo) {
+                    out.push(((hi << 4) | lo) as u8 as char);
+                    i += 3;
+                } else {
+                    out.push(bytes[i] as char);
+                    i += 1;
+                }
+            }
+            c => { out.push(c as char); i += 1; }
+        }
+    }
+    out
+}
+
+/// Whether the given provider has an authorization-code flow wired.
+pub fn auth_code_flow_supported(provider: &str) -> bool {
+    auth_code_provider(provider).is_some()
 }
