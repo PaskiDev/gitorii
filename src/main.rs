@@ -12,6 +12,7 @@ mod core_extensions;
 mod core_tag;
 mod duration;
 mod error;
+mod gpg;
 mod http;
 mod mirror;
 mod remote;

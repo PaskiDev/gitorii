@@ -1370,8 +1370,9 @@ fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
     let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
     let parents: Vec<&git2::Commit> = parent.iter().collect();
 
-    repo.commit(Some("HEAD"), &author, &author, message, &tree, &parents)
-        .map_err(crate::error::ToriiError::Git)?;
+    // 0.7.14: route through commit_inner so `git.sign_commits = true`
+    // honours GPG signing from the TUI commit view too.
+    crate::core::commit_inner(&repo, Some("HEAD"), &author, message, &tree, &parents)?;
 
     Ok(())
 }
