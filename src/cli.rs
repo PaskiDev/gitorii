@@ -1759,6 +1759,25 @@ enum AuthCommands {
     /// local config, global config, or missing). Use this when "torii
     /// auth doesn't seem to use my token".
     Doctor,
+
+    /// Run an OAuth device-flow login against a platform and save the
+    /// resulting access token to `~/.config/torii/auth.toml`.
+    ///
+    /// Avoids having to create a Personal Access Token in the
+    /// platform's web UI: you authorise torii in your browser, torii
+    /// receives the token, done.
+    ///
+    /// Supported (0.7.20): github, gitlab, codeberg. Bitbucket and
+    /// Azure DevOps use Authorization Code flow with a localhost
+    /// callback — wired in a future release; for now `torii auth set
+    /// bitbucket USERNAME:APP_PASSWORD` is still the path there.
+    Oauth {
+        /// Provider name. One of: github, gitlab, codeberg.
+        provider: String,
+        /// Save in the per-repo store instead of the global one.
+        #[arg(long)]
+        local: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4506,6 +4525,19 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
             } else {
                 println!("(no {} token was set; nothing to remove)", provider);
             }
+        }
+        AuthCommands::Oauth { provider, local } => {
+            // Use the dedicated, public-doc'd entry point so a future
+            // refactor of the oauth module doesn't touch this dispatch.
+            let token = crate::oauth::run_device_flow(provider)?;
+            let repo: Option<&std::path::Path> = if *local {
+                Some(std::path::Path::new("."))
+            } else {
+                None
+            };
+            auth::set_token(provider, &token, repo)?;
+            let scope = if *local { "local" } else { "global" };
+            println!("✅ {} token saved ({} store).", provider, scope);
         }
         AuthCommands::Doctor => {
             println!("🔍 Token resolution (env > local > global):\n");

@@ -10,6 +10,7 @@ pub mod toriignore;
 pub mod hooks;
 pub mod updater;
 pub mod http;
+pub mod oauth;
 pub mod ssh;
 pub mod graph;
 pub mod gpg;
