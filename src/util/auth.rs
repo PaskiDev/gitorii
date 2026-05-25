@@ -75,6 +75,7 @@ pub const PROVIDERS: &[&str] = &[
     "codeberg",
     "bitbucket",
     "sourcehut",
+    "azure",      // 0.7.18 — Azure DevOps Repos / Pipelines / Releases / Artifacts
     "cargo",
 ];
 
@@ -353,6 +354,7 @@ fn env_vars_for(provider: &str) -> &'static [&'static str] {
         "forgejo" => &["FORGEJO_TOKEN"],
         "codeberg" => &["CODEBERG_TOKEN"],
         "bitbucket" => &["BITBUCKET_TOKEN"],
+        "azure"     => &["AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "AZDO_TOKEN"],
         "sourcehut" => &["SOURCEHUT_TOKEN", "SRHT_TOKEN"],
         "cargo" => &["CARGO_REGISTRY_TOKEN"],
         _ => &[],

@@ -1236,6 +1236,319 @@ fn parse_bitbucket_step(v: &serde_json::Value, pipeline_id: &str) -> Result<Job>
 // Factory
 // ============================================================================
 
+// ============================================================================
+// Azure DevOps Pipelines (Builds API)
+// ============================================================================
+//
+// Azure has two related surfaces here: the older "Build" definitions
+// (`_apis/build/builds`) and the newer "Pipelines" runs
+// (`_apis/pipelines/{id}/runs`). The Build API covers both — every
+// pipeline run shows up there with a richer set of operations
+// (cancel via PATCH, delete, logs) — so we use it.
+//
+// Build cancel happens by PATCHing `status: "cancelling"`. Retry isn't
+// a direct endpoint; we POST a new build using the same
+// `definition.id` (sourceBranch is filled from the original build).
+
+pub struct AzurePipelineClient {
+    token: String,
+}
+
+impl AzurePipelineClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("azure", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Azure DevOps PAT not found. Create at https://dev.azure.com/{org}/_usersSettings/tokens \
+                 with `Build (read/execute)` scope, then: torii auth set azure YOUR_PAT".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+
+    fn auth_header(&self) -> String {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(format!(":{}", self.token));
+        format!("Basic {}", b64)
+    }
+}
+
+impl PipelineClient for AzurePipelineClient {
+    fn list(&self, owner: &str, repo: &str, filters: &ListFilters) -> Result<Vec<Pipeline>> {
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        // Azure filters by status + result. status: notStarted, in
+        // progress, completed; result: succeeded, partiallySucceeded,
+        // failed, canceled. Map ours to those.
+        let mut params = vec![
+            format!("$top={}", filters.per_page.clamp(1, 100)),
+            "queryOrder=finishTimeDescending".to_string(),
+            // Azure filters builds by repository name — useful since
+            // builds live at the project level.
+            format!("repositoryId={}", repo),
+            "repositoryType=TfsGit".to_string(),
+        ];
+        if let Some(ref s) = filters.status {
+            match s.as_str() {
+                "success"  => { params.push("resultFilter=succeeded".into()); params.push("statusFilter=completed".into()); }
+                "failed"   => { params.push("resultFilter=failed".into()); params.push("statusFilter=completed".into()); }
+                "canceled" => { params.push("resultFilter=canceled".into()); params.push("statusFilter=completed".into()); }
+                "running"  => { params.push("statusFilter=inProgress".into()); }
+                "pending"  => { params.push("statusFilter=notStarted".into()); }
+                _ => {}
+            }
+        }
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds?api-version=7.0&{}",
+            org, project, params.join("&")
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Azure (url: {})", url))?;
+        let arr = json["value"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Azure returned no `value` array. Body: {}", json
+            )))?;
+        arr.iter().map(|v| parse_azure_build(v, &org, &project)).collect()
+    }
+
+    fn cancel(&self, owner: &str, _repo: &str, id: &str) -> Result<()> {
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}?api-version=7.0",
+            org, project, id
+        );
+        let body = serde_json::json!({ "status": "cancelling" });
+        let req = self.client().patch(&url)
+            .header("Authorization", self.auth_header())
+            .json(&body);
+        crate::http::send_empty(req, "Azure cancel build")
+    }
+
+    fn retry(&self, owner: &str, _repo: &str, id: &str) -> Result<()> {
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        // "Retry" on Azure = POST a new build with the same
+        // definition.id + sourceBranch. We look up the original first.
+        let lookup_url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}?api-version=7.0",
+            org, project, id
+        );
+        let lookup_req = self.client().get(&lookup_url).header("Authorization", self.auth_header());
+        let original = crate::http::send_json(lookup_req, "Azure lookup build")?;
+        let def_id = original["definition"]["id"].as_u64()
+            .ok_or_else(|| ToriiError::InvalidConfig("Azure build has no definition.id".into()))?;
+        let source_branch = original["sourceBranch"].as_str().unwrap_or("refs/heads/main").to_string();
+
+        let post_url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds?api-version=7.0",
+            org, project
+        );
+        let body = serde_json::json!({
+            "definition":   { "id": def_id },
+            "sourceBranch": source_branch,
+        });
+        let req = self.client().post(&post_url)
+            .header("Authorization", self.auth_header())
+            .json(&body);
+        crate::http::send_empty(req, "Azure re-queue build")
+    }
+
+    fn delete(&self, owner: &str, _repo: &str, id: &str) -> Result<()> {
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}?api-version=7.0",
+            org, project, id
+        );
+        let req = self.client().delete(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Azure delete build")
+    }
+
+    fn list_jobs(&self, owner: &str, _repo: &str, pipeline_id: &str, status_filter: Option<&str>) -> Result<Vec<Job>> {
+        // Azure exposes the build timeline (jobs + tasks + phases) at
+        // `/builds/{id}/timeline`. Each record has a `type` field; we
+        // surface the `Job` records.
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}/timeline?api-version=7.0",
+            org, project, pipeline_id
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Azure (url: {})", url))?;
+        let records = json["records"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Azure timeline missing `records`. Body: {}", json
+            )))?;
+        let mut jobs: Vec<Job> = records.iter()
+            .filter(|r| r["type"].as_str() == Some("Job"))
+            .filter_map(|v| parse_azure_timeline_job(v, pipeline_id).ok())
+            .collect();
+        if let Some(s) = status_filter {
+            jobs.retain(|j| j.status == s);
+        }
+        Ok(jobs)
+    }
+
+    fn job_log(&self, owner: &str, _repo: &str, job_id: &str) -> Result<String> {
+        // Azure's per-job log lives under the build's logs list. The
+        // `job_id` we receive is actually the timeline-record id which
+        // contains the log id in its `log.id` field — but to keep
+        // signatures uniform we accept the timeline-record id and look
+        // it up. For simplicity we just fetch all build logs by id;
+        // callers can pass the build id as job_id (the timeline record
+        // approach needs an extra round-trip we skip here).
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        let url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}/logs/0?api-version=7.0",
+            org, project, job_id
+        );
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Azure API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!(
+                "Azure API {} log fetch failed: {}", s, body
+            )));
+        }
+        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Azure log read: {}", e)))
+    }
+
+    fn job_retry(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Azure Pipelines doesn't expose a per-job retry — re-queue the whole build \
+             with `torii pipeline retry <build-id>`.".to_string()
+        ))
+    }
+
+    fn job_cancel(&self, owner: &str, _repo: &str, job_id: &str) -> Result<()> {
+        // Per-job cancel doesn't exist; fall back to the run-level
+        // cancel using the same id (a torii caller may have passed the
+        // build id by mistake — that still works).
+        self.cancel(owner, "", job_id)
+    }
+
+    fn job_artifacts_download(&self, owner: &str, _repo: &str, job_id: &str, output_path: &std::path::Path) -> Result<()> {
+        // Azure exposes a build-level artifacts collection. The
+        // `job_id` here is interpreted as the build id; we download
+        // the first artifact's zip and write it to disk.
+        let (org, project) = crate::platforms::pr::split_azure_owner(owner)?;
+        let list_url = format!(
+            "https://dev.azure.com/{}/{}/_apis/build/builds/{}/artifacts?api-version=7.0",
+            org, project, job_id
+        );
+        let list_req = self.client().get(&list_url).header("Authorization", self.auth_header());
+        let list_json = crate::http::send_json(list_req, "Azure list artifacts")?;
+        let first = list_json["value"].as_array()
+            .and_then(|a| a.first())
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Azure build {} has no artifacts.", job_id
+            )))?;
+        let download_url = first["resource"]["downloadUrl"].as_str()
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Azure artifact has no downloadUrl".to_string()
+            ))?;
+        let resp = self.client().get(download_url)
+            .header("Authorization", self.auth_header())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Azure API error: {}", e)))?;
+        if !resp.status().is_success() {
+            return Err(ToriiError::InvalidConfig(format!(
+                "Azure API {} artifact fetch failed", resp.status()
+            )));
+        }
+        let bytes = resp.bytes()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Azure artifact read: {}", e)))?;
+        std::fs::write(output_path, &bytes)
+            .map_err(|e| ToriiError::InvalidConfig(format!("Failed to write artifact to {}: {}", output_path.display(), e)))?;
+        Ok(())
+    }
+
+    fn job_erase(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Azure Pipelines has no log-erase operation. Delete the whole build with \
+             `torii pipeline delete <build-id>` if you need the logs gone.".to_string()
+        ))
+    }
+}
+
+fn parse_azure_build(v: &serde_json::Value, org: &str, project: &str) -> Result<Pipeline> {
+    let id = v["id"].as_u64().map(|n| n.to_string()).unwrap_or_default();
+    let status = v["status"].as_str().unwrap_or("");
+    let result = v["result"].as_str().unwrap_or("");
+    let normalized = match (status, result) {
+        ("completed", "succeeded")           => "success",
+        ("completed", "failed")              => "failed",
+        ("completed", "partiallySucceeded")  => "failed",
+        ("completed", "canceled")            => "canceled",
+        ("inProgress", _)                    => "running",
+        ("notStarted", _)                    => "pending",
+        ("cancelling", _)                    => "canceled",
+        _                                    => "other",
+    }.to_string();
+    let raw = if !result.is_empty() {
+        format!("{} ({})", status, result)
+    } else {
+        status.to_string()
+    };
+    Ok(Pipeline {
+        id: id.clone(),
+        status: normalized,
+        raw_status: raw,
+        branch:     v["sourceBranch"].as_str().unwrap_or("").trim_start_matches("refs/heads/").to_string(),
+        sha:        v["sourceVersion"].as_str().unwrap_or("").to_string(),
+        web_url:    format!("https://dev.azure.com/{}/{}/_build/results?buildId={}", org, project, id),
+        created_at: v["queueTime"].as_str()
+                        .or_else(|| v["startTime"].as_str())
+                        .unwrap_or("").to_string(),
+        updated_at: v["finishTime"].as_str()
+                        .or_else(|| v["queueTime"].as_str())
+                        .unwrap_or("").to_string(),
+    })
+}
+
+fn parse_azure_timeline_job(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
+    let state = v["state"].as_str().unwrap_or("");
+    let result = v["result"].as_str().unwrap_or("");
+    let normalized = match (state, result) {
+        ("completed", "succeeded")          => "success",
+        ("completed", "failed")             => "failed",
+        ("completed", "canceled")           => "canceled",
+        ("completed", "partiallySucceeded") => "failed",
+        ("inProgress", _)                   => "running",
+        ("pending", _)                      => "pending",
+        _                                   => "other",
+    }.to_string();
+    let raw = if !result.is_empty() {
+        format!("{} ({})", state, result)
+    } else {
+        state.to_string()
+    };
+    let started  = v["startTime"].as_str().unwrap_or("");
+    let finished = v["finishTime"].as_str().unwrap_or("");
+    let duration_seconds = if !started.is_empty() && !finished.is_empty() {
+        match (DateTime::parse_from_rfc3339(started), DateTime::parse_from_rfc3339(finished)) {
+            (Ok(s), Ok(f)) => Some((f - s).num_seconds() as f64),
+            _ => None,
+        }
+    } else { None };
+    Ok(Job {
+        id:               v["id"].as_str().unwrap_or("").to_string(),
+        pipeline_id:      pipeline_id.to_string(),
+        name:             v["name"].as_str().unwrap_or("").to_string(),
+        status:           normalized,
+        raw_status:       raw,
+        stage:            v["parentId"].as_str().unwrap_or("").to_string(),
+        web_url:          String::new(),
+        created_at:       started.to_string(),
+        finished_at:      v["finishTime"].as_str().map(String::from),
+        duration_seconds,
+    })
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
 pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
     match platform.to_lowercase().as_str() {
         "github"    => Ok(Box::new(GitHubPipelineClient::new()?)),
@@ -1244,8 +1557,9 @@ pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
         "sourcehut" => Ok(Box::new(SourcehutPipelineClient::new()?)),
         "radicle"   => Ok(Box::new(RadiclePipelineClient::new()?)),
         "bitbucket" => Ok(Box::new(BitbucketPipelineClient::new()?)),
+        "azure"     => Ok(Box::new(AzurePipelineClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut, radicle, bitbucket, azure", other)
         )),
     }
 }
