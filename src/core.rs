@@ -163,14 +163,7 @@ impl GitRepo {
 
         let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
 
-        self.repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            message,
-            &tree,
-            &parents,
-        )?;
+        commit_inner(&self.repo, Some("HEAD"), &sig, message, &tree, &parents)?;
 
         Ok(())
     }
@@ -192,14 +185,7 @@ impl GitRepo {
         let parents: Vec<_> = head_commit.parents().collect();
         let parent_refs: Vec<_> = parents.iter().collect();
 
-        let new_oid = self.repo.commit(
-            None,
-            &sig,
-            &sig,
-            message,
-            &tree,
-            &parent_refs,
-        )?;
+        let new_oid = commit_inner(&self.repo, None, &sig, message, &tree, &parent_refs)?;
 
         // Move HEAD (or the underlying branch ref) to the new commit explicitly,
         // bypassing libgit2's "first parent" check that fails when HEAD was
@@ -737,16 +723,20 @@ impl GitRepo {
 
 /// Resolve a commit signature for the current user, in this order:
 ///
-///   1. Torii config (`~/.config/torii/config.toml [user]` —
-///      `user.name`/`user.email`). This is the source of truth for any
-///      identity the user set via `torii config set …`.
-///   2. Git's own config chain (`.git/config` → `~/.gitconfig` →
+///   1. Torii **local** config (`.torii/config.toml [user]` under the
+///      repo's work tree) — set via `torii config set user.name X --local`.
+///      Per-repo identity wins so users can keep a personal global and a
+///      work-tree-specific override (e.g. `paski@paski.dev` globally,
+///      `paski@employer.com` for the work repo).
+///   2. Torii **global** config (`~/.config/torii/config.toml [user]`)
+///      — set via `torii config set user.name X` without `--local`.
+///   3. Git's own config chain (`.git/config` → `~/.gitconfig` →
 ///      `/etc/gitconfig`). Kept so users who already had a working
 ///      `git config` setup don't have to duplicate it.
-///   3. Hard error. **No more silent fallback to "Torii User"** — that
-///      placeholder was the root cause of
-///      `docs/BUG_COMMIT_AUTHOR_FALLBACK.md`. Bogus commits are worse
-///      than a clear error that prompts the user to fix it.
+///   4. Hard error. **No more silent fallback to "Torii User"** — that
+///      placeholder was the root cause of an earlier author-fallback
+///      bug. Bogus commits are worse than a clear error that prompts
+///      the user to fix it.
 ///
 /// Returns the signature ready to pass to `repo.commit(..)`.
 ///
@@ -756,7 +746,16 @@ impl GitRepo {
 /// `'static` lifetime decouples it from the borrow used here. Possible
 /// because `Signature::now` produces an owned signature.
 pub fn resolve_signature(repo: &git2::Repository) -> Result<Signature<'static>> {
-    let tc = crate::config::ToriiConfig::load_global().unwrap_or_default();
+    // `load_local(repo)` already merges global underneath local — the
+    // `--local` override naturally wins. Fall back to global-only if
+    // the repo is bare (no workdir to host a `.torii/config.toml`).
+    //
+    // Pre-0.7.14: only `load_global()` was consulted here, so `--local`
+    // edits to user.name/user.email were silently ignored. That's the
+    // bug fixed by switching to `load_local()`.
+    let tc = repo.workdir()
+        .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+        .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
 
     // Filter out empty strings at every level. `torii config set user.name ""`
     // counts as "not configured" — the previous behaviour passed the empty
@@ -802,6 +801,80 @@ pub fn resolve_signature(repo: &git2::Repository) -> Result<Signature<'static>> 
         })?;
 
     Ok(Signature::now(&name, &email)?)
+}
+
+/// Create a commit, signing it with GPG when the active torii config
+/// has `git.sign_commits = true`. Returns the new commit's OID.
+///
+/// When signing is off this is a thin wrapper around
+/// [`git2::Repository::commit`] — same behaviour, same ref update.
+/// When signing is on it uses libgit2's `commit_create_buffer` +
+/// `commit_signed` pair and manually updates the named ref (libgit2
+/// doesn't do ref-bookkeeping for signed commits, see
+/// <https://libgit2.org/libgit2/#HEAD/group/commit/git_commit_signed>).
+///
+/// This is the **fix for the GPG-sign no-op bug** in 0.7.13 and
+/// earlier: those versions accepted `git.sign_commits = true` in the
+/// config layer but never honoured it at commit time. From 0.7.14
+/// onwards the flag actually drives this branch.
+pub(crate) fn commit_inner(
+    repo: &git2::Repository,
+    update_ref: Option<&str>,
+    sig: &Signature,
+    message: &str,
+    tree: &git2::Tree,
+    parents: &[&git2::Commit],
+) -> Result<git2::Oid> {
+    // Cheap config read — load_local already merges global underneath
+    // local, so a per-repo override of `git.sign_commits` works as
+    // expected.
+    let tc = repo.workdir()
+        .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+        .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
+
+    if !tc.git.sign_commits {
+        return Ok(repo.commit(update_ref, sig, sig, message, tree, parents)?);
+    }
+
+    // Signing path: need a key id.
+    let key = tc.git.gpg_key.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| ToriiError::InvalidConfig(
+            "git.sign_commits = true but git.gpg_key is not set. Configure with:\n  \
+             torii config set git.gpg_key <YOUR-KEY-ID>".to_string()
+        ))?;
+
+    // Build the commit object as bytes, sign it, then write the signed
+    // commit object out.
+    let buffer = repo.commit_create_buffer(sig, sig, message, tree, parents)?;
+    let buffer_str = std::str::from_utf8(&buffer)
+        .map_err(|e| ToriiError::InvalidConfig(format!(
+            "commit buffer not valid UTF-8 (cannot GPG-sign): {}", e
+        )))?;
+    let signature = crate::gpg::sign_blob(&buffer, key, None)?;
+    let new_oid = repo.commit_signed(buffer_str, &signature, Some("gpgsig"))?;
+
+    // libgit2's commit_signed leaves ref updates to the caller. Move
+    // the requested ref (typically HEAD, which resolves through the
+    // symbolic chain to the current branch).
+    if let Some(name) = update_ref {
+        // Resolve "HEAD" to the underlying branch ref so we update the
+        // branch, not the symbolic HEAD itself. For non-HEAD names we
+        // assume the caller passed a direct ref path.
+        let target_ref = if name == "HEAD" {
+            match repo.head() {
+                Ok(h) => h.name().map(String::from).unwrap_or_else(|| "refs/heads/main".to_string()),
+                // Unborn HEAD: first commit. Use the default branch
+                // name from torii config so this matches `torii init`.
+                Err(_) => format!("refs/heads/{}", tc.git.default_branch),
+            }
+        } else {
+            name.to_string()
+        };
+        repo.reference(&target_ref, new_oid, true, "torii signed commit")?;
+    }
+
+    Ok(new_oid)
 }
 
 #[cfg(test)]

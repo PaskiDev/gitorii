@@ -336,6 +336,9 @@ impl ToriiConfig {
             ("git", "default_branch") => Some(self.git.default_branch.clone()),
             ("git", "sign_commits") => Some(self.git.sign_commits.to_string()),
             ("git", "gpg_key") => self.git.gpg_key.clone(),
+            // 0.7.14: git-friendly alias. Mirrors how git stores it.
+            ("user", "signingkey") => self.git.gpg_key.clone(),
+            ("commit", "gpgsign") => Some(self.git.sign_commits.to_string()),
             ("git", "pull_rebase") => Some(self.git.pull_rebase.to_string()),
             ("ui", "colors") => Some(self.ui.colors.to_string()),
             ("ui", "emoji") => Some(self.ui.emoji.to_string()),
@@ -405,6 +408,13 @@ impl ToriiConfig {
                     .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
             }
             ("git", "gpg_key") => self.git.gpg_key = Some(value.to_string()),
+            // 0.7.14: git-friendly aliases that map to git.gpg_key /
+            // git.sign_commits respectively. Either name works.
+            ("user", "signingkey") => self.git.gpg_key = Some(value.to_string()),
+            ("commit", "gpgsign") => {
+                self.git.sign_commits = value.parse()
+                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+            }
             ("git", "pull_rebase") => {
                 self.git.pull_rebase = value.parse()
                     .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;

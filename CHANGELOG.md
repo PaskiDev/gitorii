@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.14] - 2026-05-25
+
+Bug-fix release for two long-standing config issues plus an internal
+refactor that drops ~1500 lines from the platform-client surface.
+
+### Fixed
+
+- **`user.name` / `user.email` from `--local` config are now actually
+  used at commit time.** Previously `resolve_signature` only read
+  `~/.config/torii/config.toml` (the global file), so
+  `torii config set user.email "X" --local` would write `.torii/config.toml`
+  successfully but `torii save` would still use the global value at
+  commit creation. Per-repo identity now wins, as expected for a
+  jerárquico config system. Bug introduced in 0.7.3 when
+  `resolve_signature` was added; surfaced by the user trying to set a
+  work-only email on a single repo.
+- **GPG-signed commits actually sign now.** `git.sign_commits = true`
+  was accepted by the config layer since 0.6.x but never honoured at
+  commit time — every commit went out as `repo.commit(...)` with no
+  signature, leaving `gpgsig` absent from the object even though the
+  flag was on. The fix:
+  - New `src/gpg.rs` shells out to the system `gpg` binary
+    (`--detach-sign --armor -u <key>`), reusing the user's existing
+    keyring + agent + pinentry — same UX as `git commit -S`.
+  - New `commit_inner` helper in `core.rs` routes both `torii save` and
+    the TUI's commit view through the signed path when the flag is on
+    (`commit_create_buffer` + `commit_signed` + manual ref update,
+    since libgit2 doesn't update refs for signed commits).
+  - Other commit sites (`cherry-pick`, `revert`, `merge`,
+    `tag annotated`, `history reauthor`) **still go through the
+    unsigned path** — extending `commit_inner` there is tracked for
+    0.7.15.
+  - Requires `gpg` (or `gpg2`) on `PATH`. Clear error if missing.
+
+### Added
+
+- **`user.signingkey` and `commit.gpgsign` config aliases.** They map
+  to the existing `git.gpg_key` and `git.sign_commits` respectively.
+  Either spelling works — pick the one you already use in `git config`.
+  Reason: the previous `git.gpg_key` name was a torii-ism nobody
+  guessed when migrating from git.
+
+### Internal
+
+- **HTTP boilerplate centralised** in a new `src/http.rs` module with
+  four helpers (`make_client`, `send_json`, `send_empty`,
+  `extract_array`). The 15 platform clients (`pr` × `issue` ×
+  `pipeline` × `release` × `package` over GitHub × GitLab × Gitea) all
+  go through it now. Net effect:
+
+  | file        | before | after | Δ    |
+  |-------------|-------:|------:|-----:|
+  | pr.rs       |    750 |   566 | -184 |
+  | issue.rs    |    463 |   331 | -132 |
+  | pipeline.rs |   1017 |   901 | -116 |
+  | release.rs  |    530 |   393 | -137 |
+  | package.rs  |    300 |   260 |  -40 |
+  | http.rs     |      0 |    89 |  +89 |
+  | **total**   | **3060** | **2540** | **-520** |
+
+  No behaviour changes; only collapses identical send / status-check /
+  parse / format-error blocks. Error messages keep the same structure
+  via the `ctx: &str` parameter.
+
+- **Dropped obsolete in-repo docs and a stray debug log** (~1000 more
+  lines): `docs/BUG_COMMIT_AUTHOR_FALLBACK.md` (FIXED in 0.7.3),
+  `docs/BUG_SNAPSHOT_LEAKS_INTO_COMMITS.md` (FIXED in 0.7.7),
+  `docs/FEATURE_FETCH_SPECIFIC_REMOTE.md` (shipped in 0.7.6),
+  `log_gitorii.txt`, `.pr-test`.
+
 ## [0.7.13] - 2026-05-20
 
 ### Added
