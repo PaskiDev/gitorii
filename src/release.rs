@@ -64,7 +64,7 @@ impl GitHubReleaseClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
     fn auth(&self) -> String { format!("token {}", self.token) }
 }
@@ -75,25 +75,12 @@ impl ReleaseClient for GitHubReleaseClient {
             "https://api.github.com/repos/{}/{}/releases?per_page={}",
             owner, repo, limit.clamp(1, 100)
         );
-        let resp = self.client().get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitHub returned non-array body for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_github_release).collect()
+            .header("Accept", "application/vnd.github+json");
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_github_release).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
@@ -101,20 +88,10 @@ impl ReleaseClient for GitHubReleaseClient {
             "https://api.github.com/repos/{}/{}/releases/tags/{}",
             owner, repo, tag
         );
-        let resp = self.client().get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (tag: {})", status, msg, tag
-            )));
-        }
+            .header("Accept", "application/vnd.github+json");
+        let json = crate::http::send_json(req, &format!("GitHub (tag: {})", tag))?;
         parse_github_release(&json)
     }
 
@@ -133,18 +110,11 @@ impl ReleaseClient for GitHubReleaseClient {
                 "edit needs at least one of --name or --notes".to_string()
             ));
         }
-        let resp = self.client().patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github+json")
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("GitHub API {} edit failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "GitHub edit release")
     }
 
     fn delete(&self, owner: &str, repo: &str, tag: &str) -> Result<()> {
@@ -153,17 +123,10 @@ impl ReleaseClient for GitHubReleaseClient {
             "GitHub release missing id; cannot delete".to_string()
         ))?;
         let url = format!("https://api.github.com/repos/{}/{}/releases/{}", owner, repo, id);
-        let resp = self.client().delete(&url)
+        let req = self.client().delete(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("GitHub API {} delete failed: {}", s, txt)));
-        }
-        Ok(())
+            .header("Accept", "application/vnd.github+json");
+        crate::http::send_empty(req, "GitHub delete release")
     }
 }
 
@@ -202,7 +165,7 @@ impl GitLabReleaseClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn project_path(owner: &str, repo: &str) -> String {
@@ -217,26 +180,10 @@ impl ReleaseClient for GitLabReleaseClient {
             self.base_url, Self::project_path(owner, repo),
             limit.clamp(1, 100)
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned non-array for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_gitlab_release).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitlab_release).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
@@ -244,19 +191,8 @@ impl ReleaseClient for GitLabReleaseClient {
             "{}/projects/{}/releases/{}",
             self.base_url, Self::project_path(owner, repo), tag
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (tag: {})", status, msg, tag
-            )));
-        }
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (tag: {})", tag))?;
         parse_gitlab_release(&json)
     }
 
@@ -273,17 +209,10 @@ impl ReleaseClient for GitLabReleaseClient {
                 "edit needs at least one of --name or --notes".to_string()
             ));
         }
-        let resp = self.client().put(&url)
+        let req = self.client().put(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("GitLab API {} edit failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "GitLab edit release")
     }
 
     fn delete(&self, owner: &str, repo: &str, tag: &str) -> Result<()> {
@@ -291,16 +220,8 @@ impl ReleaseClient for GitLabReleaseClient {
             "{}/projects/{}/releases/{}",
             self.base_url, Self::project_path(owner, repo), tag
         );
-        let resp = self.client().delete(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("GitLab API {} delete failed: {}", s, txt)));
-        }
-        Ok(())
+        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab delete release")
     }
 }
 
@@ -347,7 +268,7 @@ impl GiteaReleaseClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
     fn auth(&self) -> String { format!("token {}", self.token) }
 }
@@ -358,25 +279,12 @@ impl ReleaseClient for GiteaReleaseClient {
             "{}/api/v1/repos/{}/{}/releases?limit={}",
             self.base_url, owner, repo, limit.clamp(1, 50)
         );
-        let resp = self.client().get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "Gitea returned non-array for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_gitea_release).collect()
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &format!("Gitea (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitea_release).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
@@ -384,19 +292,8 @@ impl ReleaseClient for GiteaReleaseClient {
             "{}/api/v1/repos/{}/{}/releases/tags/{}",
             self.base_url, owner, repo, tag
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Gitea (tag: {})", tag))?;
         parse_gitea_release(&json)
     }
 
@@ -413,21 +310,11 @@ impl ReleaseClient for GiteaReleaseClient {
         if let Some(d) = description { body.insert("body".into(), serde_json::Value::String(d.to_string())); }
         if body.is_empty() { return Ok(()); }
 
-        let url = format!(
-            "{}/api/v1/repos/{}/{}/releases/{}",
-            self.base_url, owner, repo, id
-        );
-        let resp = self.client().patch(&url)
+        let url = format!("{}/api/v1/repos/{}/{}/releases/{}", self.base_url, owner, repo, id);
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} edit failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "Gitea edit release")
     }
 
     fn delete(&self, owner: &str, repo: &str, tag: &str) -> Result<()> {
@@ -435,20 +322,9 @@ impl ReleaseClient for GiteaReleaseClient {
         let id = release.id.ok_or_else(|| ToriiError::InvalidConfig(
             "Gitea release missing id (cannot delete)".to_string()
         ))?;
-        let url = format!(
-            "{}/api/v1/repos/{}/{}/releases/{}",
-            self.base_url, owner, repo, id
-        );
-        let resp = self.client().delete(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} delete failed: {}", s, txt)));
-        }
-        Ok(())
+        let url = format!("{}/api/v1/repos/{}/{}/releases/{}", self.base_url, owner, repo, id);
+        let req = self.client().delete(&url).header("Authorization", self.auth());
+        crate::http::send_empty(req, "Gitea delete release")
     }
 }
 

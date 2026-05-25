@@ -76,7 +76,7 @@ impl GitLabPackageClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn project_path(owner: &str, repo: &str) -> String {
@@ -97,26 +97,10 @@ impl PackageClient for GitLabPackageClient {
         if let Some(n) = &filters.name_search {
             url.push_str(&format!("&package_name={}", crate::url::encode(n)));
         }
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned non-array for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_gitlab_package).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitlab_package).collect()
     }
 
     fn delete(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -124,18 +108,8 @@ impl PackageClient for GitLabPackageClient {
             "{}/projects/{}/packages/{}",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let resp = self.client().delete(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {} delete failed: {}", s, body
-            )));
-        }
-        Ok(())
+        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab delete package")
     }
 
     fn list_files(&self, owner: &str, repo: &str, id: &str) -> Result<Vec<PackageFile>> {
@@ -143,24 +117,10 @@ impl PackageClient for GitLabPackageClient {
             "{}/projects/{}/packages/{}/package_files?per_page=100",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned non-array for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(|v| parse_gitlab_package_file(v, id)).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(|v| parse_gitlab_package_file(v, id)).collect()
     }
 }
 
