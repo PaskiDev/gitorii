@@ -342,16 +342,49 @@ fn parse_gitea_release(v: &serde_json::Value) -> Result<Release> {
 }
 
 // ============================================================================
+// Sourcehut (no native release object)
+// ============================================================================
+//
+// Sourcehut doesn't expose "releases" as a first-class object the
+// way GitHub / GitLab / Gitea do — a release is just a git tag, and
+// binary distribution happens externally (project homepage, paste.sr.ht,
+// etc.). We return a clear error so the CLI surface remains honest.
+
+pub struct SourcehutReleaseClient;
+
+impl SourcehutReleaseClient {
+    pub fn new() -> Result<Self> { Ok(Self) }
+}
+
+fn srht_release_unsupported() -> ToriiError {
+    ToriiError::InvalidConfig(
+        "Sourcehut has no Release-page object. A release on sourcehut \
+         is just an annotated git tag (`torii tag create vX --release`); \
+         binaries live outside the host. If you want listed releases \
+         with notes + assets, mirror the project to GitLab/GitHub/Codeberg \
+         and use the platform's native release API there.".to_string()
+    )
+}
+
+impl ReleaseClient for SourcehutReleaseClient {
+    fn list(&self, _o: &str, _r: &str, _l: usize) -> Result<Vec<Release>> { Err(srht_release_unsupported()) }
+    fn get(&self, _o: &str, _r: &str, _t: &str) -> Result<Release> { Err(srht_release_unsupported()) }
+    fn edit(&self, _o: &str, _r: &str, _t: &str, _n: Option<&str>, _d: Option<&str>) -> Result<()> { Err(srht_release_unsupported()) }
+    fn delete(&self, _o: &str, _r: &str, _t: &str) -> Result<()> { Err(srht_release_unsupported()) }
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
 pub fn get_release_client(platform: &str) -> Result<Box<dyn ReleaseClient>> {
     match platform.to_lowercase().as_str() {
-        "github" => Ok(Box::new(GitHubReleaseClient::new()?)),
-        "gitlab" => Ok(Box::new(GitLabReleaseClient::new()?)),
-        "gitea"  => Ok(Box::new(GiteaReleaseClient::new()?)),
+        "github"    => Ok(Box::new(GitHubReleaseClient::new()?)),
+        "gitlab"    => Ok(Box::new(GitLabReleaseClient::new()?)),
+        "gitea"     => Ok(Box::new(GiteaReleaseClient::new()?)),
+        "sourcehut" => Ok(Box::new(SourcehutReleaseClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
         )),
     }
 }

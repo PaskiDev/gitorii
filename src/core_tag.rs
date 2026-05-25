@@ -96,39 +96,39 @@ impl GitRepo {
         let tree = self.repo.find_tree(tree_oid)?;
         let head = self.repo.head()?.peel_to_commit()?;
         
-        self.repo.commit(
+        crate::core::commit_inner(
+            &self.repo,
             Some("HEAD"),
-            &sig,
             &sig,
             commit.message().unwrap_or("Cherry-picked commit"),
             &tree,
             &[&head],
         )?;
-        
+
         println!("✅ Cherry-pick complete");
-        
+
         Ok(())
     }
 
     /// Continue cherry-pick after resolving conflicts
     pub fn cherry_pick_continue(&self) -> Result<()> {
         println!("🔄 Continuing cherry-pick...");
-        
+
         let sig = crate::core::resolve_signature(&self.repo)?;
         let mut index = self.repo.index()?;
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let head = self.repo.head()?.peel_to_commit()?;
-        
-        self.repo.commit(
+
+        crate::core::commit_inner(
+            &self.repo,
             Some("HEAD"),
-            &sig,
             &sig,
             "Cherry-picked commit",
             &tree,
             &[&head],
         )?;
-        
+
         println!("✅ Cherry-pick complete");
         
         Ok(())

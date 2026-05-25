@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.15] - 2026-05-25
+
+### Added
+
+- **Sourcehut platform support** (4th platform after GitHub / GitLab /
+  Gitea). Detection: `git.sr.ht` URLs auto-route through the Sourcehut
+  client. Auth: `torii auth set sourcehut <oauth-token>` (env fallback
+  `SOURCEHUT_TOKEN` / `SRHT_TOKEN`). What's wired:
+  - **Issues** (`todo.sr.ht`): `list / create / close / comment` via
+    the REST tracker API. Assumes `tracker_name == repo_name` — if your
+    project uses split trackers (e.g. `~user/repo-bugs`,
+    `~user/repo-features`), the `--remote` flag of `torii issue` points
+    at the correct one.
+  - **Pipelines** (`builds.sr.ht`): `list / cancel` + `log` work. Other
+    surface is honest about the limits:
+    - `retry` / `job_retry` return an error pointing at the web UI —
+      builds.sr.ht doesn't expose a "resubmit finished job" endpoint
+      over REST.
+    - `delete` returns an error — builds keep retention-policy-managed
+      on the server, not user-deletable.
+    - `job_artifacts_download` and `job_erase` return clear errors.
+    - "Jobs in a pipeline" is a flat concept on builds.sr.ht — a job
+      *is* the pipeline. `list_jobs(pid)` returns the run as a single
+      job entry to keep the CLI surface uniform.
+  - **PRs**: returns a clear error explaining sourcehut's email-patch
+    workflow (`*-devel@lists.sr.ht`) and pointing the user at
+    `torii patch export`.
+  - **Releases**: returns an error explaining that sourcehut has no
+    native release object — a release is just an annotated git tag.
+  - **Packages**: same — no package registry exists on sourcehut.
+
+### Changed
+
+- **GPG signing now applies everywhere a commit is created**, not just
+  `torii save` and the TUI commit view. Routed `commit_inner` /
+  `commit_inner_split` through:
+  - `cherry-pick` (and `--continue`)
+  - `revert`
+  - `merge` (the merge commit itself)
+  - `history reauthor` (rewritten commits)
+  - `history rewrite` (date rewrites)
+  - `history remove-file` (filter-branch replacement)
+
+  Tag-create-annotated and the workspace.save fanout still go through
+  the unsigned path — annotated tag signing needs `tag_create_buffer`
+  + `tag_signed` (different libgit2 dance) and is tracked separately.
+
+### Internal
+
+- New `commit_inner_split(repo, ref, author, committer, msg, tree,
+  parents)` variant of `commit_inner` for callers that preserve the
+  original author when rewriting the committer.
+
 ## [0.7.14] - 2026-05-25
 
 Bug-fix release for two long-standing config issues plus an internal

@@ -796,13 +796,196 @@ fn parse_gitea_job(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
 // Factory
 // ============================================================================
 
+// ============================================================================
+// Sourcehut (builds.sr.ht)
+// ============================================================================
+//
+// builds.sr.ht is sourcehut's CI. Its model is flat: a "job" is the
+// equivalent of a *pipeline* on other hosts (it's a manifest +
+// container + log, not a sub-step). Sourcehut has no per-job
+// sub-jobs concept, so `list_jobs(pipeline_id)` returns the run as a
+// single entry to keep the surface uniform.
+//
+// builds.sr.ht REST is scoped to the *authenticated user* — there's no
+// "list builds for this repo" endpoint. We list the user's recent jobs
+// and surface them all. Filtering by repo requires looking at the
+// manifest's `tags` (best-effort).
+
+pub struct SourcehutPipelineClient {
+    token: String,
+}
+
+impl SourcehutPipelineClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("sourcehut", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Sourcehut token not found. Generate one at https://meta.sr.ht/oauth and run: \
+                 torii auth set sourcehut YOUR_TOKEN".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+    fn auth(&self) -> String { format!("token {}", self.token) }
+}
+
+impl PipelineClient for SourcehutPipelineClient {
+    fn list(&self, _owner: &str, _repo: &str, filters: &ListFilters) -> Result<Vec<Pipeline>> {
+        // builds.sr.ht's listing is user-scoped, not repo-scoped — the
+        // owner/repo args are unused. We document this in `--help`.
+        let url = format!(
+            "https://builds.sr.ht/api/jobs?per_page={}",
+            filters.per_page.clamp(1, 50)
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Sourcehut builds (url: {})", url))?;
+        let arr = json["results"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Sourcehut returned no `results` array. Body: {}", json
+            )))?;
+        let normalized_filter = filters.status.as_deref();
+        arr.iter()
+            .map(parse_sourcehut_build)
+            .filter(|p| match (p, normalized_filter) {
+                (Ok(pi), Some(s)) => pi.status == s,
+                _ => true,
+            })
+            .collect()
+    }
+
+    fn cancel(&self, _owner: &str, _repo: &str, id: &str) -> Result<()> {
+        let url = format!("https://builds.sr.ht/api/jobs/{}/cancel", id);
+        let req = self.client().post(&url).header("Authorization", self.auth());
+        crate::http::send_empty(req, "Sourcehut cancel build")
+    }
+
+    fn retry(&self, _owner: &str, _repo: &str, id: &str) -> Result<()> {
+        // builds.sr.ht allows resubmitting a job from its manifest. The
+        // canonical endpoint is `/api/jobs/{id}/start`, but it only
+        // works for jobs that haven't been started yet — for actually
+        // failed jobs you have to POST a new job from the same manifest
+        // via `/api/jobs`. That's not exposed today; point the user at
+        // the web UI.
+        Err(ToriiError::InvalidConfig(format!(
+            "Sourcehut builds doesn't expose a retry endpoint for finished jobs. \
+             Resubmit job #{} from the web UI (https://builds.sr.ht/~user/job/{}) \
+             or POST the same manifest again via the API.", id, id
+        )))
+    }
+
+    fn delete(&self, _owner: &str, _repo: &str, _id: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Sourcehut builds doesn't allow deleting jobs — they're \
+             retained per the host's retention policy and aren't user-deletable.".to_string()
+        ))
+    }
+
+    fn list_jobs(&self, _owner: &str, _repo: &str, pipeline_id: &str, _status_filter: Option<&str>) -> Result<Vec<Job>> {
+        // On sourcehut a "job" IS the pipeline. We return the same
+        // record reshaped as a single Job so the CLI surface stays
+        // uniform with GitLab/GitHub.
+        let url = format!("https://builds.sr.ht/api/jobs/{}", pipeline_id);
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Sourcehut build #{}", pipeline_id))?;
+        let pipeline = parse_sourcehut_build(&json)?;
+        Ok(vec![Job {
+            id:               pipeline.id.clone(),
+            pipeline_id:      pipeline.id.clone(),
+            name:             json["note"].as_str().unwrap_or("(sourcehut job)").to_string(),
+            status:           pipeline.status.clone(),
+            raw_status:       pipeline.raw_status.clone(),
+            stage:            "build".to_string(),
+            web_url:          pipeline.web_url.clone(),
+            created_at:       pipeline.created_at.clone(),
+            finished_at:      None,
+            duration_seconds: None,
+        }])
+    }
+
+    fn job_log(&self, _owner: &str, _repo: &str, job_id: &str) -> Result<String> {
+        // builds.sr.ht serves the log as plain text — bypass send_json.
+        let url = format!("https://builds.sr.ht/api/jobs/{}/log", job_id);
+        let resp = self.client().get(&url)
+            .header("Authorization", self.auth())
+            .send()
+            .map_err(|e| ToriiError::InvalidConfig(format!("Sourcehut API error: {}", e)))?;
+        if !resp.status().is_success() {
+            let s = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(ToriiError::InvalidConfig(format!(
+                "Sourcehut API {} log fetch failed: {}", s, body
+            )));
+        }
+        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Sourcehut log read: {}", e)))
+    }
+
+    fn job_retry(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
+        // Same limitation as `retry`.
+        self.retry(owner, repo, job_id)
+    }
+
+    fn job_cancel(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
+        self.cancel(owner, repo, job_id)
+    }
+
+    fn job_artifacts_download(&self, _owner: &str, _repo: &str, _job_id: &str, _output_path: &std::path::Path) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Sourcehut builds doesn't expose artifacts via the REST API. \
+             The job manifest can declare `triggers` that upload to a \
+             URL, but there's no per-job artifacts endpoint.".to_string()
+        ))
+    }
+
+    fn job_erase(&self, _owner: &str, _repo: &str, _job_id: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig(
+            "Sourcehut builds has no log-erase operation.".to_string()
+        ))
+    }
+}
+
+fn parse_sourcehut_build(v: &serde_json::Value) -> Result<Pipeline> {
+    let id = v["id"].as_u64().map(|n| n.to_string())
+        .or_else(|| v["id"].as_str().map(String::from))
+        .unwrap_or_default();
+    let raw_status = v["status"].as_str().unwrap_or("").to_string();
+    // builds.sr.ht statuses: pending, queued, running, success, failed,
+    // cancelled, timeout. Normalize:
+    let status = match raw_status.as_str() {
+        "success"             => "success",
+        "failed" | "timeout"  => "failed",
+        "running"             => "running",
+        "cancelled"           => "canceled",
+        "pending" | "queued"  => "pending",
+        _                     => "other",
+    }.to_string();
+    let owner = v["owner"]["canonical_name"].as_str().unwrap_or("");
+    Ok(Pipeline {
+        id: id.clone(),
+        status,
+        raw_status,
+        // builds.sr.ht jobs aren't anchored to a single repo+branch in
+        // the API response — these come from the manifest's `tags` if
+        // the user set them.
+        branch:     v["tags"].as_array().and_then(|a| a.iter().filter_map(|v| v.as_str()).next().map(String::from)).unwrap_or_default(),
+        sha:        String::new(),
+        web_url:    format!("https://builds.sr.ht/{}/job/{}", owner, id),
+        created_at: v["created"].as_str().unwrap_or("").to_string(),
+        updated_at: v["updated"].as_str().unwrap_or("").to_string(),
+    })
+}
+
+// ============================================================================
+// Factory
+// ============================================================================
+
 pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
     match platform.to_lowercase().as_str() {
-        "github" => Ok(Box::new(GitHubPipelineClient::new()?)),
-        "gitlab" => Ok(Box::new(GitLabPipelineClient::new()?)),
-        "gitea"  => Ok(Box::new(GiteaPipelineClient::new()?)),
+        "github"    => Ok(Box::new(GitHubPipelineClient::new()?)),
+        "gitlab"    => Ok(Box::new(GitLabPipelineClient::new()?)),
+        "gitea"     => Ok(Box::new(GiteaPipelineClient::new()?)),
+        "sourcehut" => Ok(Box::new(SourcehutPipelineClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
         )),
     }
 }

@@ -443,9 +443,9 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
         let msg = commit.message().unwrap_or("");
         let parent_refs: Vec<&Commit> = new_parents.iter().collect();
 
-        let new_oid = repo
-            .commit(None, &author, &committer, msg, &tree, &parent_refs)
-            .map_err(ToriiError::Git)?;
+        let new_oid = crate::core::commit_inner_split(
+            &repo, None, &author, &committer, msg, &tree, &parent_refs,
+        )?;
 
         remap.insert(*old_oid, new_oid);
         stats.rewritten += 1;
