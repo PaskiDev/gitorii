@@ -89,7 +89,7 @@ impl GitHubPipelineClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn auth_header(&self) -> String { format!("token {}", self.token) }
@@ -119,21 +119,10 @@ impl PipelineClient for GitHubPipelineClient {
             };
             url.push_str(&format!("&status={}", gh));
         }
-        let resp = self.client()
-            .get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth_header())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (url: {})", status, msg, url
-            )));
-        }
+            .header("Accept", "application/vnd.github+json");
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
         let arr = json["workflow_runs"].as_array()
             .ok_or_else(|| ToriiError::InvalidConfig(format!(
                 "GitHub returned no workflow_runs array. Body: {}", json
@@ -162,19 +151,10 @@ impl PipelineClient for GitHubPipelineClient {
             "https://api.github.com/repos/{}/{}/actions/runs/{}",
             owner, repo, id
         );
-        let resp = self.client().delete(&url)
+        let req = self.client().delete(&url)
             .header("Authorization", self.auth_header())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {} delete failed: {}", s, body
-            )));
-        }
-        Ok(())
+            .header("Accept", "application/vnd.github+json");
+        crate::http::send_empty(req, "GitHub delete run")
     }
 
     // ---- job ops on GitHub Actions ----
@@ -187,20 +167,10 @@ impl PipelineClient for GitHubPipelineClient {
             "https://api.github.com/repos/{}/{}/actions/runs/{}/jobs?per_page=100",
             owner, repo, pipeline_id
         );
-        let resp = self.client().get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth_header())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (url: {})", status, msg, url
-            )));
-        }
+            .header("Accept", "application/vnd.github+json");
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
         let arr = json["jobs"].as_array()
             .ok_or_else(|| ToriiError::InvalidConfig(format!(
                 "GitHub returned no `jobs` array. Body: {}", json
@@ -216,7 +186,8 @@ impl PipelineClient for GitHubPipelineClient {
 
     fn job_log(&self, owner: &str, repo: &str, job_id: &str) -> Result<String> {
         // GitHub returns a 302 redirect to a signed log URL. reqwest
-        // follows redirects by default.
+        // follows redirects by default. We can't use send_json here —
+        // the body is plain text, not JSON.
         let url = format!(
             "https://api.github.com/repos/{}/{}/actions/jobs/{}/logs",
             owner, repo, job_id
@@ -315,20 +286,15 @@ fn parse_github_job(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
     })
 }
 
+/// Helper used by GitHub Actions and Gitea Actions clients for cancel /
+/// retry / job_retry — POSTs to an action URL with no body and translates
+/// the response to a clear error. Used by GitHub clients that need to
+/// send the `Accept: vnd.github+json` header.
 fn post_no_body(client: &Client, url: &str, auth: &str, op: &str) -> Result<()> {
-    let resp = client.post(url)
+    let req = client.post(url)
         .header("Authorization", auth)
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-    if !resp.status().is_success() {
-        let s = resp.status();
-        let body = resp.text().unwrap_or_default();
-        return Err(ToriiError::InvalidConfig(format!(
-            "GitHub API {} {} failed: {}", s, op, body
-        )));
-    }
-    Ok(())
+        .header("Accept", "application/vnd.github+json");
+    crate::http::send_empty(req, &format!("GitHub {}", op))
 }
 
 fn parse_github_run(v: &serde_json::Value) -> Result<Pipeline> {
@@ -386,7 +352,7 @@ impl GitLabPipelineClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn project_path(owner: &str, repo: &str) -> String {
@@ -412,26 +378,10 @@ impl PipelineClient for GitLabPipelineClient {
             };
             url.push_str(&format!("&status={}", gl));
         }
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned non-array body for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_gitlab_pipeline).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitlab_pipeline).collect()
     }
 
     fn cancel(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -439,11 +389,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/cancel",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let resp = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "cancel")
+        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab cancel pipeline")
     }
 
     fn retry(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -451,11 +398,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/retry",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let resp = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "retry")
+        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab retry pipeline")
     }
 
     fn delete(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -463,11 +407,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let resp = self.client().delete(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "delete")
+        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab delete pipeline")
     }
 
     // ---- job ops on GitLab Pipelines ----
@@ -480,25 +421,9 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/jobs?per_page=100",
             self.base_url, Self::project_path(owner, repo), pipeline_id
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned non-array body for {}. Body: {}", url, json
-            )))?;
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        let arr = crate::http::extract_array(&json, &url)?;
         let jobs: Vec<Job> = arr.iter().filter_map(|v| parse_gitlab_job(v, pipeline_id).ok()).collect();
         if let Some(s) = status_filter {
             Ok(jobs.into_iter().filter(|j| j.status == s).collect())
@@ -533,11 +458,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/retry",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let resp = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "job retry")
+        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab job retry")
     }
 
     fn job_cancel(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
@@ -545,14 +467,12 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/cancel",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let resp = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "job cancel")
+        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab job cancel")
     }
 
     fn job_artifacts_download(&self, owner: &str, repo: &str, job_id: &str, output_path: &std::path::Path) -> Result<()> {
+        // Bytes response (not JSON) so we bypass send_json.
         let url = format!(
             "{}/projects/{}/jobs/{}/artifacts",
             self.base_url, Self::project_path(owner, repo), job_id
@@ -580,11 +500,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/erase",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let resp = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        gitlab_check_ok(resp, "job erase")
+        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab job erase")
     }
 }
 
@@ -614,15 +531,6 @@ fn parse_gitlab_job(v: &serde_json::Value, pipeline_id: &str) -> Result<Job> {
         finished_at: v["finished_at"].as_str().map(String::from),
         duration_seconds: v["duration"].as_f64(),
     })
-}
-
-fn gitlab_check_ok(resp: reqwest::blocking::Response, op: &str) -> Result<()> {
-    let status = resp.status();
-    if status.is_success() { return Ok(()); }
-    let body = resp.text().unwrap_or_default();
-    Err(ToriiError::InvalidConfig(format!(
-        "GitLab API {} {} failed: {}", status, op, body
-    )))
 }
 
 fn parse_gitlab_pipeline(v: &serde_json::Value) -> Result<Pipeline> {
@@ -680,7 +588,7 @@ impl GiteaPipelineClient {
         Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
     }
 
-    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn client(&self) -> Client { crate::http::make_client() }
     fn auth_header(&self) -> String { format!("token {}", self.token) }
 }
 
@@ -702,20 +610,8 @@ impl PipelineClient for GiteaPipelineClient {
             };
             url.push_str(&format!("&status={}", g));
         }
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {}). Note: Actions API requires Gitea >=1.19 / recent Forgejo.",
-                status, msg, url
-            )));
-        }
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Gitea (url: {}) — Actions API requires Gitea >=1.19", url))?;
         let arr = json["workflow_runs"].as_array()
             .ok_or_else(|| ToriiError::InvalidConfig(format!(
                 "Gitea returned no workflow_runs array. Body: {}", json
@@ -728,7 +624,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/runs/{}/cancel",
             self.base_url, owner, repo, id
         );
-        post_no_body(&self.client(), &url, &self.auth_header(), "cancel")
+        let req = self.client().post(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Gitea cancel run")
     }
 
     fn retry(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -736,7 +633,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/runs/{}/rerun",
             self.base_url, owner, repo, id
         );
-        post_no_body(&self.client(), &url, &self.auth_header(), "retry")
+        let req = self.client().post(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Gitea retry run")
     }
 
     fn delete(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
@@ -744,18 +642,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/runs/{}",
             self.base_url, owner, repo, id
         );
-        let resp = self.client().delete(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {} delete failed: {}", s, body
-            )));
-        }
-        Ok(())
+        let req = self.client().delete(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Gitea delete run")
     }
 
     fn list_jobs(&self, owner: &str, repo: &str, pipeline_id: &str, status_filter: Option<&str>) -> Result<Vec<Job>> {
@@ -763,19 +651,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/runs/{}/jobs",
             self.base_url, owner, repo, pipeline_id
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        let json = crate::http::send_json(req, &format!("Gitea (url: {})", url))?;
         let arr = json["jobs"].as_array()
             .or_else(|| json.as_array())
             .ok_or_else(|| ToriiError::InvalidConfig(format!(
@@ -814,7 +691,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/jobs/{}/rerun",
             self.base_url, owner, repo, job_id
         );
-        post_no_body(&self.client(), &url, &self.auth_header(), "job retry")
+        let req = self.client().post(&url).header("Authorization", self.auth_header());
+        crate::http::send_empty(req, "Gitea job retry")
     }
 
     fn job_cancel(&self, _owner: &str, _repo: &str, _job_id: &str) -> Result<()> {

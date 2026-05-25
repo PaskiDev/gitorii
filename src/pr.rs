@@ -87,7 +87,7 @@ impl GitHubPrClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn auth(&self) -> String {
@@ -105,20 +105,11 @@ impl PrClient for GitHubPrClient {
             "base":  opts.base,
             "draft": opts.draft,
         });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("unknown error");
-            return Err(ToriiError::InvalidConfig(format!("GitHub API {}: {}", status, msg)));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "GitHub create PR")?;
         parse_github_pr(&json)
     }
 
@@ -127,76 +118,41 @@ impl PrClient for GitHubPrClient {
             "https://api.github.com/repos/{}/{}/pulls?state={}&per_page=50",
             owner, repo, state
         );
-        let resp = self.client()
-            .get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message in response)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitHub returned a non-array body for {}. Body: {}",
-                url, json
-            )))?;
-        arr.iter().map(parse_github_pr).collect()
+            .header("Accept", "application/vnd.github.v3+json");
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_github_pr).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
         let url = format!("https://api.github.com/repos/{}/{}/pulls/{}", owner, repo, number);
-        let resp = self.client()
-            .get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
+            .header("Accept", "application/vnd.github.v3+json");
+        let json = crate::http::send_json(req, &format!("GitHub PR #{}", number))?;
         parse_github_pr(&json)
     }
 
     fn merge(&self, owner: &str, repo: &str, number: u64, method: MergeMethod) -> Result<()> {
         let url = format!("https://api.github.com/repos/{}/{}/pulls/{}/merge", owner, repo, number);
         let body = serde_json::json!({ "merge_method": method.to_string() });
-        let resp = self.client()
-            .put(&url)
+        let req = self.client().put(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("merge failed");
-            return Err(ToriiError::InvalidConfig(format!("Merge failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitHub merge PR")
     }
 
     fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
         let url = format!("https://api.github.com/repos/{}/{}/pulls/{}", owner, repo, number);
         let body = serde_json::json!({ "state": "closed" });
-        let resp = self.client()
-            .patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("close failed");
-            return Err(ToriiError::InvalidConfig(format!("Close failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitHub close PR")
     }
 
     fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
@@ -205,35 +161,19 @@ impl PrClient for GitHubPrClient {
         if let Some(t) = opts.title { body.insert("title".into(), t.into()); }
         if let Some(b) = opts.body  { body.insert("body".into(), b.into()); }
         if let Some(b) = opts.base  { body.insert("base".into(), b.into()); }
-        let resp = self.client()
-            .patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("update failed");
-            return Err(ToriiError::InvalidConfig(format!("Update failed: {}", msg)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "GitHub update PR")
     }
 
     fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
         let url = format!("https://api.github.com/repos/{}/{}/git/refs/heads/{}", owner, repo, branch);
-        let resp = self.client()
-            .delete(&url)
+        let req = self.client().delete(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("delete branch failed");
-            return Err(ToriiError::InvalidConfig(format!("Delete branch failed: {}", msg)));
-        }
-        Ok(())
+            .header("Accept", "application/vnd.github.v3+json");
+        crate::http::send_empty(req, "GitHub delete branch")
     }
 
     fn checkout_branch(&self, pr: &PullRequest) -> String {
@@ -278,7 +218,7 @@ impl GitLabPrClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn project_path(owner: &str, repo: &str) -> String {
@@ -299,21 +239,10 @@ impl PrClient for GitLabPrClient {
             "target_branch": opts.base,
             "draft":         opts.draft,
         });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("unknown error");
-            return Err(ToriiError::InvalidConfig(format!("GitLab API {}: {}", status, msg)));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "GitLab create MR")?;
         parse_gitlab_mr(&json)
     }
 
@@ -328,34 +257,10 @@ impl PrClient for GitLabPrClient {
             "{}/projects/{}/merge_requests?state={}&per_page=50",
             self.base_url, Self::project_path(owner, repo), gl_state
         );
-        let resp = self.client()
-            .get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        // Capture the HTTP status before consuming the response, so we
-        // can surface "GitLab API 401: 401 Unauthorized" instead of the
-        // generic "Unexpected GitLab response" the old code printed when
-        // the body wasn't an array. The body shape on error is
-        // `{"message": "..."}` (or `{"error": "..."}` on some
-        // endpoints); on success it's an array of MRs.
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message in response)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned a non-array body for {}. Body: {}",
-                url, json
-            )))?;
-        arr.iter().map(parse_gitlab_mr).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitlab_mr).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
@@ -363,13 +268,8 @@ impl PrClient for GitLabPrClient {
             "{}/projects/{}/merge_requests/{}",
             self.base_url, Self::project_path(owner, repo), number
         );
-        let resp = self.client()
-            .get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab MR !{}", number))?;
         parse_gitlab_mr(&json)
     }
 
@@ -380,18 +280,10 @@ impl PrClient for GitLabPrClient {
         );
         let squash = matches!(method, MergeMethod::Squash);
         let body = serde_json::json!({ "squash": squash });
-        let resp = self.client()
-            .put(&url)
+        let req = self.client().put(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("merge failed");
-            return Err(ToriiError::InvalidConfig(format!("Merge failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitLab merge MR")
     }
 
     fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
@@ -400,18 +292,10 @@ impl PrClient for GitLabPrClient {
             self.base_url, Self::project_path(owner, repo), number
         );
         let body = serde_json::json!({ "state_event": "close" });
-        let resp = self.client()
-            .put(&url)
+        let req = self.client().put(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("close failed");
-            return Err(ToriiError::InvalidConfig(format!("Close failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitLab close MR")
     }
 
     fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
@@ -423,18 +307,10 @@ impl PrClient for GitLabPrClient {
         if let Some(t) = opts.title { body.insert("title".into(), t.into()); }
         if let Some(b) = opts.body  { body.insert("description".into(), b.into()); }
         if let Some(b) = opts.base  { body.insert("target_branch".into(), b.into()); }
-        let resp = self.client()
-            .put(&url)
+        let req = self.client().put(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("update failed");
-            return Err(ToriiError::InvalidConfig(format!("Update failed: {}", msg)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "GitLab update MR")
     }
 
     fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
@@ -443,17 +319,8 @@ impl PrClient for GitLabPrClient {
             self.base_url, Self::project_path(owner, repo),
             crate::url::encode(branch)
         );
-        let resp = self.client()
-            .delete(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("delete branch failed");
-            return Err(ToriiError::InvalidConfig(format!("Delete branch failed: {}", msg)));
-        }
-        Ok(())
+        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_empty(req, "GitLab delete branch")
     }
 
     fn checkout_branch(&self, pr: &PullRequest) -> String {
@@ -502,7 +369,7 @@ impl GiteaPrClient {
         Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
     }
 
-    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn client(&self) -> Client { crate::http::make_client() }
     fn auth(&self) -> String { format!("token {}", self.token) }
 }
 
@@ -520,18 +387,10 @@ impl PrClient for GiteaPrClient {
             "head":  opts.head,
             "base":  opts.base,
         });
-        let resp = self.client().post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("unknown error");
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {}: {}", status, msg)));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "Gitea create PR")?;
         parse_gitea_pr(&json)
     }
 
@@ -540,34 +399,16 @@ impl PrClient for GiteaPrClient {
             "{}/api/v1/repos/{}/{}/pulls?state={}&limit=50",
             self.base_url, owner, repo, state
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "Gitea returned non-array for {}. Body: {}", url, json
-            )))?;
-        arr.iter().map(parse_gitea_pr).collect()
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Gitea (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitea_pr).collect()
     }
 
     fn get(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
         let url = format!("{}/api/v1/repos/{}/{}/pulls/{}", self.base_url, owner, repo, number);
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Gitea PR #{}", number))?;
         parse_gitea_pr(&json)
     }
 
@@ -579,33 +420,19 @@ impl PrClient for GiteaPrClient {
             MergeMethod::Rebase => "rebase",
         };
         let body = serde_json::json!({ "Do": do_param });
-        let resp = self.client().post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} merge failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "Gitea merge PR")
     }
 
     fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
         let url = format!("{}/api/v1/repos/{}/{}/pulls/{}", self.base_url, owner, repo, number);
         let body = serde_json::json!({ "state": "closed" });
-        let resp = self.client().patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} close failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "Gitea close PR")
     }
 
     fn update(&self, owner: &str, repo: &str, number: u64, opts: UpdatePrOptions) -> Result<()> {
@@ -615,31 +442,16 @@ impl PrClient for GiteaPrClient {
         if let Some(b) = opts.body  { body.insert("body".into(),  serde_json::Value::String(b)); }
         if let Some(base) = opts.base { body.insert("base".into(), serde_json::Value::String(base)); }
         if body.is_empty() { return Ok(()); }
-        let resp = self.client().patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
-            .json(&serde_json::Value::Object(body))
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} update failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&serde_json::Value::Object(body));
+        crate::http::send_empty(req, "Gitea update PR")
     }
 
     fn delete_branch(&self, owner: &str, repo: &str, branch: &str) -> Result<()> {
         let url = format!("{}/api/v1/repos/{}/{}/branches/{}", self.base_url, owner, repo, branch);
-        let resp = self.client().delete(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} delete branch failed: {}", s, txt)));
-        }
-        Ok(())
+        let req = self.client().delete(&url).header("Authorization", self.auth());
+        crate::http::send_empty(req, "Gitea delete branch")
     }
 
     fn checkout_branch(&self, pr: &PullRequest) -> String {

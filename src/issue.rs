@@ -45,7 +45,7 @@ impl GitHubIssueClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn auth(&self) -> String {
@@ -59,28 +59,16 @@ impl IssueClient for GitHubIssueClient {
             "https://api.github.com/repos/{}/{}/issues?state={}&per_page=50",
             owner, repo, state
         );
-        let resp = self.client()
-            .get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth())
-            .header("Accept", "application/vnd.github.v3+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message in response)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitHub returned a non-array body for {}. Body: {}",
-                url, json
-            )))?;
+            .header("Accept", "application/vnd.github.v3+json");
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
         // filter out PRs (GitHub issues API returns PRs too)
-        Ok(arr.iter().filter(|v| v["pull_request"].is_null()).filter_map(|v| parse_github_issue(v).ok()).collect())
+        Ok(crate::http::extract_array(&json, &url)?
+            .iter()
+            .filter(|v| v["pull_request"].is_null())
+            .filter_map(|v| parse_github_issue(v).ok())
+            .collect())
     }
 
     fn create(&self, owner: &str, repo: &str, opts: CreateIssueOptions) -> Result<Issue> {
@@ -89,57 +77,32 @@ impl IssueClient for GitHubIssueClient {
             "title": opts.title,
             "body":  opts.body.unwrap_or_default(),
         });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("unknown error");
-            return Err(ToriiError::InvalidConfig(format!("GitHub API {}: {}", status, msg)));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "GitHub create issue")?;
         parse_github_issue(&json)
     }
 
     fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
         let url = format!("https://api.github.com/repos/{}/{}/issues/{}", owner, repo, number);
         let body = serde_json::json!({ "state": "closed" });
-        let resp = self.client()
-            .patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("close failed");
-            return Err(ToriiError::InvalidConfig(format!("Close failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitHub close issue")
     }
 
     fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
         let url = format!("https://api.github.com/repos/{}/{}/issues/{}/comments", owner, repo, number);
         let payload = serde_json::json!({ "body": body });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
             .header("Accept", "application/vnd.github.v3+json")
-            .json(&payload)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("comment failed");
-            return Err(ToriiError::InvalidConfig(format!("Comment failed: {}", msg)));
-        }
-        Ok(())
+            .json(&payload);
+        crate::http::send_empty(req, "GitHub comment issue")
     }
 }
 
@@ -181,7 +144,7 @@ impl GitLabIssueClient {
     }
 
     fn client(&self) -> Client {
-        Client::builder().user_agent("gitorii-cli").build().unwrap()
+        crate::http::make_client()
     }
 
     fn project_path(owner: &str, repo: &str) -> String {
@@ -200,32 +163,10 @@ impl IssueClient for GitLabIssueClient {
             "{}/projects/{}/issues?state={}&per_page=50",
             self.base_url, Self::project_path(owner, repo), gl_state
         );
-        let resp = self.client()
-            .get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        // Same pattern as pr.rs::list — check status before assuming the
-        // body is an array of issues. The pre-0.7.5 code printed
-        // "Unexpected GitLab response" for any non-200, swallowing the
-        // real reason (bad token, 404 project path, etc.).
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("(no message in response)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "GitLab returned a non-array body for {}. Body: {}",
-                url, json
-            )))?;
-        arr.iter().map(|v| parse_gitlab_issue(v)).collect()
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        crate::http::extract_array(&json, &url)?
+            .iter().map(parse_gitlab_issue).collect()
     }
 
     fn create(&self, owner: &str, repo: &str, opts: CreateIssueOptions) -> Result<Issue> {
@@ -237,21 +178,10 @@ impl IssueClient for GitLabIssueClient {
             "title":       opts.title,
             "description": opts.body.unwrap_or_default(),
         });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str()
-                .or_else(|| json["error"].as_str())
-                .unwrap_or("unknown error");
-            return Err(ToriiError::InvalidConfig(format!("GitLab API {}: {}", status, msg)));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "GitLab create issue")?;
         parse_gitlab_issue(&json)
     }
 
@@ -261,18 +191,10 @@ impl IssueClient for GitLabIssueClient {
             self.base_url, Self::project_path(owner, repo), number
         );
         let body = serde_json::json!({ "state_event": "close" });
-        let resp = self.client()
-            .put(&url)
+        let req = self.client().put(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("close failed");
-            return Err(ToriiError::InvalidConfig(format!("Close failed: {}", msg)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "GitLab close issue")
     }
 
     fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
@@ -281,18 +203,10 @@ impl IssueClient for GitLabIssueClient {
             self.base_url, Self::project_path(owner, repo), number
         );
         let payload = serde_json::json!({ "body": body });
-        let resp = self.client()
-            .post(&url)
+        let req = self.client().post(&url)
             .header("PRIVATE-TOKEN", &self.token)
-            .json(&payload)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let json: serde_json::Value = resp.json().unwrap_or_default();
-            let msg = json["message"].as_str().unwrap_or("comment failed");
-            return Err(ToriiError::InvalidConfig(format!("Comment failed: {}", msg)));
-        }
-        Ok(())
+            .json(&payload);
+        crate::http::send_empty(req, "GitLab comment issue")
     }
 }
 
@@ -335,7 +249,7 @@ impl GiteaIssueClient {
         Ok(Self { token, base_url: base_url.trim_end_matches('/').to_string() })
     }
 
-    fn client(&self) -> Client { Client::builder().user_agent("gitorii-cli").build().unwrap() }
+    fn client(&self) -> Client { crate::http::make_client() }
     fn auth(&self) -> String { format!("token {}", self.token) }
 }
 
@@ -346,24 +260,10 @@ impl IssueClient for GiteaIssueClient {
             "{}/api/v1/repos/{}/{}/issues?state={}&type=issues&limit=50",
             self.base_url, owner, repo, state
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
-        let arr = json.as_array()
-            .ok_or_else(|| ToriiError::InvalidConfig(format!(
-                "Gitea returned non-array for {}. Body: {}", url, json
-            )))?;
-        Ok(arr.iter().filter_map(|v| parse_gitea_issue(v).ok()).collect())
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Gitea (url: {})", url))?;
+        Ok(crate::http::extract_array(&json, &url)?
+            .iter().filter_map(|v| parse_gitea_issue(v).ok()).collect())
     }
 
     fn create(&self, owner: &str, repo: &str, opts: CreateIssueOptions) -> Result<Issue> {
@@ -372,53 +272,29 @@ impl IssueClient for GiteaIssueClient {
             "title": opts.title,
             "body":  opts.body.unwrap_or_default(),
         });
-        let resp = self.client().post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API parse error: {}", e)))?;
-        if !status.is_success() {
-            let msg = json["message"].as_str().unwrap_or("(no message)");
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {}: {} (url: {})", status, msg, url
-            )));
-        }
+            .json(&body);
+        let json = crate::http::send_json(req, "Gitea create issue")?;
         parse_gitea_issue(&json)
     }
 
     fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
         let url = format!("{}/api/v1/repos/{}/{}/issues/{}", self.base_url, owner, repo, number);
         let body = serde_json::json!({ "state": "closed" });
-        let resp = self.client().patch(&url)
+        let req = self.client().patch(&url)
             .header("Authorization", self.auth())
-            .json(&body)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} close failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&body);
+        crate::http::send_empty(req, "Gitea close issue")
     }
 
     fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
         let url = format!("{}/api/v1/repos/{}/{}/issues/{}/comments", self.base_url, owner, repo, number);
         let payload = serde_json::json!({ "body": body });
-        let resp = self.client().post(&url)
+        let req = self.client().post(&url)
             .header("Authorization", self.auth())
-            .json(&payload)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!("Gitea API {} comment failed: {}", s, txt)));
-        }
-        Ok(())
+            .json(&payload);
+        crate::http::send_empty(req, "Gitea comment issue")
     }
 }
 
