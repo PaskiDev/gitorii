@@ -717,23 +717,49 @@ pub fn get_platform_client(platform: &str) -> Result<Box<dyn PlatformClient>> {
             Ok(Box::new(GitLabClient::new(Some(token), base_url)))
         }
         "gitea" => {
-            let token = crate::auth::resolve_token("gitea", ".").value;
+            // Codeberg and Forgejo share the Gitea API — accept the
+            // Codeberg/Forgejo token as a fallback so a single
+            // `torii auth set codeberg ...` works.
+            let token = crate::auth::resolve_token("gitea", ".").value
+                .or_else(|| crate::auth::resolve_token("codeberg", ".").value)
+                .or_else(|| crate::auth::resolve_token("forgejo", ".").value);
             let base_url = std::env::var("GITEA_URL")
                 .unwrap_or_else(|_| "https://gitea.com".to_string());
             Ok(Box::new(GiteaClient::new(token, base_url)))
         }
         "forgejo" => {
-            let token = crate::auth::resolve_token("forgejo", ".").value;
+            let token = crate::auth::resolve_token("forgejo", ".").value
+                .or_else(|| crate::auth::resolve_token("gitea", ".").value)
+                .or_else(|| crate::auth::resolve_token("codeberg", ".").value);
             let base_url = std::env::var("FORGEJO_URL")
                 .unwrap_or_else(|_| "https://codeberg.org".to_string());
             Ok(Box::new(ForgejoClient::new(token, base_url)))
         }
         "codeberg" => {
-            let token = crate::auth::resolve_token("codeberg", ".").value;
+            let token = crate::auth::resolve_token("codeberg", ".").value
+                .or_else(|| crate::auth::resolve_token("gitea", ".").value)
+                .or_else(|| crate::auth::resolve_token("forgejo", ".").value);
             Ok(Box::new(CodebergClient::new(token)))
         }
+        "bitbucket" => {
+            let token = crate::auth::resolve_token("bitbucket", ".").value;
+            Ok(Box::new(BitbucketClient::new(token)))
+        }
+        "sourcehut" => {
+            let token = crate::auth::resolve_token("sourcehut", ".").value;
+            Ok(Box::new(SourcehutClient::new(token)))
+        }
+        "azure" => {
+            Ok(Box::new(AzureClient::new()))
+        }
+        "radicle" => {
+            Ok(Box::new(RadicleClient::new()))
+        }
         _ => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, forgejo, codeberg", platform)
+            format!(
+                "Unsupported platform: {}. Supported: github, gitlab, gitea, forgejo, codeberg, bitbucket, sourcehut, azure, radicle",
+                platform
+            )
         )),
     }
 }
@@ -778,74 +804,303 @@ impl CodebergClient {
 }
 
 // Placeholder implementations - will be completed with API calls
+// ──────────────────────────────────────────────────────────────────────────────
+// Gitea / Forgejo / Codeberg — all three share the Gitea API.
+//
+// We implement the shared bits as free functions and delegate from each
+// client. Only the base URL differs (gitea.com / codeberg.org / a
+// self-hosted Forgejo instance via FORGEJO_URL / GITEA_URL env vars).
+//
+// For 0.7.19 we wire `set_visibility` end-to-end; create / delete /
+// update / list still return clear "not implemented yet" errors —
+// follow-up work tracked in ROADMAP.
+
+fn gitea_token<'a>(label: &str, token: &'a Option<String>) -> Result<&'a String> {
+    token.as_ref().ok_or_else(|| ToriiError::InvalidConfig(format!(
+        "{label} token not found. Run: torii auth set {} YOUR_TOKEN",
+        label.to_lowercase()
+    )))
+}
+
+fn gitea_set_visibility(base_url: &str, token: &Option<String>, owner: &str, repo: &str, visibility: Visibility, label: &str) -> Result<()> {
+    // Gitea visibility is just a `private` boolean. "Internal" doesn't
+    // exist on Gitea — collapse to private.
+    let private = !matches!(visibility, Visibility::Public);
+    let tok = gitea_token(label, token)?;
+    let url = format!("{}/api/v1/repos/{}/{}", base_url.trim_end_matches('/'), owner, repo);
+    let body = serde_json::json!({ "private": private });
+    let req = crate::http::make_client().patch(&url)
+        .header("Authorization", format!("token {}", tok))
+        .header("Accept", "application/json")
+        .json(&body);
+    crate::http::send_empty(req, &format!("{} set visibility", label))
+}
+
 impl PlatformClient for GiteaClient {
     fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea delete_repo not yet wired".to_string()))
     }
     fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea update_repo not yet wired".to_string()))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea get_repo not yet wired".to_string()))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea list_repos not yet wired".to_string()))
     }
-    fn set_visibility(&self, _owner: &str, _repo: &str, _visibility: Visibility) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+    fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
+        gitea_set_visibility(&self.base_url, &self.token, owner, repo, visibility, "Gitea")
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Gitea API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Gitea configure_features not yet wired".to_string()))
     }
 }
 
 impl PlatformClient for ForgejoClient {
     fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo delete_repo not yet wired".to_string()))
     }
     fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo update_repo not yet wired".to_string()))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo get_repo not yet wired".to_string()))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo list_repos not yet wired".to_string()))
     }
-    fn set_visibility(&self, _owner: &str, _repo: &str, _visibility: Visibility) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+    fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
+        gitea_set_visibility(&self.base_url, &self.token, owner, repo, visibility, "Forgejo")
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Forgejo API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Forgejo configure_features not yet wired".to_string()))
     }
 }
 
 impl PlatformClient for CodebergClient {
     fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg delete_repo not yet wired".to_string()))
     }
     fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg update_repo not yet wired".to_string()))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg get_repo not yet wired".to_string()))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg list_repos not yet wired".to_string()))
     }
-    fn set_visibility(&self, _owner: &str, _repo: &str, _visibility: Visibility) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+    fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
+        // Codeberg is just a Forgejo instance pinned to codeberg.org.
+        gitea_set_visibility("https://codeberg.org", &self.token, owner, repo, visibility, "Codeberg")
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::InvalidConfig("Codeberg API not yet implemented".to_string()))
+        Err(ToriiError::InvalidConfig("Codeberg configure_features not yet wired".to_string()))
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Bitbucket Cloud — `PUT /2.0/repositories/{ws}/{repo}` with `is_private`.
+
+#[allow(dead_code)]
+pub struct BitbucketClient { token: Option<String> }
+
+impl BitbucketClient {
+    pub fn new(token: Option<String>) -> Self { Self { token } }
+
+    fn auth(&self) -> Result<String> {
+        let tok = self.token.as_ref().ok_or_else(|| ToriiError::InvalidConfig(
+            "Bitbucket token not found. Run: torii auth set bitbucket USERNAME:APP_PASSWORD".to_string()
+        ))?;
+        if tok.contains(':') {
+            use base64::Engine;
+            Ok(format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(tok)))
+        } else {
+            Ok(format!("Bearer {}", tok))
+        }
+    }
+}
+
+impl PlatformClient for BitbucketClient {
+    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Bitbucket create_repo not yet wired".to_string()))
+    }
+    fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Bitbucket delete_repo not yet wired".to_string()))
+    }
+    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Bitbucket update_repo not yet wired".to_string()))
+    }
+    fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Bitbucket get_repo not yet wired".to_string()))
+    }
+    fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
+        Err(ToriiError::InvalidConfig("Bitbucket list_repos not yet wired".to_string()))
+    }
+    fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
+        // Bitbucket: PUT /2.0/repositories/{ws}/{repo} with `is_private`.
+        // "Internal" doesn't exist — collapse to private.
+        let is_private = !matches!(visibility, Visibility::Public);
+        let url = format!("https://api.bitbucket.org/2.0/repositories/{}/{}", owner, repo);
+        let body = serde_json::json!({ "is_private": is_private });
+        let req = crate::http::make_client().put(&url)
+            .header("Authorization", self.auth()?)
+            .header("Accept", "application/json")
+            .json(&body);
+        crate::http::send_empty(req, "Bitbucket set visibility")
+    }
+    fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Bitbucket configure_features not yet wired".to_string()))
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sourcehut — `meta.sr.ht` GraphQL endpoint for visibility updates.
+
+#[allow(dead_code)]
+pub struct SourcehutClient { token: Option<String> }
+
+impl SourcehutClient {
+    pub fn new(token: Option<String>) -> Self { Self { token } }
+}
+
+impl PlatformClient for SourcehutClient {
+    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Sourcehut create_repo not yet wired".to_string()))
+    }
+    fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Sourcehut delete_repo not yet wired".to_string()))
+    }
+    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Sourcehut update_repo not yet wired".to_string()))
+    }
+    fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Sourcehut get_repo not yet wired".to_string()))
+    }
+    fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
+        Err(ToriiError::InvalidConfig("Sourcehut list_repos not yet wired".to_string()))
+    }
+    fn set_visibility(&self, _owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
+        // git.sr.ht exposes visibility via a GraphQL mutation. Three
+        // values: PUBLIC, UNLISTED, PRIVATE. We collapse torii's
+        // (Public, Private, Internal) → (PUBLIC, PRIVATE, UNLISTED).
+        let tok = self.token.as_ref().ok_or_else(|| ToriiError::InvalidConfig(
+            "Sourcehut token not found. Run: torii auth set sourcehut YOUR_TOKEN".to_string()
+        ))?;
+        let target = match visibility {
+            Visibility::Public   => "PUBLIC",
+            Visibility::Private  => "PRIVATE",
+            Visibility::Internal => "UNLISTED",
+        };
+        // git.sr.ht GraphQL is at https://git.sr.ht/query
+        let query = serde_json::json!({
+            "query": "mutation Update($name: String!, $visibility: Visibility!) { \
+                       updateRepository(name: $name, input: { visibility: $visibility }) { id } }",
+            "variables": { "name": repo, "visibility": target }
+        });
+        let req = crate::http::make_client().post("https://git.sr.ht/query")
+            .header("Authorization", format!("Bearer {}", tok))
+            .header("Accept", "application/json")
+            .json(&query);
+        // GraphQL servers always return 200 even on logical errors —
+        // send_json then check for `errors`.
+        let resp = crate::http::send_json(req, "Sourcehut set visibility")?;
+        if let Some(errs) = resp.get("errors").and_then(|e| e.as_array()) {
+            if !errs.is_empty() {
+                return Err(ToriiError::InvalidConfig(format!(
+                    "Sourcehut GraphQL errors: {}", serde_json::to_string(errs).unwrap_or_default()
+                )));
+            }
+        }
+        Ok(())
+    }
+    fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Sourcehut configure_features not yet wired".to_string()))
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Azure DevOps — visibility lives at the *project* level on Azure, not
+// per-repo. We surface that clearly so the user knows where to go.
+
+pub struct AzureClient;
+
+impl AzureClient { pub fn new() -> Self { Self } }
+
+fn azure_visibility_unsupported() -> ToriiError {
+    ToriiError::InvalidConfig(
+        "Azure DevOps repo visibility is controlled at the *project* level, not \
+         per-repo. Change it from `https://dev.azure.com/{org}/{project}/_settings/` \
+         → Overview → Visibility. (Individual repos can be disabled but not made \
+         public independently of their parent project.)".to_string()
+    )
+}
+
+impl PlatformClient for AzureClient {
+    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Azure DevOps create_repo not yet wired".to_string()))
+    }
+    fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Azure DevOps delete_repo not yet wired".to_string()))
+    }
+    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Azure DevOps update_repo not yet wired".to_string()))
+    }
+    fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Azure DevOps get_repo not yet wired".to_string()))
+    }
+    fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
+        Err(ToriiError::InvalidConfig("Azure DevOps list_repos not yet wired".to_string()))
+    }
+    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> { Err(azure_visibility_unsupported()) }
+    fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Azure DevOps configure_features not yet wired".to_string()))
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Radicle — peer-to-peer, no central visibility setting. Replication
+// is governed by who seeds the project, not by a host-side flag.
+
+pub struct RadicleClient;
+
+impl RadicleClient { pub fn new() -> Self { Self } }
+
+fn radicle_visibility_unsupported() -> ToriiError {
+    ToriiError::InvalidConfig(
+        "Radicle is peer-to-peer and has no central visibility setting. \
+         Reachability is governed by who seeds the project — make a project \
+         less discoverable by removing it from seed nodes, not by toggling a flag. \
+         See `rad node` and `rad inspect`.".to_string()
+    )
+}
+
+impl PlatformClient for RadicleClient {
+    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Radicle uses `rad init` to create projects locally, not a REST API.".to_string()))
+    }
+    fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Radicle has no remote-delete — projects exist as long as someone seeds them.".to_string()))
+    }
+    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> { Err(radicle_visibility_unsupported()) }
+    fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
+        Err(ToriiError::InvalidConfig("Radicle get_repo not yet wired — use `rad inspect <RID>` directly.".to_string()))
+    }
+    fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
+        Err(ToriiError::InvalidConfig("Radicle list_repos not yet wired — use `rad ls` directly.".to_string()))
+    }
+    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> { Err(radicle_visibility_unsupported()) }
+    fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
+        Err(ToriiError::InvalidConfig("Radicle has no per-repo features knob.".to_string()))
     }
 }

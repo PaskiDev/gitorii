@@ -683,12 +683,19 @@ Set the persistent token once with:
   torii remote create github myrepo --private --push  Create and push current branch
   torii remote delete github owner myrepo --yes        Delete repo (no confirmation)
   torii remote visibility github owner myrepo --public Make repo public
-  torii remote visibility github owner myrepo --private Make repo private
+  torii remote visibility codeberg user myrepo --private Codeberg/Gitea/Forgejo via shared API
+  torii remote visibility bitbucket workspace myrepo --private Bitbucket Cloud
+  torii remote visibility sourcehut ~user myrepo --private  Sourcehut (PUBLIC/UNLISTED/PRIVATE)
   torii remote configure github owner myrepo --default-branch main
   torii remote info github owner myrepo               Show repo details
   torii remote list github                            List all your GitHub repos
 
-Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo")]
+Supported platforms: github, gitlab, codeberg, gitea, forgejo, bitbucket, sourcehut, azure, radicle
+
+Visibility availability:
+  github, gitlab, codeberg, gitea, forgejo, bitbucket, sourcehut — fully wired (0.7.19+)
+  azure   — visibility is per-project on Azure DevOps, not per-repo. Error directs to the project settings.
+  radicle — peer-to-peer; reachability is governed by seeding, not by a flag. Error directs to `rad node`.")]
     Remote {
         #[command(subcommand)]
         action: RemoteCommands,

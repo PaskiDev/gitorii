@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.19] - 2026-05-25
+
+### Added
+
+- **`torii remote visibility` now works on every platform that has the
+  concept**, not just GitHub and GitLab. Before this release Gitea /
+  Forgejo / Codeberg returned a "Gitea API not yet implemented" stub
+  that's been there since 0.4.0, and Bitbucket / Sourcehut / Azure /
+  Radicle weren't even registered in the platform-client factory.
+  - **Gitea / Forgejo / Codeberg** (shared `PATCH /api/v1/repos/{owner}/{repo}`
+    with `private: true|false`). The same client serves all three —
+    `Codeberg` is a hardcoded `https://codeberg.org`, `Forgejo` and
+    `Gitea` honour `FORGEJO_URL` / `GITEA_URL` env vars for
+    self-hosted instances.
+  - **Bitbucket Cloud** (`PUT /2.0/repositories/{ws}/{repo}` with
+    `is_private`). Auth heuristic same as 0.7.17: `:` in the token
+    → Basic with `user:app_password`, else Bearer.
+  - **Sourcehut** (GraphQL mutation at `https://git.sr.ht/query`).
+    Torii's `(Public, Private, Internal)` collapses to Sourcehut's
+    `(PUBLIC, PRIVATE, UNLISTED)`.
+  - **Azure DevOps**: clear error — Azure controls visibility at the
+    *project* level via `https://dev.azure.com/{org}/{project}/_settings/`,
+    not per-repo. The error points the user there.
+  - **Radicle**: clear error — peer-to-peer, no central visibility
+    flag. Reachability is governed by seeding (`rad node`).
+
+### Internal
+
+- Token resolution for Gitea / Forgejo / Codeberg now falls back
+  through all three provider names — `torii auth set codeberg ...`
+  works whether the factory built a Gitea, Forgejo or Codeberg client.
+- New free function `gitea_set_visibility(base_url, token, owner,
+  repo, visibility, label)` shared by all three Gitea-API clients.
+
+### Docs
+
+- `ROADMAP.md` brought up to date after a three-week gap (0.6.0 →
+  0.7.19). Released section covers 0.7.x, In progress notes 0.7.19
+  visibility expansion, 0.8.0 `platforms.toml`, plus Azure Artifacts
+  and Bitbucket Data Center as platform follow-ups.
+- `torii remote --help` lists the 9 platforms supported by the
+  factory plus a visibility availability matrix.
+
 ## [0.7.18] - 2026-05-25
 
 ### Added
