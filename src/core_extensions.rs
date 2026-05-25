@@ -707,14 +707,15 @@ impl GitRepo {
                 .collect();
             let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
-            let new_oid = self.repo.commit(
+            let new_oid = crate::core::commit_inner_split(
+                &self.repo,
                 None,
                 &new_author,
                 &new_committer,
                 commit.message().unwrap_or(""),
                 &tree,
                 &parent_refs,
-            ).map_err(|e| crate::error::ToriiError::Git(e))?;
+            )?;
 
             old_to_new.insert(*oid, new_oid);
         }
@@ -773,14 +774,15 @@ impl GitRepo {
                 modified += 1;
             }
 
-            let new_oid = self.repo.commit(
+            let new_oid = crate::core::commit_inner_split(
+                &self.repo,
                 None,
                 &commit.author(),
                 &commit.committer(),
                 commit.message().unwrap_or(""),
                 &new_tree,
                 &parent_refs,
-            ).map_err(|e| crate::error::ToriiError::Git(e))?;
+            )?;
 
             old_to_new.insert(*oid, new_oid);
         }
@@ -1013,8 +1015,7 @@ impl GitRepo {
             .peel_to_commit()
             .map_err(|e| crate::error::ToriiError::Git(e))?;
         let msg = format!("Revert \"{}\"", commit.summary().unwrap_or(commit_hash));
-        self.repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&head])
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        crate::core::commit_inner(&self.repo, Some("HEAD"), &sig, &msg, &tree, &[&head])?;
 
         println!("✅ Reverted commit {}", &commit_hash[..7.min(commit_hash.len())]);
         Ok(())
@@ -1096,8 +1097,7 @@ impl GitRepo {
                 .peel_to_commit()
                 .map_err(|e| crate::error::ToriiError::Git(e))?;
             let msg = format!("Merge branch '{}'", branch_name);
-            self.repo.commit(Some("HEAD"), &sig, &sig, &msg, &tree, &[&head, &branch_commit])
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            crate::core::commit_inner(&self.repo, Some("HEAD"), &sig, &msg, &tree, &[&head, &branch_commit])?;
             self.repo.cleanup_state()
                 .map_err(|e| crate::error::ToriiError::Git(e))?;
 

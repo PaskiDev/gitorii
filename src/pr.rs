@@ -480,16 +480,61 @@ fn parse_gitea_pr(json: &serde_json::Value) -> Result<PullRequest> {
 }
 
 // ============================================================================
+// Sourcehut (paradigm mismatch — patches go through mailing lists)
+// ============================================================================
+//
+// Sourcehut's contribution model is **email-based patches sent to
+// `~user/repo-devel@lists.sr.ht`**, not a server-side merge-request
+// object. There is no REST endpoint to "create a PR" the way GitHub
+// or GitLab expose one — the patch lives on the mailing list, the
+// maintainer applies it locally with `torii patch apply`, then pushes.
+//
+// We expose a stub client that returns a clear error explaining the
+// workflow, so the four CLI commands (`torii pr list/create/view/...`)
+// fail with guidance instead of silently working on a wrong endpoint.
+// `torii patch export <range>` + mailing the resulting `.patch` files
+// is the supported flow.
+
+pub struct SourcehutPrClient;
+
+impl SourcehutPrClient {
+    pub fn new() -> Result<Self> { Ok(Self) }
+}
+
+fn srht_pr_unsupported() -> ToriiError {
+    ToriiError::InvalidConfig(
+        "Sourcehut doesn't have server-side pull requests — \
+         contributions are sent as `git format-patch` style emails to \
+         the project's `*-devel@lists.sr.ht` mailing list. Use \
+         `torii patch export <range>` to produce the .patch files and \
+         mail them with `git send-email` (or your MUA). The maintainer \
+         applies them with `torii patch apply`.".to_string()
+    )
+}
+
+impl PrClient for SourcehutPrClient {
+    fn create(&self, _o: &str, _r: &str, _opts: CreatePrOptions) -> Result<PullRequest> { Err(srht_pr_unsupported()) }
+    fn list(&self, _o: &str, _r: &str, _state: &str) -> Result<Vec<PullRequest>> { Err(srht_pr_unsupported()) }
+    fn get(&self, _o: &str, _r: &str, _n: u64) -> Result<PullRequest> { Err(srht_pr_unsupported()) }
+    fn merge(&self, _o: &str, _r: &str, _n: u64, _m: MergeMethod) -> Result<()> { Err(srht_pr_unsupported()) }
+    fn close(&self, _o: &str, _r: &str, _n: u64) -> Result<()> { Err(srht_pr_unsupported()) }
+    fn update(&self, _o: &str, _r: &str, _n: u64, _opts: UpdatePrOptions) -> Result<()> { Err(srht_pr_unsupported()) }
+    fn delete_branch(&self, _o: &str, _r: &str, _b: &str) -> Result<()> { Err(srht_pr_unsupported()) }
+    fn checkout_branch(&self, pr: &PullRequest) -> String { pr.head.clone() }
+}
+
+// ============================================================================
 // Factory
 // ============================================================================
 
 pub fn get_pr_client(platform: &str) -> Result<Box<dyn PrClient>> {
     match platform.to_lowercase().as_str() {
-        "github" => Ok(Box::new(GitHubPrClient::new()?)),
-        "gitlab" => Ok(Box::new(GitLabPrClient::new()?)),
-        "gitea"  => Ok(Box::new(GiteaPrClient::new()?)),
+        "github"    => Ok(Box::new(GitHubPrClient::new()?)),
+        "gitlab"    => Ok(Box::new(GitLabPrClient::new()?)),
+        "gitea"     => Ok(Box::new(GiteaPrClient::new()?)),
+        "sourcehut" => Ok(Box::new(SourcehutPrClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
         )),
     }
 }
@@ -516,9 +561,12 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
     // the same API surface. Self-hosted Gitea/Forgejo instances need
     // explicit declaration via ~/.config/torii/platforms.toml (coming
     // in 0.8.0); for now they fall through to None.
+    // 0.7.15: git.sr.ht detected as "sourcehut" — issues + builds
+    // supported, PR / release / package have no equivalent there.
     let platform = if url.contains("github.com") { "github" }
         else if url.contains("gitlab.com") { "gitlab" }
         else if url.contains("codeberg.org") { "gitea" }
+        else if url.contains("git.sr.ht") { "sourcehut" }
         else { return None; };
 
     let path = if url.contains('@') {

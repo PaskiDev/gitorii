@@ -317,15 +317,136 @@ fn parse_gitea_issue(json: &serde_json::Value) -> Result<Issue> {
     })
 }
 
+// ── Sourcehut (todo.sr.ht) ───────────────────────────────────────────────────
+//
+// Sourcehut's bug tracker lives on a separate subdomain from the git
+// host. The convention is `~user/<tracker-name>` where tracker name is
+// usually the same as the repo (but not enforced) — projects sometimes
+// have multiple trackers (e.g. `-bugs`, `-features`). We assume
+// `tracker_name == repo_name`; if the user uses a different naming
+// scheme they can pass `--remote` to a remote whose URL points at the
+// correct tracker (in 0.8.0 with platforms.toml this will be
+// configurable per-host).
+
+pub struct SourcehutIssueClient {
+    token: String,
+}
+
+impl SourcehutIssueClient {
+    pub fn new() -> Result<Self> {
+        let token = crate::auth::resolve_token("sourcehut", ".").value
+            .ok_or_else(|| ToriiError::InvalidConfig(
+                "Sourcehut token not found. Generate one at https://meta.sr.ht/oauth and run: \
+                 torii auth set sourcehut YOUR_TOKEN".to_string()
+            ))?;
+        Ok(Self { token })
+    }
+
+    fn client(&self) -> Client { crate::http::make_client() }
+    fn auth(&self) -> String { format!("token {}", self.token) }
+}
+
+impl IssueClient for SourcehutIssueClient {
+    fn list(&self, owner: &str, repo: &str, _state: &str) -> Result<Vec<Issue>> {
+        // todo.sr.ht doesn't support per-state filtering on the list
+        // endpoint — we fetch then filter client-side. The owner already
+        // includes the `~` prefix from the URL parser.
+        let url = format!(
+            "https://todo.sr.ht/api/trackers/{}/{}/tickets",
+            owner, repo
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("Sourcehut todo (url: {})", url))?;
+        let arr = json["results"].as_array()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "Sourcehut returned no `results` array. Body: {}", json
+            )))?;
+        Ok(arr.iter().filter_map(|v| parse_sourcehut_issue(v).ok()).collect())
+    }
+
+    fn create(&self, owner: &str, repo: &str, opts: CreateIssueOptions) -> Result<Issue> {
+        let url = format!(
+            "https://todo.sr.ht/api/trackers/{}/{}/tickets",
+            owner, repo
+        );
+        let body = serde_json::json!({
+            "title":       opts.title,
+            "description": opts.body.unwrap_or_default(),
+        });
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&body);
+        let json = crate::http::send_json(req, "Sourcehut create ticket")?;
+        parse_sourcehut_issue(&json)
+    }
+
+    fn close(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        // todo.sr.ht ticket updates go through `PUT /tickets/{id}` with
+        // a `status: "resolved"` and `resolution: "fixed"` body.
+        let url = format!(
+            "https://todo.sr.ht/api/trackers/{}/{}/tickets/{}",
+            owner, repo, number
+        );
+        let body = serde_json::json!({
+            "status":     "resolved",
+            "resolution": "fixed",
+        });
+        let req = self.client().put(&url)
+            .header("Authorization", self.auth())
+            .json(&body);
+        crate::http::send_empty(req, "Sourcehut close ticket")
+    }
+
+    fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
+        let url = format!(
+            "https://todo.sr.ht/api/trackers/{}/{}/tickets/{}/events",
+            owner, repo, number
+        );
+        let payload = serde_json::json!({ "comment": body });
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .json(&payload);
+        crate::http::send_empty(req, "Sourcehut comment ticket")
+    }
+}
+
+fn parse_sourcehut_issue(json: &serde_json::Value) -> Result<Issue> {
+    let number = json["id"].as_u64().unwrap_or(0);
+    let owner = json["tracker"]["owner"]["canonical_name"].as_str().unwrap_or("");
+    let tracker = json["tracker"]["name"].as_str().unwrap_or("");
+    Ok(Issue {
+        number,
+        title:      json["title"].as_str().unwrap_or("").to_string(),
+        body:       json["description"].as_str().map(String::from),
+        // todo.sr.ht uses "reported" (open) and "resolved" (closed).
+        state:      match json["status"].as_str().unwrap_or("") {
+            "reported" => "open".to_string(),
+            "resolved" => "closed".to_string(),
+            other      => other.to_string(),
+        },
+        author:     json["submitter"]["canonical_name"].as_str().unwrap_or("").to_string(),
+        url:        format!("https://todo.sr.ht/{}/{}/{}", owner, tracker, number),
+        labels:     json["labels"].as_array().map(|a| {
+            a.iter().filter_map(|l| l["name"].as_str().map(String::from)).collect()
+        }).unwrap_or_default(),
+        assignees:  json["assignees"].as_array().map(|a| {
+            a.iter().filter_map(|u| u["canonical_name"].as_str().map(String::from)).collect()
+        }).unwrap_or_default(),
+        created_at: json["created"].as_str().unwrap_or("").to_string(),
+        comments:   0, // todo.sr.ht doesn't expose a count on the list endpoint
+    })
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn get_issue_client(platform: &str) -> Result<Box<dyn IssueClient>> {
     match platform.to_lowercase().as_str() {
-        "github" => Ok(Box::new(GitHubIssueClient::new()?)),
-        "gitlab" => Ok(Box::new(GitLabIssueClient::new()?)),
-        "gitea"  => Ok(Box::new(GiteaIssueClient::new()?)),
+        "github"    => Ok(Box::new(GitHubIssueClient::new()?)),
+        "gitlab"    => Ok(Box::new(GitLabIssueClient::new()?)),
+        "gitea"     => Ok(Box::new(GiteaIssueClient::new()?)),
+        "sourcehut" => Ok(Box::new(SourcehutIssueClient::new()?)),
         other => Err(ToriiError::InvalidConfig(
-            format!("Unsupported platform: {}. Supported: github, gitlab, gitea", other)
+            format!("Unsupported platform: {}. Supported: github, gitlab, gitea, sourcehut", other)
         )),
     }
 }

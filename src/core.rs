@@ -825,6 +825,22 @@ pub(crate) fn commit_inner(
     tree: &git2::Tree,
     parents: &[&git2::Commit],
 ) -> Result<git2::Oid> {
+    // Convenience wrapper for the common case where author == committer.
+    commit_inner_split(repo, update_ref, sig, sig, message, tree, parents)
+}
+
+/// Like [`commit_inner`] but takes the author and committer separately.
+/// Used by history-rewriting ops (reauthor, rewrite, remove-file) that
+/// preserve the original author while changing the committer.
+pub(crate) fn commit_inner_split(
+    repo: &git2::Repository,
+    update_ref: Option<&str>,
+    author: &Signature,
+    committer: &Signature,
+    message: &str,
+    tree: &git2::Tree,
+    parents: &[&git2::Commit],
+) -> Result<git2::Oid> {
     // Cheap config read — load_local already merges global underneath
     // local, so a per-repo override of `git.sign_commits` works as
     // expected.
@@ -833,7 +849,7 @@ pub(crate) fn commit_inner(
         .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
 
     if !tc.git.sign_commits {
-        return Ok(repo.commit(update_ref, sig, sig, message, tree, parents)?);
+        return Ok(repo.commit(update_ref, author, committer, message, tree, parents)?);
     }
 
     // Signing path: need a key id.
@@ -846,7 +862,7 @@ pub(crate) fn commit_inner(
 
     // Build the commit object as bytes, sign it, then write the signed
     // commit object out.
-    let buffer = repo.commit_create_buffer(sig, sig, message, tree, parents)?;
+    let buffer = repo.commit_create_buffer(author, committer, message, tree, parents)?;
     let buffer_str = std::str::from_utf8(&buffer)
         .map_err(|e| ToriiError::InvalidConfig(format!(
             "commit buffer not valid UTF-8 (cannot GPG-sign): {}", e

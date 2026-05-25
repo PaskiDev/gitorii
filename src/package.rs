@@ -158,10 +158,18 @@ fn parse_gitlab_package_file(v: &serde_json::Value, package_id: &str) -> Result<
 
 pub fn get_package_client(platform: &str) -> Result<Box<dyn PackageClient>> {
     match platform.to_lowercase().as_str() {
-        "gitlab" => Ok(Box::new(GitLabPackageClient::new()?)),
-        "github" => Err(ToriiError::InvalidConfig(
+        "gitlab"    => Ok(Box::new(GitLabPackageClient::new()?)),
+        "github"    => Err(ToriiError::InvalidConfig(
             "GitHub doesn't have a Generic Package Registry equivalent to GitLab's. \
              Binary release assets on GitHub are managed through Releases: use `torii release` instead.".to_string()
+        )),
+        "gitea"     => Err(ToriiError::InvalidConfig(
+            "Gitea/Codeberg has a Package Registry but its API isn't wired into torii yet. \
+             For binary assets, use Releases (see `torii release`).".to_string()
+        )),
+        "sourcehut" => Err(ToriiError::InvalidConfig(
+            "Sourcehut has no Package Registry concept. Binaries are distributed via the \
+             project's own homepage or builds.sr.ht's `triggers` (uploaded externally).".to_string()
         )),
         other => Err(ToriiError::InvalidConfig(
             format!("Unsupported platform: {}. Supported for `torii package`: gitlab", other)
