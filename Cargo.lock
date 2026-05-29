@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "gitorii"
-version = "0.7.22"
+version = "0.7.23"
 dependencies = [
  "anyhow",
  "base64",

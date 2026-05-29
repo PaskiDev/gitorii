@@ -76,9 +76,12 @@ pub fn rm(repo_path: &Path, paths: &[PathBuf], opts: &RmOpts) -> Result<()> {
                     .remove_path(path)
                     .map_err(|e| ToriiError::InvalidConfig(format!("index remove_path: {e}")))?;
             }
-        } else {
-            // Already missing on disk — still try the index removal.
-            index.remove_path(path).ok();
+        } else if index.get_path(path, 0).is_some() {
+            // Already missing on disk, but still tracked — clean up the
+            // index entry and surface any error rather than swallow it.
+            index
+                .remove_path(path)
+                .map_err(|e| ToriiError::InvalidConfig(format!("index remove_path: {e}")))?;
         }
 
         // Filesystem removal (unless --cached).
@@ -146,7 +149,11 @@ pub fn mv(repo_path: &Path, from: &Path, to: &Path, opts: &MvOpts) -> Result<()>
     // and `diff` happens at display time via libgit2's similarity heuristic,
     // we just need to record the old delete + new add as the staged state.
     let mut index = repo.index().map_err(ToriiError::Git)?;
-    index.remove_path(from).ok();
+    if index.get_path(from, 0).is_some() {
+        index
+            .remove_path(from)
+            .map_err(|e| ToriiError::InvalidConfig(format!("index remove_path: {e}")))?;
+    }
     index
         .add_path(to)
         .map_err(|e| ToriiError::InvalidConfig(format!("index add_path: {e}")))?;

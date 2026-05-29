@@ -116,15 +116,23 @@ impl SnapshotManager {
         let mut id = timestamp.format("%Y%m%d_%H%M%S_%3f").to_string();
 
         // Defensive: if even the millis collide (highly unlikely), append
-        // an integer suffix until the dir is fresh.
+        // an integer suffix until the dir is fresh. Use atomic create_dir
+        // so two parallel `torii save` invocations can't both decide the
+        // same dir is free and silently overwrite each other's bundle.
+        fs::create_dir_all(&self.snapshots_dir)?;
         let mut snapshot_dir = self.snapshots_dir.join(&id);
         let mut suffix = 0;
-        while snapshot_dir.exists() {
-            suffix += 1;
-            id = format!("{}_{}", timestamp.format("%Y%m%d_%H%M%S_%3f"), suffix);
-            snapshot_dir = self.snapshots_dir.join(&id);
+        loop {
+            match fs::create_dir(&snapshot_dir) {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    suffix += 1;
+                    id = format!("{}_{}", timestamp.format("%Y%m%d_%H%M%S_%3f"), suffix);
+                    snapshot_dir = self.snapshots_dir.join(&id);
+                }
+                Err(e) => return Err(e.into()),
+            }
         }
-        fs::create_dir_all(&snapshot_dir)?;
 
         let branch = repo.get_current_branch()?;
         
@@ -428,6 +436,26 @@ impl SnapshotManager {
         }
         let oid = repo.stash_save2(&signature, Some(stash_name), Some(flags))
             .map_err(ToriiError::Git)?;
+
+        // Defensive: libgit2's `stash_save2` has been observed to
+        // return OK without actually saving anything in some edge
+        // cases (changes only in the index with DEFAULT flags). Verify
+        // the working tree is clean post-stash; if it isn't, libgit2
+        // lied to us and we don't want the user to think their
+        // changes are safe when they aren't.
+        let mut verify = git2::StatusOptions::new();
+        verify.include_untracked(include_untracked)
+              .recurse_untracked_dirs(include_untracked);
+        let still_dirty = !repo.statuses(Some(&mut verify))
+            .map_err(ToriiError::Git)?
+            .is_empty();
+        if still_dirty {
+            return Err(ToriiError::Snapshot(
+                "stash_save2 returned OK but the working tree is still dirty — \
+                 libgit2 didn't actually stash anything. Workaround: \
+                 `torii snapshot create -n WIP` (named persistent snapshot).".to_string()
+            ));
+        }
 
         println!("📦 Stashed changes");
         println!("   stash@{{0}}: {}", &oid.to_string()[..7]);

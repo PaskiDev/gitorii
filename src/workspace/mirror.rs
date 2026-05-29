@@ -190,11 +190,18 @@ impl MirrorManager {
             enabled: true,
         };
 
-        config.mirrors.push(mirror);
-        self.save_config(&config)?;
-
+        // Add the git remote first — if that fails (invalid URL, libgit2
+        // error) we haven't yet polluted mirrors.json. Then persist the
+        // config; if THAT fails (disk full, perms), roll the remote back
+        // so disk state matches mirrors.json.
         let repo = GitRepo::open(&self.repo_path)?;
         self.add_git_remote(&repo, &remote_name, &url)?;
+
+        config.mirrors.push(mirror);
+        if let Err(e) = self.save_config(&config) {
+            let _ = repo.repository().remote_delete(&remote_name);
+            return Err(e);
+        }
 
         Ok(())
     }

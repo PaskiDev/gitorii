@@ -69,7 +69,10 @@ impl GitRepo {
             }
         }
 
-        let _ = std::fs::write(&exclude_path, buf);
+        std::fs::write(&exclude_path, buf)
+            .map_err(|e| ToriiError::InvalidConfig(
+                format!("write {}: {}", exclude_path.display(), e)
+            ))?;
         Ok(())
     }
 
@@ -539,9 +542,8 @@ impl GitRepo {
         let callbacks = Self::auth_callbacks_for(&remote_url);
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(callbacks);
-        if let Err(e) = remote.push(&refspec_refs, Some(&mut push_options)) {
-            eprintln!("⚠️  Tag push failed: {}", e);
-        }
+        remote.push(&refspec_refs, Some(&mut push_options))
+            .map_err(ToriiError::Git)?;
         Ok(())
     }
 

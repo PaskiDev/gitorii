@@ -7,6 +7,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.23] - 2026-05-29
+
+Robustness patch: 15 real bugs fixed across three audit passes —
+silent failures, partial-state operations, races, and a couple of
+panic risks. No new features, no API change.
+
+### Fixed
+
+- **`torii snapshot stash` no longer reports success when libgit2
+  didn't actually save anything**. After `stash_save2` returns, we
+  now verify the working tree is clean and surface a clear error
+  (with `torii snapshot create -n WIP` as workaround) if it isn't.
+  Matches the known issue documented in the project memory.
+- **Tag push no longer prints a warning and returns success**.
+  `push_all_tags_via_git2` now propagates the libgit2 error so the
+  caller knows tags didn't reach the remote.
+- **`.git/info/exclude` write errors no longer swallowed**.
+  `sync_toriignore` now returns the I/O error instead of pretending
+  exclusions were synced (which could lead to private files getting
+  staged on the next `-a`).
+- **`torii rm` and `torii mv` now propagate index errors**. The
+  previous `.ok()` pattern silently dropped failures to update the
+  index, leaving the staged state inconsistent with what the user
+  saw. Both commands now check `index.get_path` first and surface
+  any real error.
+- **`torii submodule deinit` warns explicitly when the working-tree
+  directory can't be removed**. Index and `.gitmodules` are already
+  updated at that point; the leftover dir is now flagged with a
+  manual cleanup instruction instead of being silently ignored.
+- **`append_known_host` propagates `create_dir_all` errors**.
+  Previously an unwritable `~/.ssh/` parent would silently swallow
+  the directory creation and the subsequent host-key write would
+  fail without context.
+- **`torii worktree move` no longer corrupts gitdir metadata when
+  canonicalize fails post-rename**. Falls back to the raw new path
+  so the `.git/worktrees/<name>/gitdir` admin file still gets
+  patched to point at the new location.
+- **Snapshot creation is now atomic against parallel `torii save`**.
+  Switched from `exists() + create_dir_all` (TOCTOU) to a `create_dir`
+  retry loop, so two simultaneous saves can't both decide the same
+  directory is free and overwrite each other's bundle.
+- **`torii mirror add` no longer leaves `mirrors.json` referencing a
+  remote that doesn't exist**. Order reversed: add the git remote
+  first, then persist the config; if config save fails, the remote
+  is rolled back.
+- **`torii clean` no longer silently swallows removal errors**.
+  Failures are collected, reported per-path at the end, and the
+  command returns a non-zero exit so scripts can detect partial
+  cleanups.
+- **Secret scanner custom rules now skip comment lines** the same way
+  built-in rules do. Previously a `// example: ghp_xxx…` line in a
+  staged file would false-positive against a user-configured
+  `[secrets]` regex. `scan_history` aligned too: `/*` and `*` (block
+  continuation) now skip alongside `#` and `//`.
+- **TUI PR overlay no longer freezes when the terminal is very small**.
+  `(overlay_height as usize - 3)` underflowed to `usize::MAX` for
+  heights below 3, spinning forever pushing empty lines. `saturating_sub`
+  caps it at zero.
+- **TUI workspace-name picker no longer panics on multi-byte
+  characters**. Slicing the input around `ws_cursor` now snaps to
+  the nearest `is_char_boundary`, so cursoring through ñ, é, or
+  emoji works instead of crashing the TUI.
+
 ## [0.7.22] - 2026-05-25
 
 Internal-only release: bug fixes and robustness improvements

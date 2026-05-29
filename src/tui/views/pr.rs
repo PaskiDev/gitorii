@@ -346,8 +346,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(vec![
             Span::styled(format!("  {}█", pr.create_input), Style::default().fg(C_CYAN)),
         ]));
-        // fill remaining space
-        while lines.len() < (oh as usize - 3) {
+        // fill remaining space — saturating_sub protects against tiny
+        // overlay heights (oh < 3) that would otherwise underflow usize
+        // and spin forever pushing empty lines.
+        let target = (oh as usize).saturating_sub(3);
+        while lines.len() < target {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![

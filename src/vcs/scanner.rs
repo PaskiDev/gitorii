@@ -308,6 +308,13 @@ pub fn scan_staged_with_custom(
         let content = String::from_utf8_lossy(blob.content()).to_string();
 
         for (i, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            // Same comment-skip as scan_staged — custom rules should not
+            // false-positive on documentation/comments that mention the
+            // very patterns they describe.
+            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                continue;
+            }
             for rule in rules {
                 if rule.regex.is_match(line) {
                     findings.push(Finding {
@@ -390,7 +397,7 @@ pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
 
         for (line_num, line) in content.lines().enumerate() {
             let trimmed = line.trim();
-            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") {
+            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
                 continue;
             }
 
@@ -495,7 +502,7 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
 
             for (line_num, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
-                if trimmed.starts_with('#') || trimmed.starts_with("//") {
+                if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
                     continue;
                 }
 
