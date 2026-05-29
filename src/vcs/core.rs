@@ -39,7 +39,12 @@ impl GitRepo {
     /// itself — local rules are machine-private and must never be committed.
     /// Called automatically on open and before staging.
     pub fn sync_toriignore(&self) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         let public_path = repo_path.join(".toriignore");
         let local_path = repo_path.join(".toriignore.local");
         let exclude_path = self.repo.path().join("info").join("exclude");

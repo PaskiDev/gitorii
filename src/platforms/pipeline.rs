@@ -192,19 +192,10 @@ impl PipelineClient for GitHubPipelineClient {
             "https://api.github.com/repos/{}/{}/actions/jobs/{}/logs",
             owner, repo, job_id
         );
-        let resp = self.client().get(&url)
+        let req = self.client().get(&url)
             .header("Authorization", self.auth_header())
-            .header("Accept", "application/vnd.github+json")
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitHub API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitHub API {} log fetch failed: {}", s, body
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("GitHub API log read error: {}", e)))
+            .header("Accept", "application/vnd.github+json");
+        crate::http::send_text(req, "GitHub job log")
     }
 
     fn job_retry(&self, _owner: &str, _repo: &str, _job_id: &str) -> Result<()> {
@@ -439,18 +430,8 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/trace",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {} log fetch failed: {}", s, body
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("GitLab API log read error: {}", e)))
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        crate::http::send_text(req, "GitLab job trace")
     }
 
     fn job_retry(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
@@ -472,24 +453,12 @@ impl PipelineClient for GitLabPipelineClient {
     }
 
     fn job_artifacts_download(&self, owner: &str, repo: &str, job_id: &str, output_path: &std::path::Path) -> Result<()> {
-        // Bytes response (not JSON) so we bypass send_json.
         let url = format!(
             "{}/projects/{}/jobs/{}/artifacts",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let resp = self.client().get(&url)
-            .header("PRIVATE-TOKEN", &self.token)
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "GitLab API {} artifacts fetch failed: {}", s, body
-            )));
-        }
-        let bytes = resp.bytes()
-            .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API artifacts read error: {}", e)))?;
+        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let bytes = crate::http::send_bytes(req, "GitLab artifacts")?;
         std::fs::write(output_path, &bytes)
             .map_err(|e| ToriiError::InvalidConfig(format!("Failed to write artifacts to {}: {}", output_path.display(), e)))?;
         Ok(())
@@ -672,18 +641,8 @@ impl PipelineClient for GiteaPipelineClient {
             "{}/api/v1/repos/{}/{}/actions/jobs/{}/logs",
             self.base_url, owner, repo, job_id
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Gitea API error: {}", e)))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let txt = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "Gitea API {} log fetch failed: {}", status, txt
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Gitea log read error: {}", e)))
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        crate::http::send_text(req, "Gitea job log")
     }
 
     fn job_retry(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
@@ -903,20 +862,9 @@ impl PipelineClient for SourcehutPipelineClient {
     }
 
     fn job_log(&self, _owner: &str, _repo: &str, job_id: &str) -> Result<String> {
-        // builds.sr.ht serves the log as plain text — bypass send_json.
         let url = format!("https://builds.sr.ht/api/jobs/{}/log", job_id);
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Sourcehut API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "Sourcehut API {} log fetch failed: {}", s, body
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Sourcehut log read: {}", e)))
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        crate::http::send_text(req, "Sourcehut job log")
     }
 
     fn job_retry(&self, owner: &str, repo: &str, job_id: &str) -> Result<()> {
@@ -1117,23 +1065,12 @@ impl PipelineClient for BitbucketPipelineClient {
     }
 
     fn job_log(&self, owner: &str, repo: &str, job_id: &str) -> Result<String> {
-        // Plain-text log — bypass send_json.
         let url = format!(
             "https://api.bitbucket.org/2.0/repositories/{}/{}/pipelines/{}/log",
             owner, repo, job_id
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Bitbucket API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "Bitbucket API {} log fetch failed: {}", s, body
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Bitbucket log read: {}", e)))
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        crate::http::send_text(req, "Bitbucket pipeline log")
     }
 
     fn job_retry(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
@@ -1399,18 +1336,8 @@ impl PipelineClient for AzurePipelineClient {
             "https://dev.azure.com/{}/{}/_apis/build/builds/{}/logs/0?api-version=7.0",
             org, project, job_id
         );
-        let resp = self.client().get(&url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Azure API error: {}", e)))?;
-        if !resp.status().is_success() {
-            let s = resp.status();
-            let body = resp.text().unwrap_or_default();
-            return Err(ToriiError::InvalidConfig(format!(
-                "Azure API {} log fetch failed: {}", s, body
-            )));
-        }
-        resp.text().map_err(|e| ToriiError::InvalidConfig(format!("Azure log read: {}", e)))
+        let req = self.client().get(&url).header("Authorization", self.auth_header());
+        crate::http::send_text(req, "Azure build log")
     }
 
     fn job_retry(&self, _o: &str, _r: &str, _j: &str) -> Result<()> {
@@ -1447,17 +1374,8 @@ impl PipelineClient for AzurePipelineClient {
             .ok_or_else(|| ToriiError::InvalidConfig(
                 "Azure artifact has no downloadUrl".to_string()
             ))?;
-        let resp = self.client().get(download_url)
-            .header("Authorization", self.auth_header())
-            .send()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Azure API error: {}", e)))?;
-        if !resp.status().is_success() {
-            return Err(ToriiError::InvalidConfig(format!(
-                "Azure API {} artifact fetch failed", resp.status()
-            )));
-        }
-        let bytes = resp.bytes()
-            .map_err(|e| ToriiError::InvalidConfig(format!("Azure artifact read: {}", e)))?;
+        let download_req = self.client().get(download_url).header("Authorization", self.auth_header());
+        let bytes = crate::http::send_bytes(download_req, "Azure artifact")?;
         std::fs::write(output_path, &bytes)
             .map_err(|e| ToriiError::InvalidConfig(format!("Failed to write artifact to {}: {}", output_path.display(), e)))?;
         Ok(())

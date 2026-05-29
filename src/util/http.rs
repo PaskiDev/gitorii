@@ -23,6 +23,8 @@
 //! `"Gitea (cancel pipeline)"`). Callers include the URL there when it
 //! helps debugging.
 
+use std::time::Duration;
+
 use reqwest::blocking::{Client, RequestBuilder};
 use serde_json::Value;
 
@@ -31,11 +33,25 @@ use crate::error::{Result, ToriiError};
 /// User-agent string sent on every platform API call.
 pub const USER_AGENT: &str = "gitorii-cli";
 
+/// Per-request hard cap. A platform API that hangs longer than this
+/// should fail and surface a clear error instead of freezing torii.
+/// 60 s is generous — most API endpoints respond in <2 s; the outlier
+/// is GitLab Pipeline list on huge projects which can take 10-15 s.
+const REQUEST_TIMEOUT_SECS: u64 = 60;
+
+/// Hard cap on the *connect* phase. If we can't reach the host at all
+/// in 10 s, no API call is going to succeed either.
+const CONNECT_TIMEOUT_SECS: u64 = 10;
+
 /// Construct the standard blocking HTTP client used by every platform
-/// client. Panics only on a build failure we don't expect at runtime.
+/// client. Sets a global request timeout so a hung API can't freeze
+/// torii forever. Panics only on a build failure we don't expect at
+/// runtime (would mean `reqwest` is fundamentally broken).
 pub fn make_client() -> Client {
     Client::builder()
         .user_agent(USER_AGENT)
+        .timeout(Duration::from_secs(REQUEST_TIMEOUT_SECS))
+        .connect_timeout(Duration::from_secs(CONNECT_TIMEOUT_SECS))
         .build()
         .expect("reqwest client build failed")
 }
@@ -86,4 +102,46 @@ pub fn extract_array<'a>(json: &'a Value, ctx: &str) -> Result<&'a Vec<Value>> {
     json.as_array().ok_or_else(|| ToriiError::InvalidConfig(format!(
         "expected array body for {}, got: {}", ctx, json
     )))
+}
+
+/// Send a request and return its body as text. For endpoints like
+/// `/jobs/{id}/trace` or `/builds/{id}/log` that return plain text
+/// instead of JSON — bypasses [`send_json`]'s `serde_json` parse step.
+///
+/// Same error shape as [`send_json`]: status check, contextual error
+/// message, single point of timeout enforcement.
+pub fn send_text(req: RequestBuilder, ctx: &str) -> Result<String> {
+    let resp = req.send()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{} API error: {}", ctx, e)))?;
+    let status = resp.status();
+    let body = resp.text()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{} API read error: {}", ctx, e)))?;
+    if !status.is_success() {
+        return Err(ToriiError::InvalidConfig(format!(
+            "{} API {}: {}",
+            ctx, status,
+            if body.is_empty() { "(empty body)" } else { body.lines().next().unwrap_or(&body) }
+        )));
+    }
+    Ok(body)
+}
+
+/// Send a request and return its body as raw bytes. For artifact
+/// downloads (zip / tarball) — the bytes go straight to disk on the
+/// caller's side.
+pub fn send_bytes(req: RequestBuilder, ctx: &str) -> Result<Vec<u8>> {
+    let resp = req.send()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{} API error: {}", ctx, e)))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        return Err(ToriiError::InvalidConfig(format!(
+            "{} API {}: {}",
+            ctx, status,
+            if body.is_empty() { "(binary response, empty)" } else { &body }
+        )));
+    }
+    let bytes = resp.bytes()
+        .map_err(|e| ToriiError::InvalidConfig(format!("{} API read error: {}", ctx, e)))?;
+    Ok(bytes.to_vec())
 }

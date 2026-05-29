@@ -2405,7 +2405,7 @@ impl App {
         let mut values: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         let mut list_args = vec!["config", "list"];
         if self.config_view.scope == ConfigScope::Local { list_args.push("--local"); }
-        if let Ok(out) = std::process::Command::new("torii")
+        if let Ok(out) = std::process::Command::new(super::torii_exe())
             .args(&list_args)
             .output()
         {

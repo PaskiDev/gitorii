@@ -208,7 +208,13 @@ impl GitRepo {
     /// real shell to invoke the GIT_SEQUENCE_EDITOR helper script.
     #[cfg(unix)]
     pub fn rebase_with_todo(&self, base: &str, todo_file: &std::path::Path) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        // Surface a clear error rather than panicking if libgit2 ever surprises us.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         let todo_abs = todo_file.canonicalize().map_err(|_| {
             crate::error::ToriiError::InvalidConfig(
                 format!("Todo file not found: {}", todo_file.display())
@@ -237,7 +243,13 @@ impl GitRepo {
     /// Interactive rebase
     #[cfg(unix)]
     pub fn rebase_interactive(&self, base: &str) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        // Surface a clear error rather than panicking if libgit2 ever surprises us.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         println!("🔄 Starting interactive rebase onto {}...", base);
         let status = std::process::Command::new("git")
             .args(["rebase", "-i", base])
@@ -257,7 +269,13 @@ impl GitRepo {
     /// Interactive rebase from the root commit (`git rebase -i --root`)
     #[cfg(unix)]
     pub fn rebase_root_interactive(&self) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        // Surface a clear error rather than panicking if libgit2 ever surprises us.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         println!("🔄 Starting interactive rebase from root...");
         let status = std::process::Command::new("git")
             .args(["rebase", "-i", "--root"])
@@ -277,7 +295,13 @@ impl GitRepo {
     /// Rebase from the root commit using a pre-written todo file
     #[cfg(unix)]
     pub fn rebase_root_with_todo(&self, todo_file: &std::path::Path) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        // Surface a clear error rather than panicking if libgit2 ever surprises us.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         let todo_abs = todo_file.canonicalize().map_err(|_| {
             crate::error::ToriiError::InvalidConfig(
                 format!("Todo file not found: {}", todo_file.display())
@@ -395,7 +419,13 @@ impl GitRepo {
 
     /// Run `git rebase <flag>` for CLI-managed rebases.
     fn delegate_rebase_subcommand(&self, flag: &str, verb: &str) -> Result<()> {
-        let repo_path = self.repo.path().parent().unwrap().to_path_buf();
+        // .git/ always has a parent (the work tree) for non-bare repos.
+        // Surface a clear error rather than panicking if libgit2 ever surprises us.
+        let repo_path = self.repo.path().parent()
+            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
+                "git directory has no parent (bare repo?)".to_string()
+            ))?
+            .to_path_buf();
         let status = std::process::Command::new("git")
             .args(["rebase", flag])
             .current_dir(&repo_path)
