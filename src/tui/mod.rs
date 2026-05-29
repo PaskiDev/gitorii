@@ -14,6 +14,23 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use app::{App, View, SyncOp, SyncStatus, EventKind};
 use events::{Action, EventHandler};
 
+/// Path to the currently-running torii binary. The TUI shells out to
+/// itself for several ops (`save --revert`, `cherry-pick`, etc.) — if
+/// we use the literal string `"torii"` and the binary is invoked via
+/// an absolute path or a renamed alias, the subprocess fails. Caching
+/// `current_exe()` once on first use is cheap and avoids the
+/// PATH-injection edge case too. Falls back to the literal "torii" if
+/// the kernel can't tell us our own path (very rare — chroot etc.).
+pub(crate) fn torii_exe() -> std::ffi::OsString {
+    use std::sync::OnceLock;
+    static EXE: OnceLock<std::ffi::OsString> = OnceLock::new();
+    EXE.get_or_init(|| {
+        std::env::current_exe()
+            .map(|p| p.into_os_string())
+            .unwrap_or_else(|_| "torii".into())
+    }).clone()
+}
+
 fn ssh_to_https(url: &str) -> String {
     // git@github.com:owner/repo.git → https://github.com/owner/repo
     if let Some(rest) = url.strip_prefix("git@") {
@@ -252,7 +269,7 @@ fn run_loop(
                     let amend = app.commit_view.amend;
                     if !msg.is_empty() && (amend || !app.staged.is_empty()) {
                         if amend {
-                            let output = std::process::Command::new("torii")
+                            let output = std::process::Command::new(torii_exe())
                                 .args(["save", "--amend", "-m", &msg])
                                 .current_dir(&app.repo_path)
                                 .output();
@@ -405,7 +422,7 @@ fn run_loop(
                     app.tag_view.new_name.clear();
                     app.tag_view.new_message.clear();
                     if !name.is_empty() {
-                        let result = std::process::Command::new("torii")
+                        let result = std::process::Command::new(torii_exe())
                             .args(["tag", "create", &name, "-m", &message])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -421,7 +438,7 @@ fn run_loop(
                 Action::TagPush => {
                     if let Some(tag) = app.tag_view.tags.get(app.tag_view.idx) {
                         let name = tag.name.clone();
-                        let result = std::process::Command::new("torii")
+                        let result = std::process::Command::new(torii_exe())
                             .args(["tag", "push", &name])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -436,7 +453,7 @@ fn run_loop(
                 Action::TagDelete => {
                     if let Some(tag) = app.tag_view.tags.get(app.tag_view.idx) {
                         let name = tag.name.clone();
-                        let result = std::process::Command::new("torii")
+                        let result = std::process::Command::new(torii_exe())
                             .args(["tag", "delete", &name])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -452,7 +469,7 @@ fn run_loop(
                 Action::HistoryCherryPick => {
                     if let Some(entry) = app.history_view.reflog.get(app.history_view.idx) {
                         let hash = entry.id.clone();
-                        let ok = std::process::Command::new("torii")
+                        let ok = std::process::Command::new(torii_exe())
                             .args(["cherry-pick", &hash])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -468,7 +485,7 @@ fn run_loop(
                     let target = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
                     if !target.is_empty() {
-                        let ok = std::process::Command::new("torii")
+                        let ok = std::process::Command::new(torii_exe())
                             .args(["history", "rebase", &target])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -482,7 +499,7 @@ fn run_loop(
 
                 Action::HistoryScan => {
                     let full = app.history_view.scan_full;
-                    let mut cmd = std::process::Command::new("torii");
+                    let mut cmd = std::process::Command::new(torii_exe());
                     cmd.args(if full { vec!["scan", "--history"] } else { vec!["scan"] })
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -493,7 +510,7 @@ fn run_loop(
                 }
 
                 Action::HistoryClean => {
-                    let ok = std::process::Command::new("torii")
+                    let ok = std::process::Command::new(torii_exe())
                         .args(["history", "clean"])
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -508,7 +525,7 @@ fn run_loop(
                     let path = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
                     if !path.is_empty() {
-                        let ok = std::process::Command::new("torii")
+                        let ok = std::process::Command::new(torii_exe())
                             .args(["history", "remove-file", &path])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -526,7 +543,7 @@ fn run_loop(
                     app.history_view.input.clear();
                     app.history_view.input2.clear();
                     if !start.is_empty() && !end.is_empty() {
-                        let ok = std::process::Command::new("torii")
+                        let ok = std::process::Command::new(torii_exe())
                             .args(["history", "rewrite", &start, &end])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -542,7 +559,7 @@ fn run_loop(
                     let file = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
                     if !file.is_empty() {
-                        let output = std::process::Command::new("torii")
+                        let output = std::process::Command::new(torii_exe())
                             .args(["blame", &file])
                             .current_dir(&app.repo_path)
                             .output();
@@ -564,7 +581,7 @@ fn run_loop(
                 }
 
                 Action::RemoteFetch => {
-                    let output = std::process::Command::new("torii")
+                    let output = std::process::Command::new(torii_exe())
                         .args(["sync", "--fetch"])
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -662,7 +679,7 @@ fn run_loop(
                 }
 
                 Action::MirrorSync => {
-                    let status = std::process::Command::new("torii")
+                    let status = std::process::Command::new(torii_exe())
                         .args(["mirror", "sync"])
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -675,7 +692,7 @@ fn run_loop(
                 }
 
                 Action::MirrorSyncForce => {
-                    let status = std::process::Command::new("torii")
+                    let status = std::process::Command::new(torii_exe())
                         .args(["mirror", "sync", "--force"])
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -690,7 +707,7 @@ fn run_loop(
                 Action::MirrorRemove => {
                     if let Some(m) = app.remote_view.selected_mirror().map(|m| (m.platform.to_lowercase(), m.account.clone())) {
                         let (platform, account) = m;
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["mirror", "remove", &platform, &account])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -742,7 +759,7 @@ fn run_loop(
                     app.remote_view.new_mirror_type = 0;
                     let mut args: Vec<&str> = vec!["mirror", "add", &platform, "user", &account, &repo];
                     if is_primary { args.push("--primary"); }
-                    let status = std::process::Command::new("torii")
+                    let status = std::process::Command::new(torii_exe())
                         .args(&args)
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
@@ -759,7 +776,7 @@ fn run_loop(
                     if let Some((platform, account)) = app.remote_view.selected_mirror()
                         .map(|m| (m.platform.to_lowercase(), m.account.clone()))
                     {
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["mirror", "promote", &platform, &account])
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
@@ -786,7 +803,7 @@ fn run_loop(
                         if app.config_view.scope == app::ConfigScope::Local {
                             cmd_args.push("--local");
                         }
-                        let output = std::process::Command::new("torii")
+                        let output = std::process::Command::new(torii_exe())
                             .args(&cmd_args)
                             .output();
                         app.config_view.editing = false;
@@ -853,7 +870,7 @@ fn run_loop(
                 Action::WorkspaceSync => {
                     if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
                         let name = ws.name.clone();
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["workspace", "sync", &name])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
@@ -875,7 +892,7 @@ fn run_loop(
                         .and_then(|ws| ws.repos.get(app.workspace_view.repo_idx))
                         .map(|r| r.path.clone());
                     if let Some(path) = repo_path {
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["sync"])
                             .current_dir(&path)
                             .stdout(std::process::Stdio::null())
@@ -911,7 +928,7 @@ fn run_loop(
                 Action::WorkspaceDelete => {
                     if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
                         let name = ws.name.clone();
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["workspace", "delete", &name])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
@@ -930,7 +947,7 @@ fn run_loop(
                         (ws.name.clone(), app.workspace_view.input.clone())
                     } else { continue; };
                     app.workspace_view.input.clear();
-                    let status = std::process::Command::new("torii")
+                    let status = std::process::Command::new(torii_exe())
                         .args(["workspace", "save", &name, "-m", &msg_text])
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -948,7 +965,7 @@ fn run_loop(
                         (ws.name.clone(), app.workspace_view.input.clone())
                     } else { continue; };
                     app.workspace_view.input.clear();
-                    let status = std::process::Command::new("torii")
+                    let status = std::process::Command::new(torii_exe())
                         .args(["workspace", "add", &name, &path])
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
@@ -1000,7 +1017,7 @@ fn run_loop(
                         (ws.name.clone(), path)
                     } else { continue; };
                     if let Some(path) = path {
-                        let status = std::process::Command::new("torii")
+                        let status = std::process::Command::new(torii_exe())
                             .args(["workspace", "remove", &name, &path])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
@@ -1025,7 +1042,7 @@ fn run_loop(
                         let mut args = vec!["pr", "create", "-t", &title, "-b", &base];
                         if !desc.is_empty() { args.extend(["-d", &desc]); }
                         if draft { args.push("--draft"); }
-                        let output = std::process::Command::new("torii")
+                        let output = std::process::Command::new(torii_exe())
                             .args(&args)
                             .output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
@@ -1111,23 +1128,23 @@ fn run_loop(
                         match get_pr_client(&platform).and_then(|c| c.merge(&owner, &repo_name, number, method)) {
                             Ok(_) => {
                                 // 1. checkout base branch
-                                let _ = std::process::Command::new("torii")
+                                let _ = std::process::Command::new(torii_exe())
                                     .args(["branch", &base_branch])
                                     .current_dir(&repo_path)
                                     .output();
                                 // 2. pull to get the merge commit locally
-                                let _ = std::process::Command::new("torii")
+                                let _ = std::process::Command::new(torii_exe())
                                     .args(["sync", "--pull"])
                                     .current_dir(&repo_path)
                                     .output();
                                 // 3. delete head branch on all remotes
-                                let del_remote = std::process::Command::new("torii")
+                                let del_remote = std::process::Command::new(torii_exe())
                                     .args(["branch", "--delete-remote", &head_branch])
                                     .current_dir(&repo_path)
                                     .output();
                                 let remote_ok = matches!(&del_remote, Ok(o) if o.status.success());
                                 // 4. force delete local branch (already on base, so -d might fail if not merged locally)
-                                let _ = std::process::Command::new("torii")
+                                let _ = std::process::Command::new(torii_exe())
                                     .args(["branch", "-d", &head_branch, "--force"])
                                     .current_dir(&repo_path)
                                     .output();
@@ -1148,7 +1165,7 @@ fn run_loop(
                 Action::PrClose => {
                     if let Some(pr) = app.pr_view.prs.get(app.pr_view.idx) {
                         let number = pr.number.to_string();
-                        let output = std::process::Command::new("torii")
+                        let output = std::process::Command::new(torii_exe())
                             .args(["pr", "close", &number])
                             .output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
@@ -1162,7 +1179,7 @@ fn run_loop(
                 Action::PrCheckout => {
                     if let Some(pr) = app.pr_view.prs.get(app.pr_view.idx) {
                         let number = pr.number.to_string();
-                        let output = std::process::Command::new("torii")
+                        let output = std::process::Command::new(torii_exe())
                             .args(["pr", "checkout", &number])
                             .output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
@@ -1176,7 +1193,7 @@ fn run_loop(
                 Action::PrOpenBrowser => {
                     if let Some(pr) = app.pr_view.prs.get(app.pr_view.idx) {
                         let number = pr.number.to_string();
-                        let _ = std::process::Command::new("torii")
+                        let _ = std::process::Command::new(torii_exe())
                             .args(["pr", "open", &number])
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())

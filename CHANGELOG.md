@@ -7,6 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.22] - 2026-05-25
+
+Internal-only release: bug fixes and robustness improvements
+surfaced by a code audit. No user-visible behaviour change for
+the happy path; the changes show up when things go wrong (HTTP
+hang, malformed config, weird repo state).
+
+### Fixed
+
+- **HTTP requests no longer hang forever**. `util::http::make_client`
+  now sets `timeout=60s` and `connect_timeout=10s`. Every platform
+  client (7 of them, ~30 endpoints) inherits this — previously a
+  hung API would freeze torii until Ctrl-C. `cloud/` and
+  `transport/https` already had timeouts; only the platform
+  surface was missing them.
+- **Self-shelling subprocesses in the TUI** (`save --revert`,
+  `cherry-pick`, etc.) now invoke the running binary via
+  `std::env::current_exe()` instead of the literal name `"torii"`.
+  Avoids PATH-injection and works correctly when the binary is
+  installed under a different name or invoked via absolute path.
+  33 call-sites in `tui/mod.rs` + `tui/app.rs` migrated through a
+  new `tui::torii_exe()` helper.
+- **`self.repo.path().parent().unwrap()`** pattern (6 sites in
+  `vcs/core.rs` + `vcs/core_extensions.rs`) now returns a clear
+  `InvalidConfig` error instead of panicking on the bare-repo
+  edge case.
+
+### Performance
+
+- **`auth::resolve_token` now caches** per `(provider, repo_path)`
+  in-process. CLI flows that resolve N tokens repeatedly (e.g.
+  `torii workspace status` across M repos) previously re-read the
+  global / local TOML on every platform-client constructor. Now
+  one read per (provider, path) per `torii` invocation.
+  Invalidated automatically by `set_token` / `remove_token`.
+
+### Added
+
+- **`util::http::send_text(req, ctx)` and `send_bytes(req, ctx)`** —
+  the same shape as `send_json` for endpoints that return plain
+  text (job logs / build traces) or raw bytes (artifact zips).
+  Replaces 5 inline `.send() + status check + body read` blocks
+  in `pipeline.rs` (~50 lines collapsed).
+- **`ToriiError::Network`, `PlatformApi`, `Auth`** variants —
+  intended to replace the catch-all `InvalidConfig` over time.
+  Adopted in new code from this point on; migration of the ~430
+  existing `InvalidConfig` sites is tracked under "Validation
+  and polish" in ROADMAP.
+
+### Internal
+
+- Code audit identified four further areas of tech debt deferred
+  to future releases:
+  - The `PlatformClient` trait (`workspace/remote.rs`) has 7
+    methods but most platforms implement only `set_visibility` —
+    the rest return `"not yet wired"`. Worth splitting into
+    `VisibilityClient` (minimum) + `RepoManagementClient` (full
+    surface) so the trait stops lying about capability.
+  - ~150 `.unwrap()` calls outside tests, mostly `Mutex::lock`
+    patterns that are safe by construction; case-by-case audit
+    needed.
+  - The ~430 `InvalidConfig` sites that should migrate to the
+    new typed variants.
+  - TUI background loaders (`platform_*_rx` channels) drop
+    threads on view-switch instead of cancelling them — work is
+    wasted, not corrupted, but worth fixing.
+  - Hardcoded base URLs (`api.github.com`, `api.bitbucket.org`,
+    `dev.azure.com`) prevent self-hosted GitHub Enterprise /
+    Bitbucket Data Center / Azure on-prem from working out of
+    the box. Deferred to 0.8.0 where `~/.config/torii/platforms.toml`
+    will make per-host overrides trivial without per-client
+    refactoring.
+
 ## [0.7.21] - 2026-05-25
 
 ### Added

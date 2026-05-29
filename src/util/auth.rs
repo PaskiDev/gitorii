@@ -230,7 +230,7 @@ pub fn normalise_provider(name: &str) -> Result<String> {
 
 pub fn set_token(provider: &str, token: &str, local: Option<&Path>) -> Result<()> {
     let provider = normalise_provider(provider)?;
-    if let Some(repo) = local {
+    let result = if let Some(repo) = local {
         let mut store = load_local_raw(repo);
         store.tokens.insert(provider, token.to_string());
         save_local(repo, &store)
@@ -238,22 +238,28 @@ pub fn set_token(provider: &str, token: &str, local: Option<&Path>) -> Result<()
         let mut store = load_global();
         store.tokens.insert(provider, token.to_string());
         save_global(&store)
-    }
+    };
+    // Invalidate the resolve_token cache so the next call picks up
+    // the new value instead of returning the pre-set state.
+    invalidate_token_cache();
+    result
 }
 
 pub fn remove_token(provider: &str, local: Option<&Path>) -> Result<bool> {
     let provider = normalise_provider(provider)?;
-    if let Some(repo) = local {
+    let removed = if let Some(repo) = local {
         let mut store = load_local_raw(repo);
-        let removed = store.tokens.remove(&provider).is_some();
+        let r = store.tokens.remove(&provider).is_some();
         save_local(repo, &store)?;
-        Ok(removed)
+        r
     } else {
         let mut store = load_global();
-        let removed = store.tokens.remove(&provider).is_some();
+        let r = store.tokens.remove(&provider).is_some();
         save_global(&store)?;
-        Ok(removed)
-    }
+        r
+    };
+    invalidate_token_cache();
+    Ok(removed)
 }
 
 // -- The big one: token resolution -----------------------------------------
@@ -282,10 +288,45 @@ pub struct ResolvedToken {
 /// Look up a token using the documented precedence:
 /// env-per-host > env generic > local config > global config > none.
 ///
+// In-process cache for resolve_token results. Many CLI flows resolve
+// the same token N times (workspace status across M repos × P
+// platforms = N*M*P file reads). Caching is safe because a single
+// `torii ...` invocation is short-lived and config rarely changes
+// mid-run; the few mutating commands (`set_token`, `remove_token`)
+// invalidate the cache below.
+fn token_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, ResolvedToken>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ResolvedToken>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn invalidate_token_cache() {
+    if let Ok(mut g) = token_cache().lock() {
+        g.clear();
+    }
+}
+
 /// `repo_path` is the path to the repo (`.` is usually fine); pass it
 /// even when you don't expect a local override, the local lookup is
 /// cheap when the file doesn't exist.
+///
+/// Results are cached in-process per `(provider, repo_path)` to avoid
+/// re-reading the global / local TOML on every platform-client
+/// construction. `set_token` and `remove_token` invalidate the cache.
 pub fn resolve_token<P: AsRef<Path>>(provider: &str, repo_path: P) -> ResolvedToken {
+    let key = format!("{}|{}", provider.to_lowercase(), repo_path.as_ref().display());
+    if let Ok(g) = token_cache().lock() {
+        if let Some(hit) = g.get(&key) {
+            return hit.clone();
+        }
+    }
+    let result = resolve_token_uncached(provider, repo_path);
+    if let Ok(mut g) = token_cache().lock() {
+        g.insert(key, result.clone());
+    }
+    result
+}
+
+fn resolve_token_uncached<P: AsRef<Path>>(provider: &str, repo_path: P) -> ResolvedToken {
     let provider_lc = provider.to_lowercase();
 
     // 1. Per-provider env vars.
