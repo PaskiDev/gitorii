@@ -438,7 +438,18 @@ pub fn remove(repo_path: &Path, path: &Path) -> Result<()> {
         index.write().map_err(ToriiError::Git)?;
     }
     if abs_path.exists() {
-        std::fs::remove_dir_all(&abs_path).ok();
+        if let Err(e) = std::fs::remove_dir_all(&abs_path) {
+            // Index/.gitmodules are already updated; leftover dir is a
+            // partial state the user must clean up manually. Tell them
+            // explicitly rather than report success.
+            eprintln!(
+                "⚠️  Submodule '{}' deregistered from index and .gitmodules,\n   but failed to remove working-tree dir {}: {}\n   Remove it manually: rm -rf {}",
+                name,
+                abs_path.display(),
+                e,
+                abs_path.display(),
+            );
+        }
     }
 
     println!(

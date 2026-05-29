@@ -236,10 +236,17 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                     };
                     let name_content = match mode {
                         PickerMode::NamingWorkspace => {
-                            let before = &ws_name[..ws_cursor.min(ws_name.len())];
-                            let cur_char = ws_name[ws_cursor.min(ws_name.len())..].chars().next().unwrap_or(' ');
-                            let after = if ws_cursor >= ws_name.len() { "" } else {
-                                &ws_name[ws_cursor + cur_char.len_utf8()..]
+                            // Snap to nearest char boundary so we never slice
+                            // through a multi-byte codepoint (ñ, emoji, etc.)
+                            // even if ws_cursor lands mid-char by accident.
+                            let mut cursor = ws_cursor.min(ws_name.len());
+                            while cursor > 0 && !ws_name.is_char_boundary(cursor) {
+                                cursor -= 1;
+                            }
+                            let before = &ws_name[..cursor];
+                            let cur_char = ws_name[cursor..].chars().next().unwrap_or(' ');
+                            let after = if cursor >= ws_name.len() { "" } else {
+                                &ws_name[cursor + cur_char.len_utf8()..]
                             };
                             Line::from(vec![
                                 Span::raw(" "),

@@ -613,9 +613,14 @@ pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
         }
     }
 
+    // The rename already succeeded; if canonicalize fails (broken symlink
+    // chain, perms on intermediate dir), fall back to the raw path so the
+    // worktree admin file still gets updated. Better an unresolved path
+    // pointing at the real new location than a moved dir with stale gitdir
+    // metadata.
     let new_canon = new
         .canonicalize()
-        .map_err(|e| ToriiError::InvalidConfig(format!("canonicalize {}: {}", new.display(), e)))?;
+        .unwrap_or_else(|_| new.to_path_buf());
 
     // 2. Patch the `<new>/.git` link to point at the (unchanged) gitdir.
     //    The gitdir itself doesn't move — only the worktree dir.

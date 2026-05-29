@@ -385,7 +385,7 @@ fn append_known_host(host: &str, port: u16, key: &PublicKey) -> io::Result<()> {
     let path = known_hosts_path()
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "HOME not set"))?;
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).ok();
+        std::fs::create_dir_all(parent)?;
     }
     let host_field = if port == 22 {
         host.to_string()

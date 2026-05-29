@@ -83,6 +83,8 @@ pub fn clean(repo_path: &Path, opts: &Opts) -> Result<()> {
         return Ok(());
     }
 
+    let mut removed = 0usize;
+    let mut errors: Vec<(std::path::PathBuf, std::io::Error)> = Vec::new();
     for (path, _) in &targets {
         let abs = workdir.join(path);
         let meta = std::fs::symlink_metadata(&abs).ok();
@@ -91,15 +93,30 @@ pub fn clean(repo_path: &Path, opts: &Opts) -> Result<()> {
                 if !opts.dirs {
                     continue; // git's behaviour: dirs need -d
                 }
-                let _ = std::fs::remove_dir_all(&abs);
+                match std::fs::remove_dir_all(&abs) {
+                    Ok(_) => removed += 1,
+                    Err(e) => errors.push((abs, e)),
+                }
             }
             Some(_) => {
-                let _ = std::fs::remove_file(&abs);
+                match std::fs::remove_file(&abs) {
+                    Ok(_) => removed += 1,
+                    Err(e) => errors.push((abs, e)),
+                }
             }
             None => {}
         }
     }
-    println!("\n✅ Cleaned {} entr{}.", targets.len(),
-        if targets.len() == 1 { "y" } else { "ies" });
+    println!("\n✅ Cleaned {} entr{}.", removed,
+        if removed == 1 { "y" } else { "ies" });
+    if !errors.is_empty() {
+        eprintln!("\n⚠️  {} path(s) failed to remove:", errors.len());
+        for (p, e) in &errors {
+            eprintln!("   {} — {}", p.display(), e);
+        }
+        return Err(ToriiError::InvalidConfig(format!(
+            "clean: {} path(s) failed (see above)", errors.len()
+        )));
+    }
     Ok(())
 }
