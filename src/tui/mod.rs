@@ -218,6 +218,21 @@ fn run_loop(
                 }
             }
         }
+        if let Some(rx) = &app.platform_runners_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_runners_rx = None;
+                app.platform_view.loading = false;
+                match result {
+                    Ok(items) => {
+                        let len = items.len();
+                        app.platform_view.runners = items;
+                        app.platform_view.runners_idx =
+                            app.platform_view.runners_idx.min(len.saturating_sub(1));
+                    }
+                    Err(e) => app.platform_view.error = Some(e.to_string()),
+                }
+            }
+        }
         if let Some(rx) = &app.platform_job_log_rx {
             if let Ok(result) = rx.try_recv() {
                 app.platform_job_log_rx = None;
@@ -267,17 +282,29 @@ fn run_loop(
                 }
             }
         }
-        // Contextual actions (cancel/retry/artifacts). On any result we
-        // refresh the active sub-tab so the new status (canceled/pending
-        // after retry) shows up without the user having to press Ctrl-R.
+        // Contextual actions (cancel/retry/artifacts/runner ops). On any
+        // result we refresh the active sub-tab so the new status shows up
+        // without the user having to press Ctrl-R. Runner reset-token is
+        // the one path that returns sensitive payload (the new auth
+        // token) — we strip it from the status bar and push it to the
+        // event log so it's discoverable without leaking into UI chrome.
         if let Some(rx) = &app.platform_action_rx {
             if let Ok(result) = rx.try_recv() {
                 app.platform_action_rx = None;
                 app.platform_view.action_in_flight = false;
-                let msg = match result {
+                let mut msg = match result {
                     Ok(m) => m,
                     Err(e) => e,
                 };
+                if let Some(idx) = msg.find("|token=") {
+                    let (visible, payload) = msg.split_at(idx);
+                    let token = payload.trim_start_matches("|token=");
+                    app.log_event(
+                        &format!("runner reset-token → new value: {}", token),
+                        EventKind::Success,
+                    );
+                    msg = format!("{} — open event log [e] for value", visible);
+                }
                 app.platform_view.action_msg = Some(msg);
                 app.platform_view.action_msg_at = Some(std::time::Instant::now());
                 app.load_platform_active_sub_tab();
@@ -304,6 +331,7 @@ fn run_loop(
             && app.platform_jobs_rx.is_none()
             && app.platform_releases_rx.is_none()
             && app.platform_packages_rx.is_none()
+            && app.platform_runners_rx.is_none()
         {
             let due = match app.platform_view.last_poll_at {
                 Some(at) => at.elapsed() >= std::time::Duration::from_secs(10),

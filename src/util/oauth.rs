@@ -210,6 +210,127 @@ pub fn device_flow_supported(provider: &str) -> bool {
     device_flow_provider(provider).is_some()
 }
 
+/// Best-effort revoke of an access token, used by `torii auth rotate`
+/// after the new token is in hand. Returns Ok(true) if the platform
+/// confirmed the revocation, Ok(false) if no revoke endpoint is wired
+/// (the caller should print a "revoke manually at <URL>" hint), or
+/// Err on a real failure (network, 5xx, malformed response). 401/404
+/// from the revoke endpoint count as "already invalid" → Ok(true).
+pub fn revoke_token(provider: &str, token: &str) -> Result<bool> {
+    match provider {
+        "gitlab" => revoke_gitlab(token),
+        "github" => revoke_github(token),
+        // Codeberg/Gitea: no stable OAuth revoke endpoint in the
+        // Gitea spec, only PAT delete by ID — caller falls back to
+        // a manual hint.
+        _ => Ok(false),
+    }
+}
+
+fn revoke_gitlab(token: &str) -> Result<bool> {
+    // RFC 7009 — GitLab accepts revoke without client_secret for
+    // public clients. The bundled torii client is registered that
+    // way; users with a custom TORII_GITLAB_APP_ID must also have
+    // it configured as a public client (the env-var fallback path
+    // is for self-managed GitLab where the user controls both).
+    let client_id = std::env::var("TORII_GITLAB_APP_ID").ok()
+        .unwrap_or_else(|| "b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe".to_string());
+    let client = crate::http::make_client();
+    let req = client.post("https://gitlab.com/oauth/revoke")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("token", token),
+            ("token_type_hint", "access_token"),
+        ]);
+    let resp = req.send().map_err(|e| ToriiError::InvalidConfig(
+        format!("GitLab revoke: {}", e)
+    ))?;
+    let status = resp.status().as_u16();
+    match status {
+        200 | 401 | 404 => Ok(true),
+        _ => {
+            let body = resp.text().unwrap_or_default();
+            Err(ToriiError::InvalidConfig(format!(
+                "GitLab revoke returned HTTP {}: {}", status, body
+            )))
+        }
+    }
+}
+
+fn revoke_github(token: &str) -> Result<bool> {
+    // GitHub's `DELETE /applications/{client_id}/token` is the only
+    // documented way to revoke an OAuth token, and it requires Basic
+    // auth with client_id + client_secret. Bundled apps don't ship
+    // their secret; users running their own app can set the env var.
+    let client_id = std::env::var("TORII_GITHUB_APP_ID").ok()
+        .unwrap_or_else(|| "Ov23liDcA2Njn7eRWnYV".to_string());
+    let Ok(client_secret) = std::env::var("TORII_GITHUB_APP_SECRET") else {
+        return Ok(false);
+    };
+    let client = crate::http::make_client();
+    let url = format!("https://api.github.com/applications/{}/token", client_id);
+    let req = client.delete(&url)
+        .basic_auth(client_id.clone(), Some(client_secret))
+        .header("Accept", "application/vnd.github+json")
+        .json(&serde_json::json!({ "access_token": token }));
+    let resp = req.send().map_err(|e| ToriiError::InvalidConfig(
+        format!("GitHub revoke: {}", e)
+    ))?;
+    let status = resp.status().as_u16();
+    match status {
+        204 | 404 | 422 => Ok(true),
+        _ => {
+            let body = resp.text().unwrap_or_default();
+            Err(ToriiError::InvalidConfig(format!(
+                "GitHub revoke returned HTTP {}: {}", status, body
+            )))
+        }
+    }
+}
+
+/// Where the user should go to revoke an OAuth token manually when
+/// `revoke_token` returns Ok(false) (no programmatic endpoint). Used
+/// in `torii auth rotate` to print a helpful hint.
+pub fn revoke_hint_url(provider: &str) -> Option<&'static str> {
+    match provider {
+        "github"   => Some("https://github.com/settings/applications"),
+        "gitlab"   => Some("https://gitlab.com/-/profile/applications"),
+        "codeberg" => Some("https://codeberg.org/user/settings/applications"),
+        "bitbucket"=> Some("https://bitbucket.org/account/settings/app-authorizations/"),
+        _ => None,
+    }
+}
+
+/// GitLab-specific: rotate a PAT in place via the native
+/// `POST /personal_access_tokens/self/rotate` endpoint. Returns the
+/// new token text. Requires the current token to have `api` scope.
+/// Only GitLab supports this; for other platforms callers should
+/// fall back to the OAuth rotate path.
+pub fn rotate_gitlab_pat(token: &str) -> Result<String> {
+    let client = crate::http::make_client();
+    let req = client
+        .post("https://gitlab.com/api/v4/personal_access_tokens/self/rotate")
+        .header("Authorization", format!("Bearer {}", token));
+    let resp = req.send().map_err(|e| ToriiError::InvalidConfig(
+        format!("GitLab rotate PAT: {}", e)
+    ))?;
+    let status = resp.status().as_u16();
+    let body = resp.text().unwrap_or_default();
+    if status != 200 && status != 201 {
+        return Err(ToriiError::InvalidConfig(format!(
+            "GitLab rotate PAT returned HTTP {}: {}", status, body
+        )));
+    }
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
+        ToriiError::InvalidConfig(format!("parse rotate response: {}", e))
+    })?;
+    json["token"].as_str()
+        .map(String::from)
+        .ok_or_else(|| ToriiError::InvalidConfig(format!(
+            "GitLab rotate PAT response missing `token`: {}", body
+        )))
+}
+
 // =============================================================================
 // OAuth 2.0 Authorization Code Grant with PKCE + loopback HTTP server.
 //

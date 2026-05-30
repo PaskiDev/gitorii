@@ -2421,6 +2421,10 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             app.platform_view.sub_tab = PlatformSubTab::Packages;
             app.load_platform_packages();
         }
+        (_, KeyCode::Char('5')) => {
+            app.platform_view.sub_tab = PlatformSubTab::Runners;
+            app.load_platform_runners();
+        }
 
         // Toggle auto-refresh polling on/off.
         (_, KeyCode::Char('p')) => {
@@ -2472,8 +2476,12 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             if *idx + 1 < len { *idx += 1; }
         }
 
-        // Contextual actions (cancel/retry/artifacts). Gated by
+        // Contextual actions (cancel/retry/artifacts/runner-ops). Gated by
         // `action_in_flight` so the user can't fire multiple at once.
+        // Per sub-tab:
+        //   Pipelines: c=cancel  x=retry
+        //   Jobs:      c=cancel  x=retry  a=artifacts
+        //   Runners:   c=pause   x=resume t=reset-token d=delete
         (_, KeyCode::Char('c')) if !app.platform_view.action_in_flight => {
             match app.platform_view.sub_tab {
                 PlatformSubTab::Pipelines => {
@@ -2484,6 +2492,11 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                 PlatformSubTab::Jobs => {
                     if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
                         app.action_job_cancel(j.id.clone());
+                    }
+                }
+                PlatformSubTab::Runners => {
+                    if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
+                        app.action_runner_pause(r.id.clone());
                     }
                 }
                 _ => {}
@@ -2501,6 +2514,11 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                         app.action_job_retry(j.id.clone());
                     }
                 }
+                PlatformSubTab::Runners => {
+                    if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
+                        app.action_runner_resume(r.id.clone());
+                    }
+                }
                 _ => {}
             }
         }
@@ -2509,6 +2527,20 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         {
             if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
                 app.action_job_artifacts(j.id.clone());
+            }
+        }
+        (_, KeyCode::Char('t')) if !app.platform_view.action_in_flight
+            && app.platform_view.sub_tab == PlatformSubTab::Runners =>
+        {
+            if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
+                app.action_runner_reset_token(r.id.clone());
+            }
+        }
+        (_, KeyCode::Char('d')) if !app.platform_view.action_in_flight
+            && app.platform_view.sub_tab == PlatformSubTab::Runners =>
+        {
+            if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
+                app.action_runner_remove(r.id.clone());
             }
         }
 
@@ -2563,6 +2595,7 @@ fn current_list_idx_mut(app: &mut App) -> &mut usize {
         PlatformSubTab::Jobs      => &mut app.platform_view.jobs_idx,
         PlatformSubTab::Releases  => &mut app.platform_view.releases_idx,
         PlatformSubTab::Packages  => &mut app.platform_view.packages_idx,
+        PlatformSubTab::Runners   => &mut app.platform_view.runners_idx,
     }
 }
 
@@ -2573,6 +2606,7 @@ fn current_list_len(app: &App) -> usize {
         PlatformSubTab::Jobs      => app.platform_view.jobs.len(),
         PlatformSubTab::Releases  => app.platform_view.releases.len(),
         PlatformSubTab::Packages  => app.platform_view.packages.len(),
+        PlatformSubTab::Runners   => app.platform_view.runners.len(),
     }
 }
 

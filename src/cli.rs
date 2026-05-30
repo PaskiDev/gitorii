@@ -817,6 +817,31 @@ Platform notes — GitHub Actions:
         remote: String,
     },
 
+    /// Manage CI runners (self-hosted agents on GitLab / GitHub Actions)
+    #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
+  torii runner list                              List project's runners
+  torii runner show 42                           Detail (status, IP, tags, version)
+  torii runner remove 42 -y                      Delete a runner
+  torii runner reset-token 42                    Print new auth token (GitLab only)
+  torii runner pause 42                          Pause (GitLab only)
+  torii runner resume 42                         Resume
+
+Examples — multi-platform:
+  torii runner list --remote github-paskidev     GitHub self-hosted runners
+
+Platform support:
+  - GitLab:  list + show + remove + reset-token + pause + resume
+  - GitHub:  list + show + remove (no token reset, no pause — see error
+             messages for the documented workaround)
+  - Others:  not implemented yet (future: Bitbucket Pipelines, Azure agents)")]
+    Runner {
+        #[command(subcommand)]
+        action: RunnerCommands,
+        /// Which git remote to use for platform detection. Default `origin`.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
+    },
+
     /// Manage the Package Registry — release binaries / artifacts stored on the platform.
     #[command(after_help = "Examples — basic ops on the default (`origin`) remote:
   torii package list                                       List packages
@@ -1592,6 +1617,29 @@ enum JobCommands {
 }
 
 #[derive(Subcommand)]
+enum RunnerCommands {
+    /// List the project's runners
+    List,
+    /// Show one runner's details
+    Show { id: String },
+    /// Delete a runner (the agent on the host still needs uninstalling)
+    Remove {
+        id: String,
+        /// Skip confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+    /// Reset the runner's authentication token (GitLab only). Prints
+    /// the new token — paste it into the runner's `config.toml`.
+    ResetToken { id: String },
+    /// Pause a runner (GitLab only). The runner stays connected but
+    /// stops picking up jobs until you `resume` it.
+    Pause { id: String },
+    /// Resume a previously paused runner (GitLab only).
+    Resume { id: String },
+}
+
+#[derive(Subcommand)]
 enum PackageCommands {
     /// List packages in the project registry
     List {
@@ -1732,6 +1780,12 @@ enum AuthCommands {
         /// Save in the per-repo store instead of the global one.
         #[arg(long)]
         local: bool,
+        /// Record an expiration: `30d`, `2h`, `7d12h`, etc. Stored in
+        /// `~/.config/torii/auth.toml [token_expires]`; `torii auth
+        /// doctor` warns when it's close. Pure metadata — torii does
+        /// not auto-rotate.
+        #[arg(long)]
+        ttl: Option<String>,
     },
 
     /// Print a stored token, value masked (`ghp_xxxx****`).
@@ -1777,6 +1831,39 @@ enum AuthCommands {
         /// Save in the per-repo store instead of the global one.
         #[arg(long)]
         local: bool,
+        /// Record an expiration: `30d`, `2h`, `7d12h`, etc. See
+        /// `auth set --ttl`.
+        #[arg(long)]
+        ttl: Option<String>,
+    },
+
+    /// Rotate a stored token: obtain a fresh one, replace the saved
+    /// value, and best-effort revoke the old one so a leaked copy
+    /// stops working immediately.
+    ///
+    /// Default flow (OAuth): re-runs the device flow, swaps in the new
+    /// access token, then POSTs to the platform's revoke endpoint. The
+    /// old token stops working as soon as the revoke succeeds.
+    ///
+    /// `--pat` (GitLab only): uses the native
+    /// `POST /personal_access_tokens/self/rotate` endpoint, which
+    /// generates a new PAT with the same scopes and invalidates the
+    /// old one atomically — no OAuth round-trip, no browser. Requires
+    /// the current token to have the `api` scope.
+    Rotate {
+        /// Provider name. OAuth path: github, gitlab, codeberg.
+        /// PAT path (`--pat`): gitlab.
+        provider: String,
+        /// Rotate the PAT in place via the platform's native rotate
+        /// endpoint instead of running OAuth. GitLab only.
+        #[arg(long)]
+        pat: bool,
+        /// Save in the per-repo store instead of the global one.
+        #[arg(long)]
+        local: bool,
+        /// Record an expiration for the new token: `30d`, `2h`, etc.
+        #[arg(long)]
+        ttl: Option<String>,
     },
 }
 
@@ -3912,6 +3999,93 @@ impl Cli {
                 }
             }
 
+            Commands::Runner { action, remote } => {
+                let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
+                let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
+                    .ok_or_else(|| anyhow::anyhow!("Could not detect platform from remote `{}`.", remote))?;
+                let client = crate::runner::get_runner_client(&platform)?;
+                match action {
+                    RunnerCommands::List => {
+                        let runners = client.list(&owner, &repo_name)?;
+                        if runners.is_empty() {
+                            println!("No runners found on {} for {}/{}.", platform, owner, repo_name);
+                        } else {
+                            println!("{:<8} {:<10} {:<28} {:<8} {:<12} TAGS",
+                                     "ID", "STATUS", "DESCRIPTION", "OS", "TYPE");
+                            for r in &runners {
+                                let icon = match r.status.as_str() {
+                                    "online" | "active" => "🟢",
+                                    "offline" | "stale" => "⚪",
+                                    "paused"            => "⏸",
+                                    _                   => "·",
+                                };
+                                let tags = if r.tags.is_empty() { "—".into() }
+                                           else { r.tags.join(",") };
+                                let trim = |s: &str, n: usize| -> String {
+                                    if s.chars().count() <= n { s.to_string() }
+                                    else { format!("{}…", s.chars().take(n.saturating_sub(1)).collect::<String>()) }
+                                };
+                                println!("{:<8} {} {:<8} {:<28} {:<8} {:<12} {}",
+                                         r.id, icon, r.status,
+                                         trim(&r.description, 27),
+                                         trim(&r.os, 7),
+                                         trim(&r.runner_type, 11),
+                                         tags);
+                            }
+                        }
+                    }
+                    RunnerCommands::Show { id } => {
+                        let r = client.show(&owner, &repo_name, id)?;
+                        println!("Runner #{}", r.id);
+                        println!("  description: {}", r.description);
+                        println!("  status:      {}{}", r.status,
+                                 if r.paused { " (paused)" } else { "" });
+                        println!("  type:        {}", r.runner_type);
+                        println!("  os:          {}", r.os);
+                        if !r.ip_address.is_empty() {
+                            println!("  ip:          {}", r.ip_address);
+                        }
+                        if !r.version.is_empty() {
+                            println!("  version:     {}", r.version);
+                        }
+                        println!("  tags:        {}",
+                                 if r.tags.is_empty() { "—".to_string() } else { r.tags.join(", ") });
+                        if !r.web_url.is_empty() {
+                            println!("  url:         {}", r.web_url);
+                        }
+                    }
+                    RunnerCommands::Remove { id, yes } => {
+                        if !*yes {
+                            print!("Delete runner {} on {}? The agent on the host still needs uninstalling separately. [y/N] ", id, platform);
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        client.remove(&owner, &repo_name, id)?;
+                        println!("✅ Removed runner {}", id);
+                    }
+                    RunnerCommands::ResetToken { id } => {
+                        let new_token = client.reset_token(&owner, &repo_name, id)?;
+                        println!("✅ New auth token for runner {}:\n", id);
+                        println!("    {}\n", new_token);
+                        println!("Paste it into the runner's config.toml under `token = \"…\"` and restart the agent.");
+                    }
+                    RunnerCommands::Pause { id } => {
+                        client.pause(&owner, &repo_name, id)?;
+                        println!("⏸  Paused runner {}", id);
+                    }
+                    RunnerCommands::Resume { id } => {
+                        client.resume(&owner, &repo_name, id)?;
+                        println!("▶  Resumed runner {}", id);
+                    }
+                }
+            }
+
             Commands::Package { action, remote } => {
                 let repo_path = std::env::current_dir()?.to_string_lossy().to_string();
                 let (platform, owner, repo_name) = detect_platform_from_remote_named(&repo_path, remote)
@@ -4464,7 +4638,7 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
                 println!("⚠️  TORII_API_KEY env var still set — unset it to fully log out.");
             }
         }
-        AuthCommands::Set { provider, token, local } => {
+        AuthCommands::Set { provider, token, local, ttl } => {
             let resolved_token = if token == "-" {
                 use std::io::{BufRead, Write};
                 eprint!("Paste token (input hidden — Ctrl-D to end): ");
@@ -4484,9 +4658,13 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
             } else {
                 None
             };
-            auth::set_token(provider, &resolved_token, repo)?;
+            let expires_at = ttl_to_iso(ttl.as_deref())?;
+            auth::set_token_with_expiry(provider, &resolved_token, expires_at.as_deref(), repo)?;
             let scope = if *local { "local" } else { "global" };
             println!("✅ {} token saved ({} store).", provider, scope);
+            if let Some(iso) = &expires_at {
+                println!("   expires: {}", iso);
+            }
         }
         AuthCommands::Get { provider, unsafe_show } => {
             let resolved = auth::resolve_token(provider, ".");
@@ -4526,7 +4704,7 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
                 println!("(no {} token was set; nothing to remove)", provider);
             }
         }
-        AuthCommands::Oauth { provider, local } => {
+        AuthCommands::Oauth { provider, local, ttl } => {
             // Pick the right OAuth flow for the provider. Most platforms
             // support RFC 8628 Device Flow; a few (e.g. Bitbucket) only
             // support Authorization Code Grant and need a localhost
@@ -4550,9 +4728,89 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
             } else {
                 None
             };
-            auth::set_token(provider, &token, repo)?;
+            let expires_at = ttl_to_iso(ttl.as_deref())?;
+            auth::set_token_with_expiry(provider, &token, expires_at.as_deref(), repo)?;
             let scope = if *local { "local" } else { "global" };
             println!("✅ {} token saved ({} store).", provider, scope);
+            if let Some(iso) = &expires_at {
+                println!("   expires: {}", iso);
+            }
+        }
+        AuthCommands::Rotate { provider, pat, local, ttl } => {
+            // Snapshot the current token first — once we set the new
+            // value the cached one in `auth::resolve_token` becomes
+            // the new one, and there's no way to get the old back.
+            let old = auth::resolve_token(provider, ".").value
+                .ok_or_else(|| anyhow::anyhow!(
+                    "No `{}` token is currently stored. Use `torii auth oauth {}` \
+                     or `torii auth set {} <token>` to set one first.",
+                    provider, provider, provider
+                ))?;
+
+            let new_token = if *pat {
+                // PAT-native rotate path. GitLab is the only platform
+                // that exposes this today; for others, suggest the
+                // OAuth path explicitly.
+                if provider != "gitlab" {
+                    anyhow::bail!(
+                        "`--pat` rotate is only implemented for GitLab. \
+                         For `{}`, drop `--pat` to use the OAuth flow.",
+                        provider
+                    );
+                }
+                println!("🔁 Rotating GitLab PAT via /personal_access_tokens/self/rotate…");
+                crate::oauth::rotate_gitlab_pat(&old)?
+            } else {
+                // OAuth path: run the flow, then revoke the old token.
+                println!("🔁 Rotating {} token via OAuth — re-authorise in your browser.\n", provider);
+                let t = if crate::oauth::device_flow_supported(provider) {
+                    crate::oauth::run_device_flow(provider)?
+                } else if crate::oauth::auth_code_flow_supported(provider) {
+                    crate::oauth::run_auth_code_flow(provider)?
+                } else {
+                    anyhow::bail!(
+                        "No OAuth flow wired for `{}`. Supported: github, gitlab, codeberg \
+                         (device flow), bitbucket (auth-code+PKCE). For `{}` you'd need to \
+                         rotate manually in the platform's web UI.",
+                        provider, provider
+                    );
+                };
+                t
+            };
+
+            let repo: Option<&std::path::Path> = if *local {
+                Some(std::path::Path::new("."))
+            } else {
+                None
+            };
+            let expires_at = ttl_to_iso(ttl.as_deref())?;
+            auth::set_token_with_expiry(provider, &new_token, expires_at.as_deref(), repo)?;
+            let scope = if *local { "local" } else { "global" };
+            println!("✅ New {} token saved ({} store).", provider, scope);
+            if let Some(iso) = &expires_at {
+                println!("   expires: {}", iso);
+            }
+
+            // Best-effort revoke. PAT rotate already invalidated the
+            // old one server-side, so we skip the revoke call there.
+            if !*pat {
+                match crate::oauth::revoke_token(provider, &old) {
+                    Ok(true)  => println!("✅ Old {} token revoked.", provider),
+                    Ok(false) => {
+                        let hint = crate::oauth::revoke_hint_url(provider)
+                            .unwrap_or("the platform's settings page");
+                        println!("⚠  No programmatic revoke for `{}` (or no client secret \
+                                  available). Revoke the old token manually at:\n     {}",
+                                  provider, hint);
+                    }
+                    Err(e) => {
+                        let hint = crate::oauth::revoke_hint_url(provider)
+                            .unwrap_or("the platform's settings page");
+                        println!("⚠  Revoke failed: {}. Revoke manually at:\n     {}",
+                                  e, hint);
+                    }
+                }
+            }
         }
         AuthCommands::Doctor => {
             println!("🔍 Token resolution (env > local > global):\n");
@@ -4563,7 +4821,12 @@ fn run_auth(action: &AuthCommands) -> Result<()> {
                     None => "— missing",
                 };
                 let source = describe_source(&r.source);
-                println!("  {:<10} {:<14} {}", p, state, source);
+                let expiry = auth::token_expires_at(p)
+                    .as_deref()
+                    .and_then(describe_expiry)
+                    .map(|s| format!("   {}", s))
+                    .unwrap_or_default();
+                println!("  {:<10} {:<14} {}{}", p, state, source, expiry);
             }
             // Also surface the legacy config.toml [auth] if it lingers.
             if let Some(cd) = dirs::config_dir() {
@@ -4606,6 +4869,48 @@ fn describe_source(s: &crate::auth::TokenSource) -> String {
         crate::auth::TokenSource::Local => "local .torii/auth.toml".to_string(),
         crate::auth::TokenSource::Global => "global ~/.config/torii/auth.toml".to_string(),
         crate::auth::TokenSource::Missing => "(not set)".to_string(),
+    }
+}
+
+/// Resolve a `--ttl <duration>` flag into an ISO-8601 timestamp at which
+/// the token is considered expired. Returns `Ok(None)` when no TTL was
+/// passed; the caller stores `None` as "no expiration tracked".
+fn ttl_to_iso(ttl: Option<&str>) -> anyhow::Result<Option<String>> {
+    let Some(s) = ttl else { return Ok(None) };
+    let mins = crate::duration::parse_duration(s)
+        .map_err(|e| anyhow::anyhow!("invalid --ttl `{}`: {}", s, e))?;
+    let when = chrono::Utc::now() + chrono::Duration::minutes(mins as i64);
+    Ok(Some(when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)))
+}
+
+/// One-line "expires in X" / "expired Y ago" string for the doctor and
+/// list output. Returns None when the timestamp is missing or unparsable
+/// — callers can decide whether to print nothing or a placeholder.
+fn describe_expiry(iso: &str) -> Option<String> {
+    let when = chrono::DateTime::parse_from_rfc3339(iso).ok()?
+        .with_timezone(&chrono::Utc);
+    let now = chrono::Utc::now();
+    let delta = when.signed_duration_since(now);
+    let days = delta.num_days();
+    let hours = delta.num_hours();
+    if delta.num_seconds() < 0 {
+        let past = -delta;
+        if past.num_days() > 0 {
+            Some(format!("⛔ expired {}d ago ({})", past.num_days(), iso))
+        } else if past.num_hours() > 0 {
+            Some(format!("⛔ expired {}h ago ({})", past.num_hours(), iso))
+        } else {
+            Some(format!("⛔ expired just now ({})", iso))
+        }
+    } else if days < 7 {
+        // Warn band: less than a week. Rotate soon.
+        if days >= 1 {
+            Some(format!("⚠ expires in {}d ({})", days, iso))
+        } else {
+            Some(format!("⚠ expires in {}h ({})", hours.max(1), iso))
+        }
+    } else {
+        Some(format!("⏳ expires in {}d ({})", days, iso))
     }
 }
 

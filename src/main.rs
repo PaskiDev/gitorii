@@ -43,6 +43,7 @@ pub use platforms::issue;
 pub use platforms::pipeline;
 pub use platforms::package;
 pub use platforms::release;
+pub use platforms::runner;
 
 // vcs/
 pub use vcs::core;

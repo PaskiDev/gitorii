@@ -1023,7 +1023,7 @@ impl Default for AuthState {
 // and from a job into its trace.
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum PlatformSubTab { Pipelines, Jobs, Releases, Packages }
+pub enum PlatformSubTab { Pipelines, Jobs, Releases, Packages, Runners }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlatformFocus {
@@ -1062,6 +1062,8 @@ pub struct PlatformState {
     pub releases_idx: usize,
     pub packages: Vec<crate::package::Package>,
     pub packages_idx: usize,
+    pub runners: Vec<crate::runner::Runner>,
+    pub runners_idx: usize,
 
     /// Set when we drilled from a pipeline row into its jobs.
     pub active_pipeline_id: Option<u64>,
@@ -1124,6 +1126,8 @@ impl Default for PlatformState {
             releases_idx: 0,
             packages: vec![],
             packages_idx: 0,
+            runners: vec![],
+            runners_idx: 0,
             active_pipeline_id: None,
             job_log: None,
             job_log_scroll: 0,
@@ -1216,6 +1220,7 @@ pub struct App {
     pub platform_jobs_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::pipeline::Job>>>>,
     pub platform_releases_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::release::Release>>>>,
     pub platform_packages_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::package::Package>>>>,
+    pub platform_runners_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::runner::Runner>>>>,
     pub platform_job_log_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
     /// 0.7.24 — contextual actions (cancel/retry/artifacts). Sends a single
     /// `Result<message, error>` from the worker thread. The main loop pumps
@@ -1280,6 +1285,7 @@ impl App {
             platform_jobs_rx: None,
             platform_releases_rx: None,
             platform_packages_rx: None,
+            platform_runners_rx: None,
             platform_job_log_rx: None,
             platform_action_rx: None,
             repo_picker_open: false,
@@ -2580,7 +2586,112 @@ impl App {
             }
             PlatformSubTab::Releases  => self.load_platform_releases(),
             PlatformSubTab::Packages  => self.load_platform_packages(),
+            PlatformSubTab::Runners   => self.load_platform_runners(),
         }
+    }
+
+    pub fn load_platform_runners(&mut self) {
+        self.platform_view.runners.clear();
+        self.platform_view.error = None;
+        self.platform_view.loading = true;
+        self.platform_runners_rx = None;
+
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.loading = false;
+            return;
+        };
+
+        let client = match crate::runner::get_runner_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.loading = false;
+                self.platform_view.error = Some(e.to_string());
+                return;
+            }
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_runners_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let _ = tx.send(client.list(&owner, &repo));
+        });
+    }
+
+    // ── 0.7.25 runner actions (pause/resume/remove/reset-token) ─────────────
+
+    fn spawn_runner_action<F>(&mut self, op: F)
+    where
+        F: FnOnce(&str, &str, Box<dyn crate::runner::RunnerClient>)
+            -> std::result::Result<String, String>
+            + Send + 'static,
+    {
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.action_msg = Some("✗ no remote/platform resolved".into());
+            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            return;
+        };
+        let client = match crate::runner::get_runner_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.action_msg = Some(format!("✗ {}", e));
+                self.platform_view.action_msg_at = Some(std::time::Instant::now());
+                return;
+            }
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_action_rx = Some(rx);
+        self.platform_view.action_in_flight = true;
+        std::thread::spawn(move || {
+            let _ = tx.send(op(&owner, &repo, client));
+        });
+    }
+
+    pub fn action_runner_pause(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_runner_action(move |owner, repo, client| {
+            client.pause(owner, repo, &id)
+                .map(|_| format!("✓ runner #{} paused", id_disp))
+                .map_err(|e| format!("✗ pause runner #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_runner_resume(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_runner_action(move |owner, repo, client| {
+            client.resume(owner, repo, &id)
+                .map(|_| format!("✓ runner #{} resumed", id_disp))
+                .map_err(|e| format!("✗ resume runner #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_runner_remove(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_runner_action(move |owner, repo, client| {
+            client.remove(owner, repo, &id)
+                .map(|_| format!("✓ runner #{} removed", id_disp))
+                .map_err(|e| format!("✗ remove runner #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_runner_reset_token(&mut self, id: String) {
+        // Reset-token is special: it returns a credential we have to
+        // surface back to the user. The action_msg lane is a one-line
+        // status bar — wrong place for a long secret. Instead we
+        // route the new value through the event log (toggle with `e`).
+        // The action_msg just announces success and points there.
+        let id_disp = id.clone();
+        self.spawn_runner_action(move |owner, repo, client| {
+            client.reset_token(owner, repo, &id)
+                .map(|new_token| {
+                    // Embed the token in the success message itself
+                    // with a recognisable prefix; the main loop's
+                    // post-action hook pulls it back out and pushes
+                    // it to the event log.
+                    format!("✓ runner #{} token reset|token={}", id_disp, new_token)
+                })
+                .map_err(|e| format!("✗ reset runner #{} token: {}", id_disp, e))
+        });
     }
 
     fn resolve_platform_target(&mut self) -> Option<(String, String, String)> {
