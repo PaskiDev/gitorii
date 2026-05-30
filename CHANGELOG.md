@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.30] - 2026-05-30
+
+### Added
+
+- **Auth view operations from the TUI**. The view used to be
+  read-only (mirror of `auth doctor` / `auth list`); now `o` over the
+  selected provider opens an ops dropdown with the contextual actions:
+  - **OAuth re-auth** (when the provider has a flow wired) —
+    suspends the TUI and runs `torii auth oauth <provider>` so the
+    device-flow URL + paste prompt land on a real terminal, then
+    refreshes the list on return.
+  - **Rotate (OAuth)** — same path but `torii auth rotate
+    <provider>`; the best-effort revoke from 0.7.25 still runs.
+  - **Rotate as PAT (GitLab)** — `torii auth rotate --pat gitlab`.
+  - **Set token (paste)** — opens a masked input overlay
+    (`•••••••` instead of the raw text) and writes via
+    `auth::set_token`. Enter saves, Esc cancels.
+  - **Remove token** — confirmation overlay; `y` deletes via
+    `auth::remove_token` (and clears the matching `[token_expires]`
+    entry, same as the CLI).
+- **Hint bar arm for `View::Auth`** with state-aware keys (list /
+  dropdown / input / confirm), matching how Platform's hints work.
+
+### Internal
+
+- New `AuthFocus` + `AuthPendingOp` on `AuthState`, with
+  `dropdown_idx`, `input_buffer`, `input_prompt`, `pending_provider`.
+- `tui/views/auth.rs::ops_for(state)` exposes the contextual ops list
+  to the events handler (same export pattern as Platform's `ops_for`
+  / `filters_for`).
+- New `run_torii_subprocess` helper in `tui/mod.rs` — suspends raw
+  mode + alt screen, runs `current_exe()` with the given args,
+  restores chrome. Reused for OAuth + rotate; ready to wrap any
+  future "needs a real terminal" flow (e.g. `runner register`).
+- New `Action::AuthOauthInPager` and `Action::AuthRotateInPager
+  { pat }`. Dispatched in the main loop because they replace the TUI
+  while running.
+
 ## [0.7.29] - 2026-05-30
 
 First step of "create + manage runners locally". This release covers

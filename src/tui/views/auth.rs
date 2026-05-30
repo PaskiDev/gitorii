@@ -7,11 +7,11 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::tui::app::{App, AuthEntry};
-use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_YELLOW, C_GREEN};
+use crate::tui::app::{App, AuthEntry, AuthFocus, AuthState};
+use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED};
 
 pub fn refresh(app: &mut App) {
     app.auth_view.items.clear();
@@ -133,7 +133,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 None => ("—".to_string(), C_DIM),
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {:<10}", e.provider), Style::default().fg(C_YELLOW)),
+                Span::styled(format!(" {:<10}", e.provider), Style::default().fg(bc)),
                 Span::styled(format!(" {:<22}", value_str), Style::default().fg(color)),
                 Span::styled(&e.source, Style::default().fg(C_SUBTLE)),
             ]))
@@ -162,4 +162,170 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(bc)
         });
     f.render_stateful_widget(List::new(items).block(list_block), chunks[1], &mut state);
+
+    // Overlays — drawn after the body so they stack on top.
+    match app.auth_view.focus {
+        AuthFocus::OpsDropdown   => render_ops_dropdown(f, app, area),
+        AuthFocus::InputToken    => render_input_overlay(f, app, area),
+        AuthFocus::ConfirmRemove => render_confirm_remove(f, app, area),
+        AuthFocus::List          => {}
+    }
+}
+
+/// Contextual operations for the selected provider. The list is built
+/// from the current state — already-set tokens get a Remove option;
+/// providers without an OAuth flow get the "Set token" path only.
+pub fn ops_for(state: &AuthState) -> Vec<(&'static str, &'static str)> {
+    let Some(entry) = state.items.get(state.idx) else {
+        return Vec::new();
+    };
+    let provider = entry.provider.as_str();
+    let has_token = entry.masked.is_some();
+    let mut ops: Vec<(&'static str, &'static str)> = Vec::new();
+
+    let device_supported  = crate::oauth::device_flow_supported(provider);
+    let code_supported    = crate::oauth::auth_code_flow_supported(provider);
+    let oauth_supported   = device_supported || code_supported;
+
+    if oauth_supported {
+        ops.push(("OAuth re-auth", "run device / auth-code flow and save token"));
+    }
+    if has_token && oauth_supported {
+        ops.push(("Rotate (OAuth)", "re-auth, replace, best-effort revoke old"));
+    }
+    if has_token && provider == "gitlab" {
+        ops.push(("Rotate as PAT (GitLab)", "POST /personal_access_tokens/self/rotate"));
+    }
+    ops.push(("Set token (paste)", "type / paste the token manually"));
+    if has_token {
+        ops.push(("Remove token", "delete from auth.toml ⚠"));
+    }
+    ops
+}
+
+fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
+    let ops = ops_for(&app.auth_view);
+    if ops.is_empty() { return; }
+    let bc = app.brand_color();
+
+    let w: u16 = 44;
+    let h: u16 = ops.len() as u16 + 2;
+    let popup = Rect {
+        x: area.x + 4,
+        y: area.y + 4,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    };
+    f.render_widget(Clear, popup);
+
+    let items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (label, desc))| {
+        let is_sel = i == app.auth_view.dropdown_idx;
+        let danger = label.starts_with("Remove");
+        let label_color = if danger { C_RED }
+                          else if is_sel { C_WHITE }
+                          else { C_SUBTLE };
+        let style = if is_sel {
+            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
+        } else { Style::default() };
+        let prefix = if is_sel { "▶ " } else { "  " };
+        ListItem::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(bc)),
+            Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
+            Span::styled(*desc, Style::default().fg(C_DIM)),
+        ])).style(style)
+    }).collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.auth_view.dropdown_idx));
+    let title = format!(" ops · {} — Enter run · Esc close ", app.auth_view.pending_provider);
+    f.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .title(Span::styled(title, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+        &mut state,
+    );
+}
+
+fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let bc = app.brand_color();
+    let w: u16 = 60;
+    let h: u16 = 5;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    };
+    f.render_widget(Clear, popup);
+
+    // We mask the input so a paste of a sensitive token doesn't end
+    // up rendered on screen — same convention as `auth set <provider> -`
+    // hides stdin echo.
+    let dots = "•".repeat(app.auth_view.input_buffer.chars().count());
+    let body = vec![
+        Line::from(Span::styled(
+            format!(" {}", app.auth_view.input_prompt),
+            Style::default().fg(C_WHITE),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  ", Style::default()),
+            Span::styled(dots, Style::default().fg(C_GREEN)),
+            Span::styled("█", Style::default().fg(bc)),
+        ]),
+    ];
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::default()
+                .title(Span::styled(
+                    " paste · Enter save · Esc cancel ",
+                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+    );
+}
+
+fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {
+    let w: u16 = 50;
+    let h: u16 = 5;
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    };
+    f.render_widget(Clear, popup);
+    let body = vec![
+        Line::from(Span::styled(
+            format!("  Remove `{}` token from auth.toml?", app.auth_view.pending_provider),
+            Style::default().fg(C_WHITE),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "  [y] yes   [n] no",
+            Style::default().fg(C_DIM),
+        )),
+    ];
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::default()
+                .title(Span::styled(
+                    " confirm ",
+                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_RED)),
+        ),
+        popup,
+    );
 }
