@@ -1036,6 +1036,13 @@ pub enum PlatformFocus {
     JobLog,
     /// Remote-selector popup is open over the view.
     RemotePopup,
+    /// 0.7.26: contextual-actions dropdown (cancel/retry/pause/etc.)
+    /// opened with `o`. Replaces the individual c/x/a/t/d keybinds
+    /// from 0.7.24 — those collided across sub-tabs (c=cancel in
+    /// Pipelines vs c=pause in Runners) and weren't discoverable.
+    OpsDropdown,
+    /// 0.7.26: filter dropdown (status + branch) opened with `f`.
+    FilterDropdown,
 }
 
 pub struct PlatformState {
@@ -1099,12 +1106,16 @@ pub struct PlatformState {
     /// and for deciding when to stop polling).
     pub job_log_status: String,
 
-    /// 0.7.24 — list filters. `filter_status` cycles through None →
-    /// running → failed → success → pending → None via `s`; the value is
-    /// passed to the platform API. `filter_branch` is toggled with `b`
-    /// and applied client-side (filters the local repo's current branch).
+    /// 0.7.24 — list filters. `filter_status` is set from a dropdown
+    /// (None / running / failed / success / pending) and passed to the
+    /// platform API. `filter_branch` toggles client-side filtering by
+    /// the local repo's current branch.
     pub filter_status: Option<String>,
     pub filter_branch_only: bool,
+
+    /// 0.7.26 — index of the currently highlighted dropdown row when
+    /// `focus == OpsDropdown` or `FilterDropdown`. Reset to 0 on open.
+    pub dropdown_idx: usize,
 }
 
 impl Default for PlatformState {
@@ -1144,6 +1155,7 @@ impl Default for PlatformState {
             job_log_status: String::new(),
             filter_status: None,
             filter_branch_only: false,
+            dropdown_idx: 0,
         }
     }
 }
@@ -1312,9 +1324,15 @@ impl App {
         });
     }
 
-    /// Sidebar order in 0.7.2+ (must stay in sync with TABS in
-    /// src/tui/ui.rs and the sidebar_idx assignments in `go_to`).
-    /// 0.7.12 adds View::Platform at idx 15, before Config.
+    /// Sidebar order. Reorganised in 0.7.26 by user flow:
+    ///   - entry:          files
+    ///   - local action:   save, sync, snapshot
+    ///   - navigation:     log, branch, tags
+    ///   - broadcast:      pr/mr, issues, platform
+    ///   - multi-platform: remote, workspace, worktrees, submodules
+    ///   - admin:          bisect, auth, config
+    /// Must stay in sync with TABS in src/tui/ui.rs and the sidebar_idx
+    /// assignments in `go_to` / `go_back`.
     fn view_for_idx(idx: usize) -> View {
         match idx {
             0  => View::Dashboard,
@@ -1324,15 +1342,15 @@ impl App {
             4  => View::Log,
             5  => View::Branch,
             6  => View::Tag,
-            7  => View::Worktree,
-            8  => View::Submodule,
-            9  => View::Remote,
-            10 => View::Workspace,
-            11 => View::Pr,
-            12 => View::Issue,
-            13 => View::Bisect,
-            14 => View::Auth,
-            15 => View::Platform,
+            7  => View::Pr,
+            8  => View::Issue,
+            9  => View::Platform,
+            10 => View::Remote,
+            11 => View::Workspace,
+            12 => View::Worktree,
+            13 => View::Submodule,
+            14 => View::Bisect,
+            15 => View::Auth,
             16 => View::Config,
             _  => View::Dashboard,
         }
@@ -1419,16 +1437,16 @@ impl App {
             View::History   => 4, // fused into Log
             View::Branch    => 5,
             View::Tag       => 6,
-            View::Worktree  => 7,
-            View::Submodule => 8,
-            View::Remote    => 9,
-            View::Mirror    => 9, // fused into Remote
-            View::Workspace => 10,
-            View::Pr        => 11,
-            View::Issue     => 12,
-            View::Bisect    => 13,
-            View::Auth      => 14,
-            View::Platform  => 15,
+            View::Pr        => 7,
+            View::Issue     => 8,
+            View::Platform  => 9,
+            View::Remote    => 10,
+            View::Mirror    => 10, // fused into Remote
+            View::Workspace => 11,
+            View::Worktree  => 12,
+            View::Submodule => 13,
+            View::Bisect    => 14,
+            View::Auth      => 15,
             View::Config    => 16,
             View::Settings  => 16, // fused into Config
             _               => self.sidebar_idx,
@@ -1450,16 +1468,16 @@ impl App {
                 View::History   => 4, // fused into Log
                 View::Branch    => 5,
                 View::Tag       => 6,
-                View::Worktree  => 7,
-                View::Submodule => 8,
-                View::Remote    => 9,
-                View::Mirror    => 9, // fused into Remote
-                View::Workspace => 10,
-                View::Pr        => 11,
-                View::Issue     => 12,
-                View::Bisect    => 13,
-                View::Auth      => 14,
-                View::Platform  => 15,
+                View::Pr        => 7,
+                View::Issue     => 8,
+                View::Platform  => 9,
+                View::Remote    => 10,
+                View::Mirror    => 10, // fused into Remote
+                View::Workspace => 11,
+                View::Worktree  => 12,
+                View::Submodule => 13,
+                View::Bisect    => 14,
+                View::Auth      => 15,
                 View::Config    => 16,
                 View::Settings  => 16, // fused into Config
                 _               => 0,
