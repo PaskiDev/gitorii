@@ -282,14 +282,41 @@ fn run_loop(
                 }
             }
         }
-        // Contextual actions (cancel/retry/artifacts/runner ops). On any
-        // result we refresh the active sub-tab so the new status shows up
-        // without the user having to press Ctrl-R. Every result also lands
-        // in the event log (`e`) — that's the canonical "app-wide history
-        // of things that happened" surface, same as workspace sync / mirror
-        // sync use. Runner reset-token additionally carries a credential
-        // we strip out before showing the headline so it lives only in the
-        // event log, not in any UI chrome.
+        // OAuth flow updates from the in-TUI worker (0.7.32). Drain
+        // every message available this tick (Starting → Waiting →
+        // Saving → Done/Error) into a local vec, then apply — keeps
+        // the borrow on `app.auth_oauth_rx` short so we can mutate
+        // the rest of `app` from the handlers below.
+        let mut oauth_updates: Vec<crate::tui::app::OauthStatus> = Vec::new();
+        if let Some(rx) = &app.auth_oauth_rx {
+            while let Ok(status) = rx.try_recv() {
+                oauth_updates.push(status);
+            }
+        }
+        for status in oauth_updates {
+            if let Some(state) = app.auth_view.oauth_flow.as_mut() {
+                state.status = status.clone();
+            }
+            match status {
+                crate::tui::app::OauthStatus::Done(masked) => {
+                    app.log_event(
+                        &format!("auth oauth ok: {}", masked),
+                        EventKind::Success,
+                    );
+                    crate::tui::views::auth::refresh(app);
+                    app.auth_oauth_rx = None;
+                }
+                crate::tui::app::OauthStatus::Error(msg) => {
+                    app.log_event(
+                        &format!("auth oauth error: {}", msg),
+                        EventKind::Error,
+                    );
+                    app.auth_oauth_rx = None;
+                }
+                _ => {}
+            }
+        }
+
         if let Some(rx) = &app.platform_action_rx {
             if let Ok(result) = rx.try_recv() {
                 app.platform_action_rx = None;
@@ -1440,36 +1467,6 @@ fn run_loop(
                     open_job_log_in_pager(terminal, app);
                 }
 
-                Action::AuthOauthInPager => {
-                    let provider = app.auth_view.pending_provider.clone();
-                    if provider.is_empty() {
-                        app.set_status("✗ no provider selected");
-                    } else {
-                        run_torii_subprocess(terminal, app, &["auth", "oauth", &provider]);
-                        // The child wrote the new token to auth.toml;
-                        // drop our in-process cache so the next
-                        // resolve_token picks up the fresh value
-                        // instead of serving the pre-rotate one.
-                        crate::auth::drop_token_cache();
-                        crate::tui::views::auth::refresh(app);
-                    }
-                }
-
-                Action::AuthRotateInPager { pat } => {
-                    let provider = app.auth_view.pending_provider.clone();
-                    if provider.is_empty() {
-                        app.set_status("✗ no provider selected");
-                    } else {
-                        let args: &[&str] = if pat {
-                            &["auth", "rotate", "--pat", &provider]
-                        } else {
-                            &["auth", "rotate", &provider]
-                        };
-                        run_torii_subprocess(terminal, app, args);
-                        crate::auth::drop_token_cache();
-                        crate::tui::views::auth::refresh(app);
-                    }
-                }
 
             }
         }
@@ -1539,39 +1536,6 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
 
     // The tempfile lives until the OS cleans /tmp — leaving it lets the
     // user re-open it from another terminal while debugging.
-}
-
-/// Suspend the TUI and run `torii <args…>` inheriting stdio. Used by
-/// auth ops (`oauth`, `rotate`) where the underlying CLI prompts on
-/// stdin / prints a URL the user has to click. Wrapping the CLI as a
-/// subprocess is far simpler than rebuilding the browser dance + token
-/// paste flow inside ratatui — and the resulting credential ends up in
-/// the same `auth.toml` either way.
-fn run_torii_subprocess<B: ratatui::backend::Backend + std::io::Write>(
-    terminal: &mut ratatui::Terminal<B>,
-    app: &mut App,
-    args: &[&str],
-) {
-    let _ = disable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
-
-    let bin = std::env::current_exe()
-        .map(|p| p.into_os_string())
-        .unwrap_or_else(|_| "torii".into());
-    let status = std::process::Command::new(&bin)
-        .args(args)
-        .status();
-
-    let _ = enable_raw_mode();
-    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
-    let _ = terminal.clear();
-
-    let label = args.join(" ");
-    match status {
-        Ok(s) if s.success() => app.set_status(format!("✓ `{}` ok", label)),
-        Ok(s)                => app.set_status(format!("✗ `{}` exit {}", label, s)),
-        Err(e)               => app.set_status(format!("✗ run `{}`: {}", label, e)),
-    }
 }
 
 // ── Git operations ────────────────────────────────────────────────────────────

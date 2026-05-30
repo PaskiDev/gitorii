@@ -210,6 +210,135 @@ pub fn device_flow_supported(provider: &str) -> bool {
     device_flow_provider(provider).is_some()
 }
 
+/// 0.7.32 — split device flow for the TUI. `start_device_flow` does the
+/// initial POST that gives the user a URL + user_code; the caller then
+/// drives the poll one tick at a time via [`poll_device_flow`], so it
+/// can render progress in a modal instead of blocking the main loop.
+/// The blocking [`run_device_flow`] is now a thin loop over these two.
+pub struct DeviceFlowSession {
+    pub provider: String,
+    pub verification_uri: String,
+    pub verification_uri_complete: Option<String>,
+    pub user_code: String,
+    /// URI we tell the user to actually open. `verification_uri_complete`
+    /// when the provider supplies it (already embeds the code),
+    /// otherwise just `verification_uri`.
+    pub display_uri: String,
+    device_code: String,
+    client_id: String,
+    token_url: String,
+    interval: Duration,
+    deadline: Instant,
+}
+
+#[derive(Debug)]
+pub enum DeviceFlowStep {
+    /// User hasn't authorised yet; caller should sleep `interval` and
+    /// poll again.
+    Pending,
+    /// Provider asked us to back off; caller should sleep
+    /// `interval` (which was just increased) before the next poll.
+    SlowDown,
+    /// Final state — access token in hand.
+    Done(String),
+}
+
+pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
+    let cfg = device_flow_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
+        "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg.",
+        provider
+    )))?;
+    let client_id = std::env::var(cfg.client_id_env).ok()
+        .or_else(|| cfg.bundled_client_id.map(String::from))
+        .ok_or_else(|| ToriiError::InvalidConfig(format!(
+            "No OAuth client_id available for `{}`. Set the {} env var, or wait until \
+             the bundled client_id ships. As a workaround, create a Personal Access \
+             Token in the platform's web UI and run: torii auth set {} YOUR_TOKEN",
+            provider, cfg.client_id_env, provider
+        )))?;
+
+    let client = crate::http::make_client();
+    let init_req = client.post(cfg.device_authz_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id", client_id.as_str()),
+            ("scope",     cfg.scopes),
+        ]);
+    let init: DeviceCodeResponse = crate::http::send_json(init_req, "OAuth device init")
+        .and_then(|v| serde_json::from_value(v).map_err(|e| ToriiError::InvalidConfig(
+            format!("OAuth device init: cannot parse response: {}", e)
+        )))?;
+
+    let display_uri = init.verification_uri_complete
+        .clone()
+        .unwrap_or_else(|| init.verification_uri.clone());
+    let interval = Duration::from_secs(init.interval.max(1));
+    let deadline = Instant::now() + Duration::from_secs(init.expires_in.max(60));
+
+    Ok(DeviceFlowSession {
+        provider: provider.to_string(),
+        verification_uri: init.verification_uri,
+        verification_uri_complete: init.verification_uri_complete,
+        user_code: init.user_code,
+        display_uri,
+        device_code: init.device_code,
+        client_id,
+        token_url: cfg.token_url.to_string(),
+        interval,
+        deadline,
+    })
+}
+
+/// Run one poll of the token endpoint. Mutates `session.interval` if
+/// the provider asks us to slow down. The caller is responsible for
+/// sleeping between calls — we want the TUI loop to keep ticking.
+pub fn poll_device_flow(session: &mut DeviceFlowSession) -> Result<DeviceFlowStep> {
+    if Instant::now() >= session.deadline {
+        return Err(ToriiError::InvalidConfig(
+            "OAuth device flow: code expired before authorisation.".to_string()
+        ));
+    }
+    let client = crate::http::make_client();
+    let poll_req = client.post(&session.token_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id",   session.client_id.as_str()),
+            ("device_code", session.device_code.as_str()),
+            ("grant_type",  "urn:ietf:params:oauth:grant-type:device_code"),
+        ]);
+    let resp = poll_req.send()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth poll: {}", e)))?;
+    let body: TokenResponse = resp.json()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth poll: malformed JSON: {}", e)))?;
+    match body {
+        TokenResponse::Success { access_token, .. } => Ok(DeviceFlowStep::Done(access_token)),
+        TokenResponse::Error { error, error_description } => match error.as_str() {
+            "authorization_pending" => Ok(DeviceFlowStep::Pending),
+            "slow_down" => {
+                session.interval += Duration::from_secs(5);
+                Ok(DeviceFlowStep::SlowDown)
+            }
+            "expired_token" => Err(ToriiError::InvalidConfig(
+                "OAuth device flow: code expired. Start again.".to_string()
+            )),
+            "access_denied" => Err(ToriiError::InvalidConfig(
+                "OAuth device flow: user denied authorisation.".to_string()
+            )),
+            other => Err(ToriiError::InvalidConfig(format!(
+                "OAuth device flow error '{}': {}",
+                other, error_description.unwrap_or_default()
+            ))),
+        }
+    }
+}
+
+/// Poll interval suggested by the provider (updated when the provider
+/// asks us to slow down). Caller sleeps for this between
+/// `poll_device_flow` calls.
+pub fn device_flow_interval(session: &DeviceFlowSession) -> Duration {
+    session.interval
+}
+
 /// Best-effort revoke of an access token, used by `torii auth rotate`
 /// after the new token is in hand. Returns Ok(true) if the platform
 /// confirmed the revocation, Ok(false) if no revoke endpoint is wired

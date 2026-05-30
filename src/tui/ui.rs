@@ -1141,6 +1141,13 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled("[n/Esc]", Style::default().fg(bc)),
                     Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
                 ]),
+                AuthFocus::OauthFlow => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("any-key", Style::default().fg(bc)),
+                    Span::styled(" close (when done)", Style::default().fg(C_SUBTLE)),
+                ]),
                 AuthFocus::List => Line::from(vec![
                     Span::raw(" "),
                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),

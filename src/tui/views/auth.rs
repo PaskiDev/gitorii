@@ -10,8 +10,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-use crate::tui::app::{App, AuthEntry, AuthFocus, AuthState};
-use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED};
+use crate::tui::app::{App, AuthEntry, AuthFocus, AuthState, OauthStatus};
+use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED, C_YELLOW};
 
 pub fn refresh(app: &mut App) {
     app.auth_view.items.clear();
@@ -168,6 +168,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         AuthFocus::OpsDropdown   => render_ops_dropdown(f, app, area),
         AuthFocus::InputToken    => render_input_overlay(f, app, area),
         AuthFocus::ConfirmRemove => render_confirm_remove(f, app, area),
+        AuthFocus::OauthFlow     => render_oauth_flow(f, app, area),
         AuthFocus::List          => {}
     }
 }
@@ -292,6 +293,146 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
         ),
         popup,
     );
+}
+
+/// Modal for the in-TUI OAuth flow. Renders the URL + user code while
+/// the worker thread polls in the background; switches to a success /
+/// error message when the worker signals completion.
+fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
+    let Some(state) = app.auth_view.oauth_flow.as_ref() else { return };
+    let bc = app.brand_color();
+
+    let w: u16 = 72.min(area.width.saturating_sub(4));
+    let h: u16 = 13.min(area.height.saturating_sub(2));
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, popup);
+
+    let mut body: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled("  provider  ", Style::default().fg(C_SUBTLE)),
+            Span::styled(&state.provider, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)),
+            Span::raw("   "),
+            Span::styled(
+                if state.rotate { "rotate" } else { "re-auth" },
+                Style::default().fg(C_DIM),
+            ),
+        ]),
+        Line::from(""),
+    ];
+
+    match &state.status {
+        OauthStatus::Starting => {
+            body.push(Line::from(Span::styled(
+                "  ▰▱▱▱▱▱▱▱▱▱  requesting device code…",
+                Style::default().fg(C_YELLOW),
+            )));
+        }
+        OauthStatus::Waiting { display_uri, user_code } => {
+            body.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "1. Open this URL in your browser:",
+                    Style::default().fg(C_WHITE),
+                ),
+            ]));
+            body.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled(display_uri.clone(), Style::default().fg(bc).add_modifier(Modifier::BOLD)),
+            ]));
+            body.push(Line::from(""));
+            body.push(Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "2. Confirm the user code:",
+                    Style::default().fg(C_WHITE),
+                ),
+            ]));
+            body.push(Line::from(vec![
+                Span::raw("     "),
+                Span::styled(user_code.clone(), Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD)),
+            ]));
+            body.push(Line::from(""));
+            let bar = progress_bar(app.tick / 2);
+            body.push(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(bar, Style::default().fg(C_YELLOW)),
+                Span::styled("  waiting for authorisation…", Style::default().fg(C_YELLOW)),
+            ]));
+        }
+        OauthStatus::Saving => {
+            body.push(Line::from(Span::styled(
+                "  ▰▰▰▰▰▰▰▰▱▱  authorised, saving token…",
+                Style::default().fg(C_YELLOW),
+            )));
+        }
+        OauthStatus::Done(masked) => {
+            body.push(Line::from(Span::styled(
+                "  ▰▰▰▰▰▰▰▰▰▰",
+                Style::default().fg(C_GREEN),
+            )));
+            body.push(Line::from(""));
+            body.push(Line::from(vec![
+                Span::styled("  ✓ ", Style::default().fg(C_GREEN)),
+                Span::styled(format!("token saved: {}", masked), Style::default().fg(C_WHITE)),
+            ]));
+            body.push(Line::from(""));
+            body.push(Line::from(Span::styled(
+                "  [any key] close",
+                Style::default().fg(C_DIM),
+            )));
+        }
+        OauthStatus::Error(msg) => {
+            body.push(Line::from(Span::styled(
+                "  ▰▰▰▰▰▰▰▰▰▰",
+                Style::default().fg(C_RED),
+            )));
+            body.push(Line::from(""));
+            body.push(Line::from(vec![
+                Span::styled("  ✗ ", Style::default().fg(C_RED)),
+                Span::styled(msg.clone(), Style::default().fg(C_WHITE)),
+            ]));
+            body.push(Line::from(""));
+            body.push(Line::from(Span::styled(
+                "  [any key] close",
+                Style::default().fg(C_DIM),
+            )));
+        }
+    }
+
+    let title = if state.rotate {
+        " OAuth rotate — Esc cancel "
+    } else {
+        " OAuth re-auth — Esc cancel "
+    };
+
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::default()
+                .title(Span::styled(
+                    title,
+                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+    );
+}
+
+/// Same bouncing-ball progress bar that `sync` uses, so the in-TUI
+/// OAuth modal feels like the rest of the chrome.
+fn progress_bar(tick: usize) -> String {
+    const TOTAL: usize = 10;
+    const CYCLE: usize = (TOTAL - 1) * 2;
+    let pos = tick % CYCLE;
+    let ball = if pos < TOTAL { pos } else { CYCLE - pos };
+    (0..TOTAL).map(|i| if i == ball { '▰' } else { '▱' }).collect()
 }
 
 fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {

@@ -79,14 +79,6 @@ pub enum Action {
     /// 0.7.24 — open the currently focused job log in `$PAGER` (or `less`).
     /// Handled in the main loop because the pager replaces the TUI.
     OpenJobLogInPager,
-    /// 0.7.30 — suspend the TUI and run `torii auth oauth <provider>`
-    /// for the provider currently selected in the Auth view. OAuth
-    /// device flow needs a browser dance + token paste prompt that's
-    /// awful to recreate inside ratatui — wrapping the CLI is simpler
-    /// and matches the user's muscle memory.
-    AuthOauthInPager,
-    /// 0.7.30 — same idea, runs `torii auth rotate [--pat] <provider>`.
-    AuthRotateInPager { pat: bool },
 }
 
 pub struct EventHandler;
@@ -380,9 +372,16 @@ impl EventHandler {
                         // List, then defers to the global handler which
                         // returns focus to the sidebar).
                         // 0.7.30 — Auth overlays close on Esc; back to list.
+                        // 0.7.32 — also clears the in-flight OAuth modal so
+                        // the user can bail out of a polling worker.
                         View::Auth => {
                             use crate::tui::app::AuthFocus;
-                            if app.auth_view.focus != AuthFocus::List {
+                            if app.auth_view.focus == AuthFocus::OauthFlow {
+                                app.auth_view.oauth_flow = None;
+                                app.auth_oauth_rx = None;
+                                app.auth_view.focus = AuthFocus::List;
+                                true
+                            } else if app.auth_view.focus != AuthFocus::List {
                                 app.auth_view.focus = AuthFocus::List;
                                 true
                             } else {
@@ -2426,6 +2425,24 @@ fn handle_auth(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             }
             None
         }
+        AuthFocus::OauthFlow => {
+            // While the worker is in flight (Starting/Waiting/Saving)
+            // we ignore keys — the user can still hit Esc, which is
+            // handled by the global Esc path above to clear the focus.
+            // On Done/Error any key closes the modal so the user can
+            // dismiss it without hunting for a specific binding.
+            use crate::tui::app::OauthStatus;
+            if let Some(state) = app.auth_view.oauth_flow.as_ref() {
+                match state.status {
+                    OauthStatus::Done(_) | OauthStatus::Error(_) => {
+                        app.auth_view.oauth_flow = None;
+                        app.auth_view.focus = AuthFocus::List;
+                    }
+                    _ => {}
+                }
+            }
+            None
+        }
         AuthFocus::ConfirmRemove => {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Char('y')) | (_, KeyCode::Char('Y')) => {
@@ -2465,16 +2482,37 @@ fn dispatch_auth_op(app: &mut App) -> Option<Action> {
             app.auth_view.focus = AuthFocus::ConfirmRemove;
         }
         "OAuth re-auth" => {
-            app.auth_view.focus = AuthFocus::List;
-            return Some(Action::AuthOauthInPager);
+            // Driven entirely inside the TUI now: spawn the worker
+            // and let the modal pump status updates.
+            let prov = provider.clone();
+            app.start_oauth_flow(prov, false, None);
         }
         "Rotate (OAuth)" => {
-            app.auth_view.focus = AuthFocus::List;
-            return Some(Action::AuthRotateInPager { pat: false });
+            // Capture the old token before kicking the worker so it
+            // can revoke it after the new one lands.
+            let old = crate::auth::resolve_token(&provider, ".").value;
+            app.start_oauth_flow(provider.clone(), true, old);
         }
         "Rotate as PAT (GitLab)" => {
+            // PAT rotate is one synchronous HTTP call — no need for
+            // a modal, but we keep the user inside the TUI by
+            // dispatching it here instead of suspending the screen.
+            let old = crate::auth::resolve_token(&provider, ".").value;
+            match old {
+                None => app.set_status("✗ no GitLab token to rotate"),
+                Some(old_tok) => match crate::oauth::rotate_gitlab_pat(&old_tok) {
+                    Ok(new_tok) => match crate::auth::set_token(&provider, &new_tok, None) {
+                        Ok(_) => {
+                            crate::auth::drop_token_cache();
+                            app.set_status("✓ GitLab PAT rotated");
+                            crate::tui::views::auth::refresh(app);
+                        }
+                        Err(e) => app.set_status(format!("✗ save: {}", e)),
+                    },
+                    Err(e) => app.set_status(format!("✗ rotate: {}", e)),
+                },
+            }
             app.auth_view.focus = AuthFocus::List;
-            return Some(Action::AuthRotateInPager { pat: true });
         }
         "Login (paste cloud key)" => {
             app.auth_view.focus = AuthFocus::InputToken;
