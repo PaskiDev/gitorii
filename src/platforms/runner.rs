@@ -38,6 +38,22 @@ pub trait RunnerClient: Send {
     fn reset_token(&self, owner: &str, repo: &str, id: &str) -> Result<String>;
     fn pause(&self, owner: &str, repo: &str, id: &str) -> Result<()>;
     fn resume(&self, owner: &str, repo: &str, id: &str) -> Result<()>;
+    /// Obtain a short-lived registration token. `torii runner register`
+    /// uses it to wrap the platform's CLI (gitlab-runner register,
+    /// ./config.sh on GitHub Actions). Returns (token, register_url) —
+    /// the URL is the value the CLI wants for its `--url` arg.
+    fn registration_token(&self, owner: &str, repo: &str) -> Result<RegistrationToken>;
+}
+
+#[derive(Debug, Clone)]
+pub struct RegistrationToken {
+    pub token: String,
+    /// URL the runner CLI expects (e.g. https://gitlab.com or
+    /// https://github.com/<owner>/<repo>).
+    pub register_url: String,
+    /// Expiry hint in seconds, when the platform reports one. GitHub
+    /// gives ~1h; GitLab tokens don't expire until you regenerate.
+    pub expires_in_seconds: Option<u64>,
 }
 
 // ============================================================================
@@ -107,6 +123,31 @@ impl RunnerClient for GitLabRunnerClient {
     }
     fn resume(&self, owner: &str, repo: &str, id: &str) -> Result<()> {
         set_paused(self, owner, repo, id, false)
+    }
+
+    fn registration_token(&self, owner: &str, repo: &str) -> Result<RegistrationToken> {
+        // GitLab returns the project's `runners_token` as part of the
+        // project payload. Requires Maintainer+ on the project. The
+        // token doesn't expire on its own (only when explicitly reset
+        // from the project settings).
+        let url = format!(
+            "{}/projects/{}",
+            self.base_url, Self::project_path(owner, repo)
+        );
+        let req = self.client().get(&url).header("Authorization", self.auth());
+        let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
+        let token = json["runners_token"].as_str()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "GitLab project response missing `runners_token`. \
+                 The token API needs Maintainer+ on the project. Body: {}",
+                json
+            )))?
+            .to_string();
+        Ok(RegistrationToken {
+            token,
+            register_url: "https://gitlab.com".to_string(),
+            expires_in_seconds: None,
+        })
     }
 }
 
@@ -226,6 +267,32 @@ impl RunnerClient for GitHubRunnerClient {
         Err(ToriiError::InvalidConfig(
             "GitHub Actions has no pause/resume on self-hosted runners.".to_string()
         ))
+    }
+
+    fn registration_token(&self, owner: &str, repo: &str) -> Result<RegistrationToken> {
+        // GitHub Actions: `POST /repos/:owner/:repo/actions/runners/registration-token`
+        // returns a token valid for ~1h. The token is single-use per
+        // registration but you can request new ones freely.
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/actions/runners/registration-token",
+            owner, repo
+        );
+        let req = self.client().post(&url)
+            .header("Authorization", self.auth())
+            .header("Accept", self.accept());
+        let json = crate::http::send_json(req, &format!("GitHub (url: {})", url))?;
+        let token = json["token"].as_str()
+            .ok_or_else(|| ToriiError::InvalidConfig(format!(
+                "GitHub registration-token response missing `token`: {}", json
+            )))?
+            .to_string();
+        // `expires_at` is RFC3339; we don't parse it here, we just
+        // mark "an hour" because that's the documented default.
+        Ok(RegistrationToken {
+            token,
+            register_url: format!("https://github.com/{}/{}", owner, repo),
+            expires_in_seconds: Some(3600),
+        })
     }
 }
 
