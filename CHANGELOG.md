@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.33] - 2026-05-30
+
+### Changed
+
+- **Bisect TUI view aligned with the rest of the chrome**. Was a
+  read-only status pane + a static "run these commands in shell"
+  cheat-sheet block. Now:
+  - **Operable from inside the TUI**. `o` opens an ops dropdown with
+    the contextual actions (Start / Mark HEAD good / Mark HEAD bad /
+    Skip HEAD / Run command / Reset) wired straight to the existing
+    `crate::bisect::*` functions. Start and Run open an input
+    overlay; Reset gates behind a confirm dialog.
+  - **Layout matches log / branch / platform**: a 60/40 status +
+    detail split, with the cheat-sheet moved into the detail panel
+    when a session is active (and an explanation when it isn't).
+  - **Static "Commands" panel removed**. Bottom-of-screen hints flow
+    through `render_hint` in `tui/ui.rs`, the same arm pattern Auth
+    and Platform use; nothing local stacks above it.
+  - **Palette aligned**: bc for hashes (commit ids), `C_DIM` for
+    secondary text, status-coloured marks (✓ good = `C_GREEN`, ✗
+    bad = `C_RED`, "bisecting…" headline = `C_YELLOW`). `C_CYAN`
+    dropped in favour of the brand colour — same convention used in
+    log/branch.
+
+### Internal
+
+- New `BisectFocus` (`List` / `OpsDropdown` / `InputArgs` /
+  `ConfirmReset`) + `BisectPendingOp` (`Start` / `Run`).
+  `BisectState` gained `dropdown_idx`, `input_buffer`,
+  `input_prompt`, `pending_op` — same shape as `AuthState`.
+- `tui/views/bisect.rs::ops_for(state)` exports the dropdown rows;
+  events handler reads it the same way as Platform's `ops_for` /
+  Auth's `ops_for`.
+- New `handle_bisect` + `dispatch_bisect_op` in `tui/events.rs`.
+  Esc closes overlays back to `List`, then defers to the global Esc
+  path (sidebar focus).
+
 ## [0.7.32] - 2026-05-30
 
 ### Changed

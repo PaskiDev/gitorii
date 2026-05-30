@@ -371,6 +371,17 @@ impl EventHandler {
                         // drill-down (popup → JobLog → JobsOfPipeline →
                         // List, then defers to the global handler which
                         // returns focus to the sidebar).
+                        // 0.7.33 — Bisect overlays close on Esc; back to list.
+                        View::Bisect => {
+                            use crate::tui::app::BisectFocus;
+                            if app.bisect_view.focus != BisectFocus::List {
+                                app.bisect_view.focus = BisectFocus::List;
+                                true
+                            } else {
+                                false
+                            }
+                        }
+
                         // 0.7.30 — Auth overlays close on Esc; back to list.
                         // 0.7.32 — also clears the in-flight OAuth modal so
                         // the user can bail out of a polling worker.
@@ -440,7 +451,8 @@ impl EventHandler {
                     // 0.7.2: no custom keybinds yet for the four new views;
                     // they're informative and refresh on entry. ↑/↓ etc. are
                     // handled in the generic list navigation block above.
-                    View::Worktree | View::Submodule | View::Bisect => None,
+                    View::Worktree | View::Submodule => None,
+                    View::Bisect    => handle_bisect(key, app),
                     View::Auth      => handle_auth(key, app),
                     // 0.7.12 — unified Platform view.
                     View::Platform  => handle_platform(key, app),
@@ -2332,6 +2344,167 @@ fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action> {
 // On the Jobs list (drill-down), Enter fetches the job log into a
 // scrollable panel; Esc walks the drill-down back (handled outside).
 // Ctrl-R re-runs the loader for whatever sub-tab is active.
+// 0.7.33 — Bisect view: contextual ops via `o` dropdown. start/good/
+// bad/skip/run/reset routed through `crate::bisect`. Same dropdown +
+// input + confirm chrome family as the Auth view.
+fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    use crate::tui::app::{BisectFocus, BisectPendingOp};
+
+    match app.bisect_view.focus {
+        BisectFocus::List => {
+            if (key.modifiers, key.code) == (KeyModifiers::NONE, KeyCode::Char('o')) {
+                app.bisect_view.dropdown_idx = 0;
+                app.bisect_view.focus = BisectFocus::OpsDropdown;
+            }
+            None
+        }
+        BisectFocus::OpsDropdown => {
+            let ops = crate::tui::views::bisect::ops_for(&app.bisect_view);
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                    if app.bisect_view.dropdown_idx > 0 {
+                        app.bisect_view.dropdown_idx -= 1;
+                    }
+                }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                    if app.bisect_view.dropdown_idx + 1 < ops.len() {
+                        app.bisect_view.dropdown_idx += 1;
+                    }
+                }
+                (_, KeyCode::Enter) => return dispatch_bisect_op(app),
+                _ => {}
+            }
+            None
+        }
+        BisectFocus::InputArgs => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Enter) => {
+                    let buf = std::mem::take(&mut app.bisect_view.input_buffer);
+                    let op = app.bisect_view.pending_op.clone();
+                    app.bisect_view.focus = BisectFocus::List;
+                    app.bisect_view.pending_op = BisectPendingOp::None;
+                    let trimmed = buf.trim();
+                    if trimmed.is_empty() {
+                        app.set_status("✗ empty input, aborted");
+                        return None;
+                    }
+                    match op {
+                        BisectPendingOp::Start => {
+                            // First whitespace-delimited token is the
+                            // bad ref; the rest are good refs.
+                            let mut parts = trimmed.split_whitespace();
+                            let bad = parts.next().map(String::from);
+                            let good: Vec<String> = parts.map(String::from).collect();
+                            if good.is_empty() {
+                                app.set_status("✗ start needs at least one good ref");
+                            } else {
+                                let res = crate::bisect::start(
+                                    std::path::Path::new("."),
+                                    bad.as_deref(),
+                                    &good,
+                                );
+                                match res {
+                                    Ok(_)  => app.set_status("✓ bisect started"),
+                                    Err(e) => app.set_status(format!("✗ {}", e)),
+                                }
+                            }
+                        }
+                        BisectPendingOp::Run => {
+                            let cmd: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
+                            match crate::bisect::run(std::path::Path::new("."), &cmd) {
+                                Ok(_)  => app.set_status("✓ bisect run finished"),
+                                Err(e) => app.set_status(format!("✗ {}", e)),
+                            }
+                        }
+                        BisectPendingOp::None => {}
+                    }
+                    crate::tui::views::bisect::refresh(app);
+                }
+                (_, KeyCode::Backspace) => {
+                    app.bisect_view.input_buffer.pop();
+                }
+                (_, KeyCode::Char(c)) => {
+                    if key.modifiers != KeyModifiers::CONTROL {
+                        app.bisect_view.input_buffer.push(c);
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        BisectFocus::ConfirmReset => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Char('y')) | (_, KeyCode::Char('Y')) => {
+                    match crate::bisect::reset(std::path::Path::new(".")) {
+                        Ok(_)  => app.set_status("✓ bisect reset"),
+                        Err(e) => app.set_status(format!("✗ {}", e)),
+                    }
+                    app.bisect_view.focus = BisectFocus::List;
+                    crate::tui::views::bisect::refresh(app);
+                }
+                (_, KeyCode::Char('n')) | (_, KeyCode::Char('N')) | (_, KeyCode::Esc) => {
+                    app.bisect_view.focus = BisectFocus::List;
+                }
+                _ => {}
+            }
+            None
+        }
+    }
+}
+
+fn dispatch_bisect_op(app: &mut App) -> Option<Action> {
+    use crate::tui::app::{BisectFocus, BisectPendingOp};
+    let ops = crate::tui::views::bisect::ops_for(&app.bisect_view);
+    let idx = app.bisect_view.dropdown_idx;
+    let label = ops.get(idx).map(|o| o.0).unwrap_or("");
+    let path = std::path::Path::new(".");
+    match label {
+        "Start" => {
+            app.bisect_view.focus = BisectFocus::InputArgs;
+            app.bisect_view.input_buffer.clear();
+            app.bisect_view.input_prompt = "bad good… (e.g. HEAD v1.0)".to_string();
+            app.bisect_view.pending_op = BisectPendingOp::Start;
+        }
+        "Mark HEAD good" => {
+            match crate::bisect::good(path, None) {
+                Ok(_)  => app.set_status("✓ marked good"),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            crate::tui::views::bisect::refresh(app);
+        }
+        "Mark HEAD bad" => {
+            match crate::bisect::bad(path, None) {
+                Ok(_)  => app.set_status("✓ marked bad"),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            crate::tui::views::bisect::refresh(app);
+        }
+        "Skip HEAD" => {
+            match crate::bisect::skip(path, None) {
+                Ok(_)  => app.set_status("✓ skipped"),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            crate::tui::views::bisect::refresh(app);
+        }
+        "Run command" => {
+            app.bisect_view.focus = BisectFocus::InputArgs;
+            app.bisect_view.input_buffer.clear();
+            app.bisect_view.input_prompt = "command (e.g. cargo test -q)".to_string();
+            app.bisect_view.pending_op = BisectPendingOp::Run;
+        }
+        "Reset" => {
+            app.bisect_view.focus = BisectFocus::ConfirmReset;
+        }
+        _ => {
+            app.bisect_view.focus = BisectFocus::List;
+        }
+    }
+    None
+}
+
 // 0.7.30 — Auth view: contextual operations on the selected provider
 // (oauth re-auth / rotate / set-token paste / remove). Same dropdown-
 // driven pattern as Platform: `o` opens the menu, Enter dispatches,
