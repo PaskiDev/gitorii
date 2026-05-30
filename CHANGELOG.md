@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.28] - 2026-05-30
+
+### Fixed
+
+- **Platform detail panel: long values no longer read as concatenated
+  with the next field.** Each `line_kv` row was a single `Line`;
+  Paragraph's block-level wrap broke the value mid-row but the
+  continuation landed at column 0, where it visually merged with the
+  next key/value pair (most visible on runners with a long
+  `description`). Replaced with a `kv()` helper that word-wraps the
+  value to subsequent lines indented to the value column, computed
+  from the real panel width at render time. Same logic across
+  pipelines / jobs / releases / packages / runners. Web URLs are also
+  routed through `kv()` now (key `url`) so over-long URLs wrap with
+  indent instead of running into the next entity.
+
 ## [0.7.27] - 2026-05-30
 
 Polish pass on the 0.7.26 Platform rework: the custom footer was
