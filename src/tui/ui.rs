@@ -33,30 +33,34 @@ struct Tab {
     view: View,
 }
 
+// Sidebar reorganised in 0.7.26 by user flow:
+//   entry → local action → navigation → broadcast → multi-platform → admin.
+// Keep this aligned with `view_for_idx` + the sidebar_idx maps in
+// `go_to` / `go_back` (src/tui/app.rs).
 const TABS: &[Tab] = &[
+    // entry
     Tab { key: "f", label: "files",     view: View::Dashboard  },
+    // local action
     Tab { key: "c", label: "save",      view: View::Commit     },
     Tab { key: "s", label: "sync",      view: View::Sync       },
     Tab { key: "p", label: "snapshot",  view: View::Snapshot   },
+    // navigation / history
     Tab { key: "l", label: "log",       view: View::Log        },
     Tab { key: "b", label: "branch",    view: View::Branch     },
     Tab { key: "t", label: "tags",      view: View::Tag        },
-    // 0.7.2: 4 new views.
-    Tab { key: "k", label: "worktrees", view: View::Worktree   },
-    Tab { key: "m", label: "submodules",view: View::Submodule  },
-    Tab { key: "r", label: "remote",    view: View::Remote     },
-    Tab { key: "w", label: "workspace", view: View::Workspace  },
+    // broadcast / platform-side
     Tab { key: "n", label: "pr/mr",     view: View::Pr         },
     Tab { key: "i", label: "issues",    view: View::Issue      },
+    Tab { key: "y", label: "platform",  view: View::Platform   },
+    // multi-platform / repo layout
+    Tab { key: "r", label: "remote",    view: View::Remote     },
+    Tab { key: "w", label: "workspace", view: View::Workspace  },
+    Tab { key: "k", label: "worktrees", view: View::Worktree   },
+    Tab { key: "m", label: "submodules",view: View::Submodule  },
+    // admin / advanced
     Tab { key: "v", label: "bisect",    view: View::Bisect     },
     Tab { key: "a", label: "auth",      view: View::Auth       },
-    // 0.7.12: unified CI/CD surface (pipelines/jobs/releases/packages).
-    Tab { key: "y", label: "platform",  view: View::Platform   },
     Tab { key: "g", label: "config",    view: View::Config     },
-    // History merged into Log (0.7.2); Mirror merged into Remote;
-    // Settings merged into Config (as a tab). Old entries removed from
-    // the sidebar but the View variants still exist for back-compat —
-    // their renders redirect at the top-level dispatcher.
 ];
 
 pub fn render(f: &mut Frame, app: &App) {

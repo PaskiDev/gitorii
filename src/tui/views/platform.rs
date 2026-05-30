@@ -1,16 +1,36 @@
-// Unified Platform view (0.7.12) — CI/CD surface for the active remote.
+// Unified Platform view — CI/CD surface for the active remote.
 //
-// Four sub-tabs (Pipelines / Jobs / Releases / Packages) over a single
-// remote. Drill-down: Enter on a pipeline → Jobs tab populated with its
-// jobs; Enter on a job → its log/trace in a scrollable panel. Esc backs
-// out of drill-downs. `r` opens a centred popup to switch remote.
+// Layout (0.7.26 rework):
+//
+//   ┌───────────────────────────────────────────────┐
+//   │ header: remote popup trigger + Tabs widget    │  3 rows
+//   ├───────────────────────────────────────────────┤
+//   │ list (60%)             │ detail (40%)         │
+//   │                        │                      │  flexible
+//   │                        │                      │
+//   ├───────────────────────────────────────────────┤
+//   │ footer: hints + filters + action result       │  2 rows
+//   └───────────────────────────────────────────────┘
+//
+// Five sub-tabs: Pipelines / Jobs / Releases / Packages / Runners.
+// Drill-down: Enter on a pipeline → Jobs of that pipeline; Enter on a
+// job → log/trace in a scrollable panel that takes the full body.
+// Esc backs out of drill-downs.
+//
+// Interaction lives in three dropdowns triggered by single keys:
+//   r  → remote-selector popup
+//   o  → contextual ops (cancel / retry / pause / etc., per sub-tab)
+//   f  → list filters  (status cycle + branch-only toggle)
+// This replaces the per-action keys (c/x/a/t/d/s/b) we shipped in
+// 0.7.24/0.7.25 — those collided across sub-tabs (c meant cancel in
+// Pipelines but pause in Runners) and weren't discoverable.
 
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
 };
 
 use crate::tui::app::{App, PlatformFocus, PlatformSubTab};
@@ -20,8 +40,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header: remote + sub-tabs
-            Constraint::Min(1),    // body
+            Constraint::Length(3),  // header: Tabs + remote
+            Constraint::Min(1),     // body
+            Constraint::Length(2),  // footer: hints + status
         ])
         .split(area);
 
@@ -43,8 +64,32 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         render_detail(f, app, cols[1]);
     }
 
-    if app.platform_view.focus == PlatformFocus::RemotePopup {
-        render_remote_popup(f, app, area);
+    render_footer(f, app, rows[2]);
+
+    // Overlays — drawn last so they sit on top of body content.
+    match app.platform_view.focus {
+        PlatformFocus::RemotePopup    => render_remote_popup(f, app, area),
+        PlatformFocus::OpsDropdown    => render_ops_dropdown(f, app, area),
+        PlatformFocus::FilterDropdown => render_filter_dropdown(f, app, area),
+        _ => {}
+    }
+}
+
+/// Width-aware column formatter. `format!("{:<10}", s)` only pads
+/// when `s` is *shorter* than 10 — a 14-char GitHub workflow_run id
+/// would overflow and visually concatenate with the next column. This
+/// helper truncates with an ellipsis so the column boundary is
+/// preserved no matter the input length.
+fn col(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n > width {
+        let cut: String = s.chars().take(width.saturating_sub(1)).collect();
+        format!("{}… ", cut)
+    } else {
+        let mut out = s.to_string();
+        out.push_str(&" ".repeat(width.saturating_sub(n)));
+        out.push(' ');
+        out
     }
 }
 
@@ -52,71 +97,47 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
 
-    let remote_label = format!(" remote: {} ▾ ", pv.remote);
-    let platform_label = if pv.platform.is_empty() {
-        " — ".to_string()
+    // Title carries the active remote + resolved platform/owner/repo
+    // so it doesn't compete with the Tabs widget for horizontal space.
+    let target = if pv.platform.is_empty() {
+        format!(" platform · {} ", pv.remote)
     } else {
-        format!(" {} {}/{} ", pv.platform, pv.owner, pv.repo_name)
+        format!(" platform · {} → {}/{} ", pv.remote, pv.owner, pv.repo_name)
     };
 
-    let mut tabs: Vec<Span> = Vec::new();
-    for (i, (st, label)) in [
-        (PlatformSubTab::Pipelines, "[1] pipelines"),
-        (PlatformSubTab::Jobs,      "[2] jobs"),
-        (PlatformSubTab::Releases,  "[3] releases"),
-        (PlatformSubTab::Packages,  "[4] packages"),
-        (PlatformSubTab::Runners,   "[5] runners"),
-    ].iter().enumerate() {
-        if i > 0 { tabs.push(Span::raw("  ")); }
-        let active = pv.sub_tab == *st;
-        let style = if active {
-            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(bc)
-        };
-        tabs.push(Span::styled(*label, style));
-    }
-
-    let mut line: Vec<Span> = vec![
-        Span::raw(" "),
-        Span::styled(remote_label, Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD)),
-        Span::styled(platform_label, Style::default().fg(C_DIM)),
-        Span::raw(" "),
+    let titles: Vec<&'static str> = vec![
+        " 1 pipelines ", " 2 jobs ", " 3 releases ", " 4 packages ", " 5 runners ",
     ];
-    line.extend(tabs);
-    // Active filters and live indicator at the right side of the header.
-    if let Some(s) = &pv.filter_status {
-        line.push(Span::raw("   "));
-        line.push(Span::styled(
-            format!("status:{}", s),
-            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    if pv.filter_branch_only {
-        line.push(Span::raw("   "));
-        line.push(Span::styled(
-            "branch-only",
-            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    if pv.auto_refresh {
-        line.push(Span::raw("   "));
-        line.push(Span::styled(
-            "⟳ live",
-            Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
-        ));
-    }
+    let active_idx = match pv.sub_tab {
+        PlatformSubTab::Pipelines => 0,
+        PlatformSubTab::Jobs      => 1,
+        PlatformSubTab::Releases  => 2,
+        PlatformSubTab::Packages  => 3,
+        PlatformSubTab::Runners   => 4,
+    };
 
-    f.render_widget(
-        Paragraph::new(Line::from(line)).block(
+    let tabs = Tabs::new(titles)
+        .select(active_idx)
+        .style(Style::default().fg(bc))
+        .highlight_style(
+            Style::default()
+                .fg(C_WHITE)
+                .bg(app.selected_bg())
+                .add_modifier(Modifier::BOLD),
+        )
+        .divider(Span::styled("│", Style::default().fg(C_DIM)))
+        .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
                 .border_style(Style::default().fg(bc))
-                .title(Span::styled(" platform ", Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
-        ),
-        area,
-    );
+                .title(Span::styled(
+                    target,
+                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                )),
+        );
+
+    f.render_widget(tabs, area);
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
@@ -194,12 +215,13 @@ fn render_pipelines_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) 
             Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
         } else { Style::default() };
         let prefix = if is_sel { "█ " } else { "  " };
+        let id = format!("#{}", p.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(format!("#{:<10}", p.id), Style::default().fg(C_CYAN)),
-            Span::styled(format!("{:<10}", p.status), Style::default().fg(status_color(&p.status))),
-            Span::styled(format!("{:<18}", truncate(&p.branch, 17)), Style::default().fg(C_WHITE)),
-            Span::styled(format!("{:<20}", short_time(&p.created_at)), Style::default().fg(C_DIM)),
+            Span::styled(col(&id, 13),       Style::default().fg(C_CYAN)),
+            Span::styled(col(&p.status, 10), Style::default().fg(status_color(&p.status))),
+            Span::styled(col(&p.branch, 18), Style::default().fg(C_WHITE)),
+            Span::styled(col(&short_time(&p.created_at), 18), Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.pipelines_idx)
@@ -213,14 +235,15 @@ fn render_jobs_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
         } else { Style::default() };
         let prefix = if is_sel { "█ " } else { "  " };
-        let dur = j.duration_seconds.map(|s| format!("{}s", s as u64)).unwrap_or_default();
+        let dur = j.duration_seconds.map(|s| format!("{}s", s as u64)).unwrap_or_else(|| "—".into());
+        let id = format!("#{}", j.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(format!("#{:<10}", j.id), Style::default().fg(C_CYAN)),
-            Span::styled(format!("{:<10}", j.status), Style::default().fg(status_color(&j.status))),
-            Span::styled(format!("{:<10}", truncate(&j.stage, 9)), Style::default().fg(C_YELLOW)),
-            Span::styled(format!("{:<24}", truncate(&j.name, 23)), Style::default().fg(C_WHITE)),
-            Span::styled(format!("{:>8}", dur), Style::default().fg(C_DIM)),
+            Span::styled(col(&id, 13),       Style::default().fg(C_CYAN)),
+            Span::styled(col(&j.status, 10), Style::default().fg(status_color(&j.status))),
+            Span::styled(col(&j.stage, 10),  Style::default().fg(C_YELLOW)),
+            Span::styled(col(&j.name, 24),   Style::default().fg(C_WHITE)),
+            Span::styled(col(&dur, 8),       Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.jobs_idx)
@@ -236,9 +259,9 @@ fn render_releases_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
         let prefix = if is_sel { "█ " } else { "  " };
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(format!("{:<16}", truncate(&r.tag, 15)), Style::default().fg(C_GREEN)),
-            Span::styled(format!("{:<28}", truncate(&r.name, 27)), Style::default().fg(C_WHITE)),
-            Span::styled(format!("{:<20}", short_time(&r.created_at)), Style::default().fg(C_DIM)),
+            Span::styled(col(&r.tag, 16),   Style::default().fg(C_GREEN)),
+            Span::styled(col(&r.name, 28),  Style::default().fg(C_WHITE)),
+            Span::styled(col(&short_time(&r.created_at), 18), Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.releases_idx)
@@ -254,10 +277,10 @@ fn render_packages_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
         let prefix = if is_sel { "█ " } else { "  " };
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(format!("{:<22}", truncate(&p.name, 21)), Style::default().fg(C_WHITE)),
-            Span::styled(format!("{:<14}", truncate(&p.version, 13)), Style::default().fg(C_GREEN)),
-            Span::styled(format!("{:<10}", truncate(&p.package_type, 9)), Style::default().fg(C_YELLOW)),
-            Span::styled(format!("{:<20}", short_time(&p.created_at)), Style::default().fg(C_DIM)),
+            Span::styled(col(&p.name, 22),         Style::default().fg(C_WHITE)),
+            Span::styled(col(&p.version, 14),      Style::default().fg(C_GREEN)),
+            Span::styled(col(&p.package_type, 10), Style::default().fg(C_YELLOW)),
+            Span::styled(col(&short_time(&p.created_at), 18), Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.packages_idx)
@@ -278,13 +301,14 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             _                   => C_SUBTLE,
         };
         let tags_str = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(",") };
+        let id = format!("#{}", r.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(format!("#{:<6}", r.id), Style::default().fg(C_CYAN)),
-            Span::styled(format!("{:<10}", r.status), Style::default().fg(status_color)),
-            Span::styled(format!("{:<24}", truncate(&r.description, 23)), Style::default().fg(C_WHITE)),
-            Span::styled(format!("{:<8}", truncate(&r.os, 7)), Style::default().fg(C_YELLOW)),
-            Span::styled(truncate(&tags_str, 30), Style::default().fg(C_DIM)),
+            Span::styled(col(&id, 8),         Style::default().fg(C_CYAN)),
+            Span::styled(col(&r.status, 10),  Style::default().fg(status_color)),
+            Span::styled(col(&r.description, 24), Style::default().fg(C_WHITE)),
+            Span::styled(col(&r.os, 8),       Style::default().fg(C_YELLOW)),
+            Span::styled(col(&tags_str, 30),  Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.runners_idx)
@@ -294,7 +318,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
 
-    let mut body: Vec<Line> = match pv.sub_tab {
+    let body: Vec<Line> = match pv.sub_tab {
         PlatformSubTab::Pipelines => pv.pipelines.get(pv.pipelines_idx).map(|p| vec![
             line_kv("id",        &format!("#{}", p.id), C_CYAN),
             line_kv("status",    &p.raw_status,        status_color(&p.status)),
@@ -362,32 +386,10 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         }).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
     };
 
-    // 0.7.24: contextual-action hints + result feedback. Hints sit at the
-    // foot of the detail panel; the result line (✓/✗ from the last action)
-    // is bright and auto-clears after a few seconds.
-    body.push(Line::from(""));
-    let hint = match pv.sub_tab {
-        PlatformSubTab::Pipelines => "[c] cancel  [x] retry  [s] status  [b] branch  [p] live  [Enter] jobs",
-        PlatformSubTab::Jobs      => "[c] cancel  [x] retry  [a] artifacts  [s] status  [p] live  [Enter] log",
-        PlatformSubTab::Runners   => "[c] pause  [x] resume  [t] reset-token  [d] remove  [p] live",
-        _ => "[p] live",
-    };
-    if !hint.is_empty() {
-        body.push(Line::from(Span::styled(hint, Style::default().fg(C_SUBTLE))));
-    }
-    if pv.action_in_flight {
-        body.push(Line::from(Span::styled(
-            "⏳ action in flight…",
-            Style::default().fg(C_YELLOW),
-        )));
-    } else if let Some(msg) = &pv.action_msg {
-        let color = if msg.starts_with('✓') { C_GREEN } else { C_RED };
-        body.push(Line::from(Span::styled(
-            msg.clone(),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
-    }
-
+    // 0.7.26: detail panel no longer carries hints or action results.
+    // Those moved to the dedicated footer below the body so the detail
+    // can stay focused on the selected entity's data.
+    let _ = pv; // silence "unused" once the local was only for the hint
     f.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }).block(
             Block::default()
@@ -429,6 +431,224 @@ fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
                     .border_style(Style::default().fg(bc))
             ),
         area,
+    );
+}
+
+/// Footer line: contextual hints on the left, filter/live indicators
+/// in the middle, last action result on the right. Two rows so the
+/// indicators have room when the terminal is narrow.
+fn render_footer(f: &mut Frame, app: &App, area: Rect) {
+    let pv = &app.platform_view;
+    let bc = app.brand_color();
+
+    let hints = match pv.sub_tab {
+        PlatformSubTab::Pipelines | PlatformSubTab::Jobs | PlatformSubTab::Runners =>
+            "  [o] ops   [f] filter   [r] remote   [p] live   [Enter] drill in",
+        PlatformSubTab::Releases | PlatformSubTab::Packages =>
+            "  [r] remote   [p] live   [Enter] drill in",
+    };
+
+    let mut indicators: Vec<Span> = Vec::new();
+    if let Some(s) = &pv.filter_status {
+        indicators.push(Span::styled(
+            format!("status:{}  ", s),
+            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if pv.filter_branch_only {
+        indicators.push(Span::styled(
+            "branch-only  ",
+            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if pv.auto_refresh {
+        indicators.push(Span::styled(
+            "⟳ live  ",
+            Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
+        ));
+    }
+
+    let result = if pv.action_in_flight {
+        Span::styled("⏳ action in flight…", Style::default().fg(C_YELLOW))
+    } else if let Some(msg) = &pv.action_msg {
+        let color = if msg.starts_with('✓') { C_GREEN } else { C_RED };
+        Span::styled(msg.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD))
+    } else {
+        Span::raw("")
+    };
+
+    let row1 = Line::from(vec![Span::styled(hints, Style::default().fg(C_SUBTLE))]);
+    let mut row2_spans: Vec<Span> = vec![Span::raw("  ")];
+    row2_spans.extend(indicators);
+    row2_spans.push(result);
+    let row2 = Line::from(row2_spans);
+
+    f.render_widget(
+        Paragraph::new(vec![row1, row2]).block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(bc)),
+        ),
+        area,
+    );
+}
+
+/// Ops dropdown — single-key (`o`) menu of contextual actions for the
+/// current sub-tab. List of (label, description, enabled) per row.
+pub fn ops_for(pv: &crate::tui::app::PlatformState) -> Vec<(&'static str, &'static str)> {
+    match pv.sub_tab {
+        PlatformSubTab::Pipelines => vec![
+            ("cancel pipeline",  "stop the run server-side"),
+            ("retry pipeline",   "re-run failed/canceled jobs"),
+        ],
+        PlatformSubTab::Jobs => vec![
+            ("cancel job",       "stop this job (GitLab)"),
+            ("retry job",        "re-run this job (GitLab)"),
+            ("download artifacts", "save zip to <repo>/artifacts/"),
+        ],
+        PlatformSubTab::Runners => vec![
+            ("pause runner",     "stop picking up jobs"),
+            ("resume runner",    "re-enable job pickup"),
+            ("reset auth token", "rotate runner credential (GitLab)"),
+            ("remove runner",    "delete registration ⚠"),
+        ],
+        _ => vec![],
+    }
+}
+
+fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
+    let pv = &app.platform_view;
+    let bc = app.brand_color();
+    let ops = ops_for(pv);
+    if ops.is_empty() { return; }
+
+    let w: u16 = 40;
+    let h: u16 = ops.len() as u16 + 2;
+    let popup = Rect {
+        x: area.x + 4,
+        y: area.y + 4,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    };
+    f.render_widget(Clear, popup);
+
+    let items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (label, desc))| {
+        let is_sel = i == pv.dropdown_idx;
+        let danger = label.starts_with("remove");
+        let label_color = if danger { C_RED }
+                          else if is_sel { C_WHITE }
+                          else { C_SUBTLE };
+        let style = if is_sel {
+            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let prefix = if is_sel { "▶ " } else { "  " };
+        ListItem::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(bc)),
+            Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
+            Span::styled(*desc, Style::default().fg(C_DIM)),
+        ])).style(style)
+    }).collect();
+
+    let mut state = ListState::default();
+    state.select(Some(pv.dropdown_idx));
+
+    f.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .title(Span::styled(
+                    " ops — Enter to run · Esc to close ",
+                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+        &mut state,
+    );
+}
+
+/// Filter dropdown — combines status cycle + branch toggle in one
+/// menu. Selecting a row applies it immediately and closes the
+/// dropdown; the list reloads with the new filters.
+pub fn filters_for(pv: &crate::tui::app::PlatformState) -> Vec<(&'static str, &'static str)> {
+    let status = pv.filter_status.as_deref().unwrap_or("(none)");
+    let branch = if pv.filter_branch_only { "✓ on" } else { "  off" };
+    // We hand-write the labels each call so the current state shows
+    // up in the dropdown header.
+    let _ = status;
+    let _ = branch;
+    vec![
+        ("status: any",      "show all"),
+        ("status: running",  "only running"),
+        ("status: failed",   "only failed"),
+        ("status: success",  "only success"),
+        ("status: pending",  "only pending"),
+        ("branch: toggle",   "filter by the current branch"),
+    ]
+}
+
+fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
+    let pv = &app.platform_view;
+    let bc = app.brand_color();
+    let rows = filters_for(pv);
+
+    let w: u16 = 40;
+    let h: u16 = rows.len() as u16 + 2;
+    let popup = Rect {
+        x: area.x + 4,
+        y: area.y + 4,
+        width: w.min(area.width),
+        height: h.min(area.height),
+    };
+    f.render_widget(Clear, popup);
+
+    let cur_status = pv.filter_status.as_deref().unwrap_or("(any)");
+
+    let items: Vec<ListItem> = rows.iter().enumerate().map(|(i, (label, desc))| {
+        let is_sel = i == pv.dropdown_idx;
+        let active = match (i, &pv.filter_status, pv.filter_branch_only) {
+            (0, None,     _    ) => true,
+            (1, Some(s),  _    ) if s == "running"  => true,
+            (2, Some(s),  _    ) if s == "failed"   => true,
+            (3, Some(s),  _    ) if s == "success"  => true,
+            (4, Some(s),  _    ) if s == "pending"  => true,
+            (5, _,        true ) => true,
+            _ => false,
+        };
+        let marker = if active { "●" } else { " " };
+        let style = if is_sel {
+            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+        let prefix = if is_sel { "▶ " } else { "  " };
+        ListItem::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(bc)),
+            Span::styled(format!("{} ", marker), Style::default().fg(C_GREEN)),
+            Span::styled(format!("{:<18}", label), Style::default().fg(if is_sel { C_WHITE } else { C_SUBTLE })),
+            Span::styled(*desc, Style::default().fg(C_DIM)),
+        ])).style(style)
+    }).collect();
+
+    let mut state = ListState::default();
+    state.select(Some(pv.dropdown_idx));
+
+    f.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .title(Span::styled(
+                    format!(" filters — status: {} ", cur_status),
+                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+        &mut state,
     );
 }
 

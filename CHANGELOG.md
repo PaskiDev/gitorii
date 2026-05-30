@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.26] - 2026-05-30
+
+UI-only release: TUI sidebar reorganised by user flow + Platform view
+rework (proper Tabs widget, dropdown-driven ops/filters, dedicated
+footer, column overflow bug fix). No CLI or backend changes.
+
+### Changed
+
+- **Sidebar reordered by flow** instead of the historical insertion
+  order. Groups: entry (files) → local action (save, sync, snapshot)
+  → navigation (log, branch, tags) → broadcast (pr/mr, issues,
+  platform) → multi-platform layout (remote, workspace, worktrees,
+  submodules) → admin (bisect, auth, config). View hotkeys
+  (`f`/`c`/`s`/…) keep their mappings — only the visual order moves.
+- **Platform header now uses a proper Tabs widget**. The five sub-tabs
+  render with the same chrome ratatui uses elsewhere (highlight bg
+  on active, divider chars between), instead of a hand-rolled row of
+  Spans. Active tab is unambiguous at a glance.
+- **Platform interaction moved to dropdowns**.
+  - `o` opens an **ops** dropdown with the contextual actions for the
+    current sub-tab (cancel/retry pipeline; cancel/retry/download
+    artifacts for a job; pause/resume/reset-token/remove a runner).
+    Replaces the per-action keys (c/x/a/t/d) that collided across
+    sub-tabs and weren't discoverable.
+  - `f` opens a **filter** dropdown (status: any/running/failed/
+    success/pending + branch-only toggle) with the active filter
+    marked. Replaces the cycle key `s` and the toggle key `b`.
+- **Dedicated 2-row footer** at the bottom of the Platform view.
+  Hints, filter indicators, live indicator, and action result line
+  all live there instead of being grafted onto the detail panel. The
+  detail panel is now exclusively the selected entity's data.
+
+### Fixed
+
+- **List columns no longer concatenate visually when an id overflows**.
+  GitHub workflow_run IDs are 11–14 digits; the old
+  `format!("{:<10}", id)` only padded when the value was *shorter*
+  than 10, so anything longer slammed straight into the next column
+  ("#12345678901running" instead of "#12345678901  running"). A new
+  `col()` helper truncates with `…` so every column boundary holds
+  regardless of input length. Applied to pipelines, jobs, releases,
+  packages, and runners.
+
+### Internal
+
+- New `PlatformFocus::OpsDropdown` / `FilterDropdown` variants, with
+  `PlatformState::dropdown_idx` for selection state.
+- `tui/views/platform.rs::ops_for` and `filters_for` are now `pub`
+  so the events handler can size the dropdown without duplicating
+  the model.
+
 ## [0.7.25] - 2026-05-30
 
 Two new operating surfaces: **CI runners** (a CLI + TUI tab to manage

@@ -374,7 +374,9 @@ impl EventHandler {
                         View::Platform  => {
                             use crate::tui::app::PlatformFocus;
                             match app.platform_view.focus {
-                                PlatformFocus::RemotePopup => {
+                                PlatformFocus::RemotePopup
+                                | PlatformFocus::OpsDropdown
+                                | PlatformFocus::FilterDropdown => {
                                     app.platform_view.focus = PlatformFocus::List;
                                     true
                                 }
@@ -2344,6 +2346,53 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         return None;
     }
 
+    // 0.7.26 ops dropdown — single-key actions menu.
+    if app.platform_view.focus == PlatformFocus::OpsDropdown {
+        let ops = crate::tui::views::platform::ops_for(&app.platform_view);
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                if app.platform_view.dropdown_idx > 0 {
+                    app.platform_view.dropdown_idx -= 1;
+                }
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                if app.platform_view.dropdown_idx + 1 < ops.len() {
+                    app.platform_view.dropdown_idx += 1;
+                }
+            }
+            (_, KeyCode::Enter) => {
+                dispatch_ops_action(app);
+                app.platform_view.focus = PlatformFocus::List;
+            }
+            _ => {}
+        }
+        return None;
+    }
+
+    // 0.7.26 filter dropdown — status + branch toggle.
+    if app.platform_view.focus == PlatformFocus::FilterDropdown {
+        let rows_len = crate::tui::views::platform::filters_for(&app.platform_view).len();
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                if app.platform_view.dropdown_idx > 0 {
+                    app.platform_view.dropdown_idx -= 1;
+                }
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                if app.platform_view.dropdown_idx + 1 < rows_len {
+                    app.platform_view.dropdown_idx += 1;
+                }
+            }
+            (_, KeyCode::Enter) => {
+                dispatch_filter_action(app);
+                app.platform_view.focus = PlatformFocus::List;
+                app.load_platform_active_sub_tab();
+            }
+            _ => {}
+        }
+        return None;
+    }
+
     // JobLog drill-down: scroll, toggle live tail, open in $PAGER.
     if app.platform_view.focus == PlatformFocus::JobLog {
         match (key.modifiers, key.code) {
@@ -2434,24 +2483,6 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             app.platform_view.last_poll_at = None;
         }
 
-        // Cycle status filter: None → running → failed → success →
-        // pending → None. Only meaningful for Pipelines/Jobs lists;
-        // Releases/Packages ignore it.
-        (_, KeyCode::Char('s')) => {
-            app.platform_view.filter_status = match app.platform_view.filter_status.as_deref() {
-                None              => Some("running".to_string()),
-                Some("running")   => Some("failed".to_string()),
-                Some("failed")    => Some("success".to_string()),
-                Some("success")   => Some("pending".to_string()),
-                _                 => None,
-            };
-            app.load_platform_active_sub_tab();
-        }
-        // Toggle "only current branch" filter.
-        (_, KeyCode::Char('b')) => {
-            app.platform_view.filter_branch_only = !app.platform_view.filter_branch_only;
-            app.load_platform_active_sub_tab();
-        }
 
         // Remote-selector popup.
         (_, KeyCode::Char('r')) => {
@@ -2476,72 +2507,18 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             if *idx + 1 < len { *idx += 1; }
         }
 
-        // Contextual actions (cancel/retry/artifacts/runner-ops). Gated by
-        // `action_in_flight` so the user can't fire multiple at once.
-        // Per sub-tab:
-        //   Pipelines: c=cancel  x=retry
-        //   Jobs:      c=cancel  x=retry  a=artifacts
-        //   Runners:   c=pause   x=resume t=reset-token d=delete
-        (_, KeyCode::Char('c')) if !app.platform_view.action_in_flight => {
-            match app.platform_view.sub_tab {
-                PlatformSubTab::Pipelines => {
-                    if let Some(p) = app.platform_view.pipelines.get(app.platform_view.pipelines_idx) {
-                        app.action_pipeline_cancel(p.id.clone());
-                    }
-                }
-                PlatformSubTab::Jobs => {
-                    if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
-                        app.action_job_cancel(j.id.clone());
-                    }
-                }
-                PlatformSubTab::Runners => {
-                    if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
-                        app.action_runner_pause(r.id.clone());
-                    }
-                }
-                _ => {}
+        // 0.7.26: ops + filter dropdowns. Single key opens a menu of
+        // the contextual actions / filters for the current sub-tab.
+        // The dropdown handler (above) dispatches Enter/Esc/arrows.
+        (_, KeyCode::Char('o')) if !app.platform_view.action_in_flight => {
+            if !crate::tui::views::platform::ops_for(&app.platform_view).is_empty() {
+                app.platform_view.focus = PlatformFocus::OpsDropdown;
+                app.platform_view.dropdown_idx = 0;
             }
         }
-        (_, KeyCode::Char('x')) if !app.platform_view.action_in_flight => {
-            match app.platform_view.sub_tab {
-                PlatformSubTab::Pipelines => {
-                    if let Some(p) = app.platform_view.pipelines.get(app.platform_view.pipelines_idx) {
-                        app.action_pipeline_retry(p.id.clone());
-                    }
-                }
-                PlatformSubTab::Jobs => {
-                    if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
-                        app.action_job_retry(j.id.clone());
-                    }
-                }
-                PlatformSubTab::Runners => {
-                    if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
-                        app.action_runner_resume(r.id.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
-        (_, KeyCode::Char('a')) if !app.platform_view.action_in_flight
-            && app.platform_view.sub_tab == PlatformSubTab::Jobs =>
-        {
-            if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
-                app.action_job_artifacts(j.id.clone());
-            }
-        }
-        (_, KeyCode::Char('t')) if !app.platform_view.action_in_flight
-            && app.platform_view.sub_tab == PlatformSubTab::Runners =>
-        {
-            if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
-                app.action_runner_reset_token(r.id.clone());
-            }
-        }
-        (_, KeyCode::Char('d')) if !app.platform_view.action_in_flight
-            && app.platform_view.sub_tab == PlatformSubTab::Runners =>
-        {
-            if let Some(r) = app.platform_view.runners.get(app.platform_view.runners_idx) {
-                app.action_runner_remove(r.id.clone());
-            }
+        (_, KeyCode::Char('f')) => {
+            app.platform_view.focus = PlatformFocus::FilterDropdown;
+            app.platform_view.dropdown_idx = 0;
         }
 
         // Drill-down.
@@ -2586,6 +2563,62 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         _ => {}
     }
     None
+}
+
+fn dispatch_ops_action(app: &mut App) {
+    use crate::tui::app::PlatformSubTab;
+    let idx = app.platform_view.dropdown_idx;
+    match app.platform_view.sub_tab {
+        PlatformSubTab::Pipelines => {
+            let id = app.platform_view.pipelines
+                .get(app.platform_view.pipelines_idx).map(|p| p.id.clone());
+            if let Some(id) = id {
+                match idx {
+                    0 => app.action_pipeline_cancel(id),
+                    1 => app.action_pipeline_retry(id),
+                    _ => {}
+                }
+            }
+        }
+        PlatformSubTab::Jobs => {
+            let id = app.platform_view.jobs
+                .get(app.platform_view.jobs_idx).map(|j| j.id.clone());
+            if let Some(id) = id {
+                match idx {
+                    0 => app.action_job_cancel(id),
+                    1 => app.action_job_retry(id),
+                    2 => app.action_job_artifacts(id),
+                    _ => {}
+                }
+            }
+        }
+        PlatformSubTab::Runners => {
+            let id = app.platform_view.runners
+                .get(app.platform_view.runners_idx).map(|r| r.id.clone());
+            if let Some(id) = id {
+                match idx {
+                    0 => app.action_runner_pause(id),
+                    1 => app.action_runner_resume(id),
+                    2 => app.action_runner_reset_token(id),
+                    3 => app.action_runner_remove(id),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn dispatch_filter_action(app: &mut App) {
+    match app.platform_view.dropdown_idx {
+        0 => app.platform_view.filter_status = None,
+        1 => app.platform_view.filter_status = Some("running".to_string()),
+        2 => app.platform_view.filter_status = Some("failed".to_string()),
+        3 => app.platform_view.filter_status = Some("success".to_string()),
+        4 => app.platform_view.filter_status = Some("pending".to_string()),
+        5 => app.platform_view.filter_branch_only = !app.platform_view.filter_branch_only,
+        _ => {}
+    }
 }
 
 fn current_list_idx_mut(app: &mut App) -> &mut usize {
