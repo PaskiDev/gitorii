@@ -1071,6 +1071,38 @@ pub struct PlatformState {
 
     pub loading: bool,
     pub error: Option<String>,
+
+    /// 0.7.24 — feedback for contextual actions (cancel/retry/artifacts).
+    /// `action_msg` is shown in the detail panel; `action_msg_at` is used
+    /// to expire it after a few seconds so the UI doesn't linger on a
+    /// stale "✅ pipeline canceled" forever.
+    pub action_msg: Option<String>,
+    pub action_msg_at: Option<std::time::Instant>,
+    pub action_in_flight: bool,
+
+    /// 0.7.24 — auto-refresh of the active list while in List focus.
+    /// Off by default; the user toggles with `p`. Interval is 10s by
+    /// default, tunable later via settings.
+    pub auto_refresh: bool,
+    pub last_poll_at: Option<std::time::Instant>,
+
+    /// 0.7.24 — live tail of the job log. Enabled automatically when
+    /// drilling into a running/pending job; stops when the job reaches
+    /// a terminal status. `job_log_user_scrolled` blocks auto-bottom
+    /// so the user can read past lines without being yanked forward.
+    pub job_log_live: bool,
+    pub job_log_last_poll_at: Option<std::time::Instant>,
+    pub job_log_user_scrolled: bool,
+    /// Status of the job the log belongs to (for the "● live" indicator
+    /// and for deciding when to stop polling).
+    pub job_log_status: String,
+
+    /// 0.7.24 — list filters. `filter_status` cycles through None →
+    /// running → failed → success → pending → None via `s`; the value is
+    /// passed to the platform API. `filter_branch` is toggled with `b`
+    /// and applied client-side (filters the local repo's current branch).
+    pub filter_status: Option<String>,
+    pub filter_branch_only: bool,
 }
 
 impl Default for PlatformState {
@@ -1097,6 +1129,17 @@ impl Default for PlatformState {
             job_log_scroll: 0,
             loading: false,
             error: None,
+            action_msg: None,
+            action_msg_at: None,
+            action_in_flight: false,
+            auto_refresh: false,
+            last_poll_at: None,
+            job_log_live: false,
+            job_log_last_poll_at: None,
+            job_log_user_scrolled: false,
+            job_log_status: String::new(),
+            filter_status: None,
+            filter_branch_only: false,
         }
     }
 }
@@ -1174,6 +1217,10 @@ pub struct App {
     pub platform_releases_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::release::Release>>>>,
     pub platform_packages_rx: Option<std::sync::mpsc::Receiver<Result<Vec<crate::package::Package>>>>,
     pub platform_job_log_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
+    /// 0.7.24 — contextual actions (cancel/retry/artifacts). Sends a single
+    /// `Result<message, error>` from the worker thread. The main loop pumps
+    /// it into `platform_view.action_msg` and triggers a list reload.
+    pub platform_action_rx: Option<std::sync::mpsc::Receiver<std::result::Result<String, String>>>,
 
     pub repo_picker_open: bool,
     pub repo_picker_idx: usize,
@@ -1234,6 +1281,7 @@ impl App {
             platform_releases_rx: None,
             platform_packages_rx: None,
             platform_job_log_rx: None,
+            platform_action_rx: None,
             repo_picker_open: false,
             repo_picker_idx: 0,
             active_workspace: None,
@@ -2580,9 +2628,26 @@ impl App {
         let (tx, rx) = std::sync::mpsc::channel();
         self.platform_pipelines_rx = Some(rx);
 
+        let status = self.platform_view.filter_status.clone();
+        let branch_filter = if self.platform_view.filter_branch_only {
+            Some(self.branch.clone())
+        } else {
+            None
+        };
+
         std::thread::spawn(move || {
-            let filters = crate::pipeline::ListFilters { status: None, per_page: 50 };
-            let _ = tx.send(client.list(&owner, &repo, &filters));
+            let filters = crate::pipeline::ListFilters { status, per_page: 50 };
+            let result = client.list(&owner, &repo, &filters);
+            // Branch filter is client-side because not every platform
+            // exposes a ref filter cleanly (Bitbucket, sourcehut).
+            let result = match (result, branch_filter) {
+                (Ok(mut items), Some(b)) => {
+                    items.retain(|p| p.branch == b);
+                    Ok(items)
+                }
+                (other, _) => other,
+            };
+            let _ = tx.send(result);
         });
     }
 
@@ -2680,6 +2745,99 @@ impl App {
         std::thread::spawn(move || {
             let filters = crate::package::PackageListFilters::default();
             let _ = tx.send(client.list(&owner, &repo, &filters));
+        });
+    }
+
+    // ── 0.7.24: contextual actions on pipelines/jobs ────────────────────────
+    //
+    // All four spawn a background thread that calls the platform API and
+    // pipes a `Result<message, error>` back through `platform_action_rx`.
+    // The main loop pumps the receiver into `platform_view.action_msg` and
+    // triggers a list reload so the new status shows up. `action_in_flight`
+    // gates the keybinds in events.rs so the user can't fire 5 retries by
+    // mashing the key.
+    fn spawn_platform_action<F>(&mut self, op: F)
+    where
+        F: FnOnce(&str, &str, Box<dyn crate::pipeline::PipelineClient>)
+            -> std::result::Result<String, String>
+            + Send + 'static,
+    {
+        let Some((platform, owner, repo)) = self.resolve_platform_target() else {
+            self.platform_view.action_msg =
+                Some("✗ no remote/platform resolved".into());
+            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            return;
+        };
+        let client = match crate::pipeline::get_pipeline_client(&platform) {
+            Ok(c) => c,
+            Err(e) => {
+                self.platform_view.action_msg = Some(format!("✗ {}", e));
+                self.platform_view.action_msg_at = Some(std::time::Instant::now());
+                return;
+            }
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.platform_action_rx = Some(rx);
+        self.platform_view.action_in_flight = true;
+        std::thread::spawn(move || {
+            let _ = tx.send(op(&owner, &repo, client));
+        });
+    }
+
+    pub fn action_pipeline_cancel(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_platform_action(move |owner, repo, client| {
+            client.cancel(owner, repo, &id)
+                .map(|_| format!("✓ pipeline #{} canceled", id_disp))
+                .map_err(|e| format!("✗ cancel pipeline #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_pipeline_retry(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_platform_action(move |owner, repo, client| {
+            client.retry(owner, repo, &id)
+                .map(|_| format!("✓ pipeline #{} retried", id_disp))
+                .map_err(|e| format!("✗ retry pipeline #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_job_cancel(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_platform_action(move |owner, repo, client| {
+            client.job_cancel(owner, repo, &id)
+                .map(|_| format!("✓ job #{} canceled", id_disp))
+                .map_err(|e| format!("✗ cancel job #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_job_retry(&mut self, id: String) {
+        let id_disp = id.clone();
+        self.spawn_platform_action(move |owner, repo, client| {
+            client.job_retry(owner, repo, &id)
+                .map(|_| format!("✓ job #{} retried", id_disp))
+                .map_err(|e| format!("✗ retry job #{}: {}", id_disp, e))
+        });
+    }
+
+    pub fn action_job_artifacts(&mut self, id: String) {
+        let id_disp = id.clone();
+        // Write to <repo_path>/artifacts/job-<id>.zip — same convention as
+        // the CLI's `torii job artifacts <id>` (matches user muscle memory
+        // if they've used the non-TUI command before).
+        let out_dir = std::path::PathBuf::from(&self.repo_path).join("artifacts");
+        if let Err(e) = std::fs::create_dir_all(&out_dir) {
+            self.platform_view.action_msg =
+                Some(format!("✗ mkdir {}: {}", out_dir.display(), e));
+            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            return;
+        }
+        let out_path = out_dir.join(format!("job-{}.zip", id));
+        let out_disp = out_path.display().to_string();
+        self.spawn_platform_action(move |owner, repo, client| {
+            client.job_artifacts_download(owner, repo, &id, &out_path)
+                .map(|_| format!("✓ job #{} artifacts → {}", id_disp, out_disp))
+                .map_err(|e| format!("✗ artifacts job #{}: {}", id_disp, e))
         });
     }
 

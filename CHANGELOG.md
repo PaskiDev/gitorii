@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.24] - 2026-05-30
+
+Two things: a critical auth fix that was rejecting every GitLab OAuth
+token, and the first real iteration of the Platform TUI — it stops
+being a read-only window and becomes a place to actually operate
+pipelines.
+
+### Fixed
+
+- **GitLab API clients now send `Authorization: Bearer <token>`
+  instead of `PRIVATE-TOKEN: <token>`**. The old header only works
+  with personal access tokens; OAuth access tokens from
+  `torii auth oauth gitlab` were being rejected with 401 across
+  every endpoint (pipelines, jobs, releases, packages, issues, MRs,
+  workspace remotes). Bearer is universal — it accepts both PATs
+  and OAuth tokens — so this is a strict upgrade. ~30 call-sites
+  migrated across `platforms/{pipeline,issue,pr,release,package}.rs`
+  and `workspace/remote.rs`.
+
+### Added
+
+- **TUI Platform view — contextual actions**.
+  - `c` cancels the selected pipeline (in Pipelines) or job (in Jobs).
+  - `x` retries the selected pipeline or job.
+  - `a` downloads the selected job's artifacts to
+    `<repo>/artifacts/job-<id>.zip`.
+  Each action runs on a background thread, surfaces a green `✓` or
+  red `✗` line in the detail panel, and reloads the active sub-tab
+  so the new status shows up without `Ctrl-R`. A small in-flight
+  guard prevents key-mashing from firing the same action three times.
+- **TUI Platform view — auto-refresh polling**. Press `p` while on
+  Pipelines/Jobs/Releases/Packages to toggle live mode; the list
+  re-fetches every 10s while in `List` focus. The header shows
+  `⟳ live` while it's on. Selection is preserved across reloads.
+- **TUI Platform view — live tail of the job log**. Drilling into a
+  job that's still `running` or `pending` automatically enables tail
+  mode; the log re-fetches every 3s and auto-scrolls to the latest
+  output. Use the arrow keys to read past lines (manual mode), `End`
+  to re-engage auto-follow, `p` to toggle live, and `o` to open the
+  log in `$PAGER` (suspends the TUI cleanly).
+- **TUI Platform view — status + branch filters**. `s` cycles the
+  status filter (`none → running → failed → success → pending`) and
+  pushes it down to the platform API. `b` toggles "only current
+  branch", applied client-side. Active filters render in the header.
+
+### Internal
+
+- Job-log scroll now snaps to the tail (`max(0, nlines − 20)`) when a
+  refresh arrives and the user hasn't scrolled manually. Same logic
+  works for both initial drill-down and every poll while live tail
+  is on.
+- Pipeline/job list cursors clamp instead of resetting to index 0 on
+  reload, so auto-refresh doesn't yank the selection back to the top.
+
 ## [0.7.23] - 2026-05-29
 
 Robustness patch: 15 real bugs fixed across three audit passes —

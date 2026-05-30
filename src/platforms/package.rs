@@ -97,7 +97,7 @@ impl PackageClient for GitLabPackageClient {
         if let Some(n) = &filters.name_search {
             url.push_str(&format!("&package_name={}", crate::url::encode(n)));
         }
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(parse_gitlab_package).collect()
@@ -108,7 +108,7 @@ impl PackageClient for GitLabPackageClient {
             "{}/projects/{}/packages/{}",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().delete(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab delete package")
     }
 
@@ -117,7 +117,7 @@ impl PackageClient for GitLabPackageClient {
             "{}/projects/{}/packages/{}/package_files?per_page=100",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(|v| parse_gitlab_package_file(v, id)).collect()

@@ -76,6 +76,9 @@ pub enum Action {
     ConfigToggleScope,
     SettingsToggle,
     SettingsSave,
+    /// 0.7.24 — open the currently focused job log in `$PAGER` (or `less`).
+    /// Handled in the main loop because the pager replaces the TUI.
+    OpenJobLogInPager,
 }
 
 pub struct EventHandler;
@@ -2341,23 +2344,46 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         return None;
     }
 
-    // JobLog drill-down: scroll only.
+    // JobLog drill-down: scroll, toggle live tail, open in $PAGER.
     if app.platform_view.focus == PlatformFocus::JobLog {
         match (key.modifiers, key.code) {
             (_, KeyCode::Up)   | (_, KeyCode::Char('k')) => {
                 app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_sub(1);
+                app.platform_view.job_log_user_scrolled = true;
             }
             (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                 app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_add(1);
+                app.platform_view.job_log_user_scrolled = true;
             }
             (_, KeyCode::PageUp) => {
                 app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_sub(20);
+                app.platform_view.job_log_user_scrolled = true;
             }
             (_, KeyCode::PageDown) => {
                 app.platform_view.job_log_scroll = app.platform_view.job_log_scroll.saturating_add(20);
+                app.platform_view.job_log_user_scrolled = true;
             }
             (_, KeyCode::Home) => {
                 app.platform_view.job_log_scroll = 0;
+                app.platform_view.job_log_user_scrolled = true;
+            }
+            (_, KeyCode::End) => {
+                // Re-enable auto-follow: clear the manual-scroll flag and
+                // let the next render snap to the bottom.
+                app.platform_view.job_log_user_scrolled = false;
+            }
+            (_, KeyCode::Char('p')) => {
+                // Toggle live tail. Only meaningful when the job is still
+                // running, but we let the user force it on either way —
+                // worst case is one extra fetch that returns the same text.
+                app.platform_view.job_log_live = !app.platform_view.job_log_live;
+                app.platform_view.job_log_last_poll_at = None;
+            }
+            (_, KeyCode::Char('o')) => {
+                // Open the current log in $PAGER (less by default). The TUI
+                // suspends crossterm + the alt screen while the pager is
+                // running so the user can scroll/search freely.
+                return Some(Action::OpenJobLogInPager);
             }
             _ => {}
         }
@@ -2396,6 +2422,33 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             app.load_platform_packages();
         }
 
+        // Toggle auto-refresh polling on/off.
+        (_, KeyCode::Char('p')) => {
+            app.platform_view.auto_refresh = !app.platform_view.auto_refresh;
+            // Reset the timer so the first refresh after enabling fires
+            // immediately rather than waiting a full interval.
+            app.platform_view.last_poll_at = None;
+        }
+
+        // Cycle status filter: None → running → failed → success →
+        // pending → None. Only meaningful for Pipelines/Jobs lists;
+        // Releases/Packages ignore it.
+        (_, KeyCode::Char('s')) => {
+            app.platform_view.filter_status = match app.platform_view.filter_status.as_deref() {
+                None              => Some("running".to_string()),
+                Some("running")   => Some("failed".to_string()),
+                Some("failed")    => Some("success".to_string()),
+                Some("success")   => Some("pending".to_string()),
+                _                 => None,
+            };
+            app.load_platform_active_sub_tab();
+        }
+        // Toggle "only current branch" filter.
+        (_, KeyCode::Char('b')) => {
+            app.platform_view.filter_branch_only = !app.platform_view.filter_branch_only;
+            app.load_platform_active_sub_tab();
+        }
+
         // Remote-selector popup.
         (_, KeyCode::Char('r')) => {
             // Position cursor on the current remote so Enter is a no-op
@@ -2417,6 +2470,46 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             let len = current_list_len(app);
             let idx = current_list_idx_mut(app);
             if *idx + 1 < len { *idx += 1; }
+        }
+
+        // Contextual actions (cancel/retry/artifacts). Gated by
+        // `action_in_flight` so the user can't fire multiple at once.
+        (_, KeyCode::Char('c')) if !app.platform_view.action_in_flight => {
+            match app.platform_view.sub_tab {
+                PlatformSubTab::Pipelines => {
+                    if let Some(p) = app.platform_view.pipelines.get(app.platform_view.pipelines_idx) {
+                        app.action_pipeline_cancel(p.id.clone());
+                    }
+                }
+                PlatformSubTab::Jobs => {
+                    if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
+                        app.action_job_cancel(j.id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        (_, KeyCode::Char('x')) if !app.platform_view.action_in_flight => {
+            match app.platform_view.sub_tab {
+                PlatformSubTab::Pipelines => {
+                    if let Some(p) = app.platform_view.pipelines.get(app.platform_view.pipelines_idx) {
+                        app.action_pipeline_retry(p.id.clone());
+                    }
+                }
+                PlatformSubTab::Jobs => {
+                    if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
+                        app.action_job_retry(j.id.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        (_, KeyCode::Char('a')) if !app.platform_view.action_in_flight
+            && app.platform_view.sub_tab == PlatformSubTab::Jobs =>
+        {
+            if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
+                app.action_job_artifacts(j.id.clone());
+            }
         }
 
         // Drill-down.
@@ -2443,6 +2536,16 @@ fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             PlatformSubTab::Jobs => {
                 if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
                     app.platform_view.focus = PlatformFocus::JobLog;
+                    // Live tail only makes sense while the job is still
+                    // producing output. Terminal statuses get a static
+                    // snapshot; non-terminal ones enable auto-poll.
+                    app.platform_view.job_log_status = j.status.clone();
+                    app.platform_view.job_log_live = matches!(
+                        j.status.as_str(),
+                        "running" | "pending"
+                    );
+                    app.platform_view.job_log_last_poll_at = None;
+                    app.platform_view.job_log_user_scrolled = false;
                     app.load_platform_job_log(j.id.clone());
                 }
             }

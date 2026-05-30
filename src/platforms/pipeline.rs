@@ -369,7 +369,7 @@ impl PipelineClient for GitLabPipelineClient {
             };
             url.push_str(&format!("&status={}", gl));
         }
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(parse_gitlab_pipeline).collect()
@@ -380,7 +380,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/cancel",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().post(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab cancel pipeline")
     }
 
@@ -389,7 +389,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/retry",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().post(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab retry pipeline")
     }
 
@@ -398,7 +398,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}",
             self.base_url, Self::project_path(owner, repo), id
         );
-        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().delete(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab delete pipeline")
     }
 
@@ -412,7 +412,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/pipelines/{}/jobs?per_page=100",
             self.base_url, Self::project_path(owner, repo), pipeline_id
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         let arr = crate::http::extract_array(&json, &url)?;
         let jobs: Vec<Job> = arr.iter().filter_map(|v| parse_gitlab_job(v, pipeline_id).ok()).collect();
@@ -430,7 +430,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/trace",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_text(req, "GitLab job trace")
     }
 
@@ -439,7 +439,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/retry",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().post(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab job retry")
     }
 
@@ -448,7 +448,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/cancel",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().post(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab job cancel")
     }
 
@@ -457,7 +457,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/artifacts",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let bytes = crate::http::send_bytes(req, "GitLab artifacts")?;
         std::fs::write(output_path, &bytes)
             .map_err(|e| ToriiError::InvalidConfig(format!("Failed to write artifacts to {}: {}", output_path.display(), e)))?;
@@ -469,7 +469,7 @@ impl PipelineClient for GitLabPipelineClient {
             "{}/projects/{}/jobs/{}/erase",
             self.base_url, Self::project_path(owner, repo), job_id
         );
-        let req = self.client().post(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().post(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab job erase")
     }
 }

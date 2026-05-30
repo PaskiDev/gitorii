@@ -384,7 +384,7 @@ impl PlatformClient for GitLabClient {
             let group_url = format!("{}/groups/{}", self.base_url, ns_encoded);
             let group_resp = client
                 .get(&group_url)
-                .header("PRIVATE-TOKEN", token)
+                .header("Authorization", format!("Bearer {}", token))
                 .send()
                 .map_err(|e| ToriiError::InvalidConfig(format!("GitLab group lookup failed: {}", e)))?;
 
@@ -399,7 +399,7 @@ impl PlatformClient for GitLabClient {
                 let user_url = format!("{}/users?username={}", self.base_url, ns_encoded);
                 let user_resp = client
                     .get(&user_url)
-                    .header("PRIVATE-TOKEN", token)
+                    .header("Authorization", format!("Bearer {}", token))
                     .send()
                     .map_err(|e| ToriiError::InvalidConfig(format!("GitLab user lookup failed: {}", e)))?;
                 if !user_resp.status().is_success() {
@@ -430,7 +430,7 @@ impl PlatformClient for GitLabClient {
 
         let response = client
             .post(format!("{}/projects", self.base_url))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -468,7 +468,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .delete(format!("{}/projects/{}", self.base_url, project_path))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API request failed: {}", e)))?;
 
@@ -510,7 +510,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .put(format!("{}/projects/{}", self.base_url, project_path))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -554,7 +554,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .get(format!("{}/projects/{}", self.base_url, project_path))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API request failed: {}", e)))?;
 
@@ -594,7 +594,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .get(format!("{}/projects?membership=true&per_page=100", self.base_url))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .send()
             .map_err(|e| ToriiError::InvalidConfig(format!("GitLab API request failed: {}", e)))?;
 
@@ -648,7 +648,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .put(format!("{}/projects/{}", self.base_url, project_path))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
@@ -684,7 +684,7 @@ impl PlatformClient for GitLabClient {
         let client = reqwest::blocking::Client::new();
         let response = client
             .put(format!("{}/projects/{}", self.base_url, project_path))
-            .header("PRIVATE-TOKEN", token)
+            .header("Authorization", format!("Bearer {}", token))
             .header("Content-Type", "application/json")
             .json(&body)
             .send()

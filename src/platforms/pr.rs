@@ -240,7 +240,7 @@ impl PrClient for GitLabPrClient {
             "draft":         opts.draft,
         });
         let req = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&body);
         let json = crate::http::send_json(req, "GitLab create MR")?;
         parse_gitlab_mr(&json)
@@ -257,7 +257,7 @@ impl PrClient for GitLabPrClient {
             "{}/projects/{}/merge_requests?state={}&per_page=50",
             self.base_url, Self::project_path(owner, repo), gl_state
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(parse_gitlab_mr).collect()
@@ -268,7 +268,7 @@ impl PrClient for GitLabPrClient {
             "{}/projects/{}/merge_requests/{}",
             self.base_url, Self::project_path(owner, repo), number
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab MR !{}", number))?;
         parse_gitlab_mr(&json)
     }
@@ -281,7 +281,7 @@ impl PrClient for GitLabPrClient {
         let squash = matches!(method, MergeMethod::Squash);
         let body = serde_json::json!({ "squash": squash });
         let req = self.client().put(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&body);
         crate::http::send_empty(req, "GitLab merge MR")
     }
@@ -293,7 +293,7 @@ impl PrClient for GitLabPrClient {
         );
         let body = serde_json::json!({ "state_event": "close" });
         let req = self.client().put(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&body);
         crate::http::send_empty(req, "GitLab close MR")
     }
@@ -308,7 +308,7 @@ impl PrClient for GitLabPrClient {
         if let Some(b) = opts.body  { body.insert("description".into(), b.into()); }
         if let Some(b) = opts.base  { body.insert("target_branch".into(), b.into()); }
         let req = self.client().put(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&serde_json::Value::Object(body));
         crate::http::send_empty(req, "GitLab update MR")
     }
@@ -319,7 +319,7 @@ impl PrClient for GitLabPrClient {
             self.base_url, Self::project_path(owner, repo),
             crate::url::encode(branch)
         );
-        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().delete(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab delete branch")
     }
 

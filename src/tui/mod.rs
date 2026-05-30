@@ -166,8 +166,12 @@ fn run_loop(
                 app.platform_view.loading = false;
                 match result {
                     Ok(items) => {
+                        // Clamp instead of resetting — auto-refresh would
+                        // otherwise yank the cursor to the top every poll.
+                        let len = items.len();
                         app.platform_view.pipelines = items;
-                        app.platform_view.pipelines_idx = 0;
+                        app.platform_view.pipelines_idx =
+                            app.platform_view.pipelines_idx.min(len.saturating_sub(1));
                     }
                     Err(e) => app.platform_view.error = Some(e.to_string()),
                 }
@@ -179,8 +183,10 @@ fn run_loop(
                 app.platform_view.loading = false;
                 match result {
                     Ok(items) => {
+                        let len = items.len();
                         app.platform_view.jobs = items;
-                        app.platform_view.jobs_idx = 0;
+                        app.platform_view.jobs_idx =
+                            app.platform_view.jobs_idx.min(len.saturating_sub(1));
                     }
                     Err(e) => app.platform_view.error = Some(e.to_string()),
                 }
@@ -217,9 +223,95 @@ fn run_loop(
                 app.platform_job_log_rx = None;
                 app.platform_view.loading = false;
                 match result {
-                    Ok(log) => app.platform_view.job_log = Some(log),
+                    Ok(log) => {
+                        // Auto-follow: snap scroll to the tail so live tail
+                        // shows the latest output. Once the user touches
+                        // the scroll keys we honor their position until
+                        // they hit End to re-enable.
+                        if !app.platform_view.job_log_user_scrolled {
+                            let nlines = log.lines().count() as u16;
+                            app.platform_view.job_log_scroll = nlines.saturating_sub(20);
+                        }
+                        app.platform_view.job_log = Some(log);
+                    }
                     Err(e) => app.platform_view.error = Some(e.to_string()),
                 }
+            }
+        }
+        // Live tail tick — re-fetch the job log every 3s while live is
+        // on, the focus is on the log, and the previous fetch finished.
+        // 3s is fast enough to feel real-time without hammering APIs;
+        // the GitLab/GitHub log endpoints handle this comfortably.
+        if app.view == View::Platform
+            && app.platform_view.focus == crate::tui::app::PlatformFocus::JobLog
+            && app.platform_view.job_log_live
+            && app.platform_job_log_rx.is_none()
+        {
+            let due = match app.platform_view.job_log_last_poll_at {
+                Some(at) => at.elapsed() >= std::time::Duration::from_secs(3),
+                None => true,
+            };
+            if due {
+                if let Some(j) = app.platform_view.jobs.get(app.platform_view.jobs_idx) {
+                    app.platform_view.job_log_last_poll_at = Some(std::time::Instant::now());
+                    let id = j.id.clone();
+                    // Stop live tail once the job is in a terminal state.
+                    // We use the latest status from the jobs list, not the
+                    // one frozen at drill-down time, so a job that finishes
+                    // mid-tail naturally stops being polled.
+                    if !matches!(j.status.as_str(), "running" | "pending") {
+                        app.platform_view.job_log_live = false;
+                        app.platform_view.job_log_status = j.status.clone();
+                    }
+                    app.load_platform_job_log(id);
+                }
+            }
+        }
+        // Contextual actions (cancel/retry/artifacts). On any result we
+        // refresh the active sub-tab so the new status (canceled/pending
+        // after retry) shows up without the user having to press Ctrl-R.
+        if let Some(rx) = &app.platform_action_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.platform_action_rx = None;
+                app.platform_view.action_in_flight = false;
+                let msg = match result {
+                    Ok(m) => m,
+                    Err(e) => e,
+                };
+                app.platform_view.action_msg = Some(msg);
+                app.platform_view.action_msg_at = Some(std::time::Instant::now());
+                app.load_platform_active_sub_tab();
+            }
+        }
+        // Expire stale action messages after 5s so they don't linger.
+        if let Some(at) = app.platform_view.action_msg_at {
+            if at.elapsed() > std::time::Duration::from_secs(5) {
+                app.platform_view.action_msg = None;
+                app.platform_view.action_msg_at = None;
+            }
+        }
+        // Auto-refresh tick: when enabled and we're on the Platform view,
+        // re-fire the active sub-tab loader every 10s. Gated on List focus
+        // (no point hammering the API while user is reading a job log),
+        // and skipped while an action or a previous load is still in flight
+        // so we don't pile up duplicate requests.
+        if app.view == View::Platform
+            && app.platform_view.auto_refresh
+            && app.platform_view.focus == crate::tui::app::PlatformFocus::List
+            && !app.platform_view.action_in_flight
+            && !app.platform_view.loading
+            && app.platform_pipelines_rx.is_none()
+            && app.platform_jobs_rx.is_none()
+            && app.platform_releases_rx.is_none()
+            && app.platform_packages_rx.is_none()
+        {
+            let due = match app.platform_view.last_poll_at {
+                Some(at) => at.elapsed() >= std::time::Duration::from_secs(10),
+                None => true,
+            };
+            if due {
+                app.platform_view.last_poll_at = Some(std::time::Instant::now());
+                app.load_platform_active_sub_tab();
             }
         }
 
@@ -1318,6 +1410,10 @@ fn run_loop(
                     app.load_issues();
                 }
 
+                Action::OpenJobLogInPager => {
+                    open_job_log_in_pager(terminal, app);
+                }
+
             }
         }
 
@@ -1326,6 +1422,75 @@ fn run_loop(
         }
     }
     Ok(())
+}
+
+// ── Pager handoff (job log) ──────────────────────────────────────────────────
+
+/// Suspend the TUI, drop the current job log into a tempfile, and hand it
+/// to `$PAGER` (or `less -R` as fallback). Returns once the pager exits;
+/// the TUI is then restored to the alternate screen for the redraw on the
+/// next loop iteration. Errors during pager handoff become a status
+/// message instead of bubbling — we don't want a missing `less` to crash
+/// the TUI mid-session.
+fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+) {
+    let log = match app.platform_view.job_log.clone() {
+        Some(l) if !l.is_empty() => l,
+        _ => {
+            app.platform_view.action_msg = Some("✗ no log to open".into());
+            app.platform_view.action_msg_at = Some(std::time::Instant::now());
+            return;
+        }
+    };
+
+    // Write the log to a tempfile under $TMPDIR/torii-joblog-*.txt.
+    let mut path = std::env::temp_dir();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    path.push(format!("torii-joblog-{}.txt", stamp));
+    if let Err(e) = std::fs::write(&path, &log) {
+        app.platform_view.action_msg = Some(format!("✗ tempfile: {}", e));
+        app.platform_view.action_msg_at = Some(std::time::Instant::now());
+        return;
+    }
+
+    // Suspend the TUI: leave alternate screen + disable raw mode.
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".into());
+    // `-R` keeps ANSI colors readable for CI output; harmless when the
+    // pager isn't less. `+G` jumps to end so the user lands on the
+    // latest output, which is what you usually want.
+    let status = std::process::Command::new(&pager)
+        .arg(if pager == "less" { "-R" } else { "" })
+        .arg(&path)
+        .status();
+
+    // Restore TUI.
+    let _ = enable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+    let _ = terminal.clear();
+
+    match status {
+        Ok(s) if s.success() => {
+            app.platform_view.action_msg = Some(format!("✓ pager exited"));
+        }
+        Ok(s) => {
+            app.platform_view.action_msg = Some(format!("✗ pager exit {}", s));
+        }
+        Err(e) => {
+            app.platform_view.action_msg = Some(format!("✗ pager `{}`: {}", pager, e));
+        }
+    }
+    app.platform_view.action_msg_at = Some(std::time::Instant::now());
+
+    // The tempfile lives until the OS cleans /tmp — leaving it lets the
+    // user re-open it from another terminal while debugging.
 }
 
 // ── Git operations ────────────────────────────────────────────────────────────

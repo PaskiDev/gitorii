@@ -83,6 +83,28 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         Span::raw(" "),
     ];
     line.extend(tabs);
+    // Active filters and live indicator at the right side of the header.
+    if let Some(s) = &pv.filter_status {
+        line.push(Span::raw("   "));
+        line.push(Span::styled(
+            format!("status:{}", s),
+            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if pv.filter_branch_only {
+        line.push(Span::raw("   "));
+        line.push(Span::styled(
+            "branch-only",
+            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
+        ));
+    }
+    if pv.auto_refresh {
+        line.push(Span::raw("   "));
+        line.push(Span::styled(
+            "⟳ live",
+            Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
+        ));
+    }
 
     f.render_widget(
         Paragraph::new(Line::from(line)).block(
@@ -242,7 +264,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
 
-    let body: Vec<Line> = match pv.sub_tab {
+    let mut body: Vec<Line> = match pv.sub_tab {
         PlatformSubTab::Pipelines => pv.pipelines.get(pv.pipelines_idx).map(|p| vec![
             line_kv("id",        &format!("#{}", p.id), C_CYAN),
             line_kv("status",    &p.raw_status,        status_color(&p.status)),
@@ -285,6 +307,31 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
     };
 
+    // 0.7.24: contextual-action hints + result feedback. Hints sit at the
+    // foot of the detail panel; the result line (✓/✗ from the last action)
+    // is bright and auto-clears after a few seconds.
+    body.push(Line::from(""));
+    let hint = match pv.sub_tab {
+        PlatformSubTab::Pipelines => "[c] cancel  [x] retry  [s] status  [b] branch  [p] live  [Enter] jobs",
+        PlatformSubTab::Jobs      => "[c] cancel  [x] retry  [a] artifacts  [s] status  [p] live  [Enter] log",
+        _ => "[p] live",
+    };
+    if !hint.is_empty() {
+        body.push(Line::from(Span::styled(hint, Style::default().fg(C_SUBTLE))));
+    }
+    if pv.action_in_flight {
+        body.push(Line::from(Span::styled(
+            "⏳ action in flight…",
+            Style::default().fg(C_YELLOW),
+        )));
+    } else if let Some(msg) = &pv.action_msg {
+        let color = if msg.starts_with('✓') { C_GREEN } else { C_RED };
+        body.push(Line::from(Span::styled(
+            msg.clone(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        )));
+    }
+
     f.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }).block(
             Block::default()
@@ -302,13 +349,25 @@ fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
     let log = pv.job_log.as_deref().unwrap_or(if pv.loading { "loading log..." } else { "(no log)" });
 
+    let live = if pv.job_log_live { " ● live  " } else { "" };
+    let follow = if !pv.job_log_user_scrolled { "follow" } else { "manual" };
+    let title = format!(
+        " job log — {}{}  [p] live  [o] pager  [End] follow  Esc to back ",
+        live, follow,
+    );
+    let title_style = if pv.job_log_live {
+        Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
+    };
+
     f.render_widget(
         Paragraph::new(log)
             .scroll((pv.job_log_scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
-                    .title(Span::styled(" job log — Esc to go back ", Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                    .title(Span::styled(title, title_style))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
                     .border_style(Style::default().fg(bc))

@@ -180,7 +180,7 @@ impl ReleaseClient for GitLabReleaseClient {
             self.base_url, Self::project_path(owner, repo),
             limit.clamp(1, 100)
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(parse_gitlab_release).collect()
@@ -191,7 +191,7 @@ impl ReleaseClient for GitLabReleaseClient {
             "{}/projects/{}/releases/{}",
             self.base_url, Self::project_path(owner, repo), tag
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (tag: {})", tag))?;
         parse_gitlab_release(&json)
     }
@@ -210,7 +210,7 @@ impl ReleaseClient for GitLabReleaseClient {
             ));
         }
         let req = self.client().put(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&serde_json::Value::Object(body));
         crate::http::send_empty(req, "GitLab edit release")
     }
@@ -220,7 +220,7 @@ impl ReleaseClient for GitLabReleaseClient {
             "{}/projects/{}/releases/{}",
             self.base_url, Self::project_path(owner, repo), tag
         );
-        let req = self.client().delete(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().delete(&url).header("Authorization", format!("Bearer {}", self.token));
         crate::http::send_empty(req, "GitLab delete release")
     }
 }

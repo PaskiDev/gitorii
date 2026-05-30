@@ -164,7 +164,7 @@ impl IssueClient for GitLabIssueClient {
             "{}/projects/{}/issues?state={}&per_page=50",
             self.base_url, Self::project_path(owner, repo), gl_state
         );
-        let req = self.client().get(&url).header("PRIVATE-TOKEN", &self.token);
+        let req = self.client().get(&url).header("Authorization", format!("Bearer {}", self.token));
         let json = crate::http::send_json(req, &format!("GitLab (url: {})", url))?;
         crate::http::extract_array(&json, &url)?
             .iter().map(parse_gitlab_issue).collect()
@@ -180,7 +180,7 @@ impl IssueClient for GitLabIssueClient {
             "description": opts.body.unwrap_or_default(),
         });
         let req = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&body);
         let json = crate::http::send_json(req, "GitLab create issue")?;
         parse_gitlab_issue(&json)
@@ -193,7 +193,7 @@ impl IssueClient for GitLabIssueClient {
         );
         let body = serde_json::json!({ "state_event": "close" });
         let req = self.client().put(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&body);
         crate::http::send_empty(req, "GitLab close issue")
     }
@@ -205,7 +205,7 @@ impl IssueClient for GitLabIssueClient {
         );
         let payload = serde_json::json!({ "body": body });
         let req = self.client().post(&url)
-            .header("PRIVATE-TOKEN", &self.token)
+            .header("Authorization", format!("Bearer {}", self.token))
             .json(&payload);
         crate::http::send_empty(req, "GitLab comment issue")
     }
