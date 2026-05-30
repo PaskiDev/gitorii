@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.29] - 2026-05-30
+
+First step of "create + manage runners locally". This release covers
+the **register** flow against GitHub Actions + GitLab. Spawn/Docker
+and run-locally come in 0.7.30 / 0.7.31.
+
+### Added
+
+- **`torii runner register --remote N`** — fetch a short-lived
+  registration token from the platform's API and wrap the platform's
+  native register CLI:
+  - GitLab: `gitlab-runner register --non-interactive --url …
+    --registration-token … --executor <shell|docker|…>`
+    + `--docker-image` when the executor is docker, plus
+    `--description` and `--tag-list` flags forwarded from the
+    matching torii flags.
+  - GitHub: `<runner-dir>/config.sh --unattended --url … --token …
+    --replace`, with `--name` and `--labels` forwarded.
+  The resolved command is **printed before execution** so the user
+  can audit it; `-y/--yes` skips the prompt for scripts. The agent
+  install itself (downloading the binary, systemd unit, etc.) is
+  platform-specific and is **not** done by torii — install the
+  runner first via your package manager / the platform's docs, then
+  run this to attach the host to the project.
+- **`torii runner init`** — scaffold a starter `~/.gitlab-runner/
+  config.toml` (chmod 600, minimal `concurrent = 1` shell) when the
+  file is absent, so `gitlab-runner register` has somewhere to land
+  its `[[runners]]` block. GitHub variant is informational — points
+  at the platform's `actions/runners/new` page since the runner
+  tarball carries its own `./config.sh`.
+
+### Internal
+
+- New `crate::runner::RegistrationToken` (token + register URL +
+  optional TTL hint).
+- `RunnerClient` trait grew `registration_token(owner, repo)`. GitLab
+  reads the project's `runners_token` field (needs Maintainer+);
+  GitHub POSTs `/actions/runners/registration-token` (token valid
+  ~1h, regenerate freely).
+- New `which_binary(name)` helper for PATH lookup; reused by the
+  register flow to surface a clear "install gitlab-runner first"
+  error when the binary is absent instead of an exec failure.
+
 ## [0.7.28] - 2026-05-30
 
 ### Fixed

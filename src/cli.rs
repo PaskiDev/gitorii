@@ -1637,6 +1637,50 @@ enum RunnerCommands {
     Pause { id: String },
     /// Resume a previously paused runner (GitLab only).
     Resume { id: String },
+
+    /// Register a self-hosted runner against the active platform.
+    ///
+    /// Fetches a registration token from the platform's API and wraps
+    /// the platform's native register CLI:
+    ///   - GitLab: `gitlab-runner register` (binary must be on PATH).
+    ///   - GitHub: `./config.sh` inside the runner directory (use
+    ///     `--runner-dir` to point at the unpacked actions-runner).
+    ///
+    /// The actual agent install (downloading the binary, setting up
+    /// the systemd service, etc.) is platform/distro-specific and is
+    /// NOT done by torii — install the runner first via your package
+    /// manager or the platform's docs, then run this to register it.
+    Register {
+        /// Human-readable description for the runner (GitLab) / name (GitHub).
+        #[arg(long)]
+        description: Option<String>,
+        /// Comma-separated tag list (GitLab) / labels (GitHub).
+        #[arg(long)]
+        tags: Option<String>,
+        /// Executor for GitLab runners: shell, docker, kubernetes, …
+        /// Defaults to `shell`. Ignored on GitHub (Actions runners use
+        /// a single execution model).
+        #[arg(long, default_value = "shell")]
+        executor: String,
+        /// Docker image when `--executor docker` is used.
+        #[arg(long, default_value = "alpine:latest")]
+        docker_image: String,
+        /// For GitHub: directory where `./config.sh` lives (the
+        /// unpacked `actions-runner-*` tarball). Defaults to
+        /// `./actions-runner` in the current dir.
+        #[arg(long)]
+        runner_dir: Option<String>,
+        /// Skip the confirmation prompt that shows the resolved
+        /// command before running it. Useful for scripts.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// Scaffold a runner config (`gitlab-runner` only for now).
+    /// Writes a starter `~/.gitlab-runner/config.toml` if absent so
+    /// `torii runner register` has a place to land its block. Does
+    /// NOT install the binary.
+    Init,
 }
 
 #[derive(Subcommand)]
@@ -4083,6 +4127,23 @@ impl Cli {
                         client.resume(&owner, &repo_name, id)?;
                         println!("▶  Resumed runner {}", id);
                     }
+                    RunnerCommands::Register {
+                        description, tags, executor, docker_image, runner_dir, yes,
+                    } => {
+                        let reg = client.registration_token(&owner, &repo_name)?;
+                        run_runner_register(
+                            &platform, &reg,
+                            description.as_deref(),
+                            tags.as_deref(),
+                            executor,
+                            docker_image,
+                            runner_dir.as_deref(),
+                            *yes,
+                        )?;
+                    }
+                    RunnerCommands::Init => {
+                        run_runner_init(&platform)?;
+                    }
                 }
             }
 
@@ -4912,6 +4973,193 @@ fn describe_expiry(iso: &str) -> Option<String> {
     } else {
         Some(format!("⏳ expires in {}d ({})", days, iso))
     }
+}
+
+/// `torii runner register` — wrap the platform's native register CLI.
+/// We never copy the platform's logic; we just hand it the token and
+/// a tidy argv. If the binary is missing we tell the user where to
+/// install it from, instead of trying to ship our own.
+fn run_runner_register(
+    platform: &str,
+    reg: &crate::runner::RegistrationToken,
+    description: Option<&str>,
+    tags: Option<&str>,
+    executor: &str,
+    docker_image: &str,
+    runner_dir: Option<&str>,
+    yes: bool,
+) -> Result<()> {
+    use std::process::Command;
+
+    let (bin, args, cwd) = match platform {
+        "gitlab" => {
+            let bin = which_binary("gitlab-runner").ok_or_else(|| anyhow::anyhow!(
+                "`gitlab-runner` not found on PATH. Install it first: \
+                 https://docs.gitlab.com/runner/install/. Then re-run \
+                 `torii runner register`."
+            ))?;
+            let mut argv: Vec<String> = vec![
+                "register".to_string(),
+                "--non-interactive".to_string(),
+                "--url".to_string(),       reg.register_url.clone(),
+                "--registration-token".to_string(), reg.token.clone(),
+                "--executor".to_string(),  executor.to_string(),
+            ];
+            if executor == "docker" {
+                argv.push("--docker-image".to_string());
+                argv.push(docker_image.to_string());
+            }
+            if let Some(d) = description {
+                argv.push("--description".to_string());
+                argv.push(d.to_string());
+            }
+            if let Some(t) = tags {
+                argv.push("--tag-list".to_string());
+                argv.push(t.to_string());
+            }
+            (bin, argv, None::<String>)
+        }
+        "github" => {
+            let dir = runner_dir.map(String::from)
+                .unwrap_or_else(|| "./actions-runner".to_string());
+            let config_sh = std::path::Path::new(&dir).join("config.sh");
+            if !config_sh.exists() {
+                anyhow::bail!(
+                    "GitHub Actions runner not found at `{}`. Download it from \
+                     https://github.com/{}/{}/settings/actions/runners/new and \
+                     unpack it there, then re-run with `--runner-dir <path>`.",
+                    config_sh.display(),
+                    // can't access owner/repo here; the registration_token
+                    // URL already includes them.
+                    "OWNER", "REPO"
+                );
+            }
+            let mut argv: Vec<String> = vec![
+                "--unattended".to_string(),
+                "--url".to_string(),    reg.register_url.clone(),
+                "--token".to_string(),  reg.token.clone(),
+                "--replace".to_string(),
+            ];
+            if let Some(d) = description {
+                argv.push("--name".to_string());
+                argv.push(d.to_string());
+            }
+            if let Some(t) = tags {
+                argv.push("--labels".to_string());
+                argv.push(t.to_string());
+            }
+            (config_sh.display().to_string(), argv, Some(dir))
+        }
+        other => {
+            anyhow::bail!(
+                "`torii runner register` is GitHub + GitLab only. `{}` not implemented yet.",
+                other
+            );
+        }
+    };
+
+    // Show the resolved command so the user can audit it before we
+    // launch a subprocess that mutates the host's runner state.
+    let pretty_args = args.iter().map(|a| {
+        if a.contains(' ') { format!("\"{}\"", a) } else { a.clone() }
+    }).collect::<Vec<_>>().join(" ");
+    println!("🛠  Will run:");
+    if let Some(d) = &cwd {
+        println!("     (in {}) {} {}", d, bin, pretty_args);
+    } else {
+        println!("     {} {}", bin, pretty_args);
+    }
+    if let Some(exp) = reg.expires_in_seconds {
+        println!("     (token expires in ~{}s)", exp);
+    }
+
+    if !yes {
+        use std::io::Write;
+        print!("Proceed? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("❌ Cancelled.");
+            return Ok(());
+        }
+    }
+
+    let mut cmd = Command::new(&bin);
+    cmd.args(&args);
+    if let Some(d) = &cwd { cmd.current_dir(d); }
+    let status = cmd.status().map_err(|e| anyhow::anyhow!(
+        "failed to exec `{}`: {}", bin, e
+    ))?;
+    if !status.success() {
+        anyhow::bail!(
+            "Runner register exited with {}. Token was already consumed; \
+             generate a fresh one before retrying.",
+            status
+        );
+    }
+    println!("✅ Runner registered.");
+    Ok(())
+}
+
+/// `torii runner init` — scaffold a starter config so `register` has
+/// somewhere to land its block. Today only GitLab benefits (the
+/// `gitlab-runner` binary expects a config.toml on first register).
+/// GitHub's `./config.sh` writes its own files in the runner dir.
+fn run_runner_init(platform: &str) -> Result<()> {
+    match platform {
+        "gitlab" => {
+            let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no HOME"))?;
+            let dir = home.join(".gitlab-runner");
+            let path = dir.join("config.toml");
+            if path.exists() {
+                println!("ℹ  {} already exists; nothing to do.", path.display());
+                return Ok(());
+            }
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| anyhow::anyhow!("mkdir {}: {}", dir.display(), e))?;
+            // Minimal config that `gitlab-runner register` will append
+            // its `[[runners]]` block into. The `concurrent` value can
+            // be tuned later via `gitlab-runner` itself.
+            let body = "concurrent = 1\ncheck_interval = 0\n\n[session_server]\n  session_timeout = 1800\n";
+            std::fs::write(&path, body)
+                .map_err(|e| anyhow::anyhow!("write {}: {}", path.display(), e))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+            }
+            println!("✅ Wrote starter {}.", path.display());
+            println!("   Next: `torii runner register` to attach this host to the project.");
+            Ok(())
+        }
+        "github" => {
+            println!("ℹ  GitHub Actions runners don't need a scaffold — the runner tarball");
+            println!("   carries its own `./config.sh`. Download it from");
+            println!("   https://github.com/<owner>/<repo>/settings/actions/runners/new ,");
+            println!("   unpack it, and run `torii runner register --runner-dir <path>`.");
+            Ok(())
+        }
+        other => {
+            anyhow::bail!(
+                "`torii runner init` is GitHub + GitLab only. `{}` not implemented yet.",
+                other
+            );
+        }
+    }
+}
+
+/// Look up an executable by name on PATH. Returns the full path so
+/// `Command::new(<that>)` is unambiguous, or None when missing.
+fn which_binary(name: &str) -> Option<String> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
 }
 
 fn run_scan(history: bool) -> Result<()> {
