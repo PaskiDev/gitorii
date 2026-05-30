@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.34] - 2026-05-30
+
+### Added
+
+- **Bisect ref picker** replaces the freeform "type `bad good…`"
+  input from 0.7.33. Picking `Start` from the ops dropdown now opens
+  a searchable overlay listing:
+  - **HEAD** (with its shorthand + short OID),
+  - **local branches**,
+  - **tags** (newest-first by commit time, capped at 50),
+  - **remote branches** (origin/*, github-*/*, …),
+  - **the last 30 commits** reachable from HEAD, with their subject.
+  Type any chars to filter case-insensitively against the display
+  text; `Up/Down` navigates; `j/k` also work when the filter is
+  empty. `Esc` closes.
+- **Two-tab dance for Start**: `Tab` toggles **Bad** ↔ **Good**.
+  Picking on the Bad tab stores the pick and auto-advances to Good;
+  on the Good tab, `Space` multi-toggles the goods (✓ next to picked
+  entries), and `Enter` runs `crate::bisect::start` with the
+  collected refs. Hitting Enter on Good with nothing toggled takes
+  the highlighted row as the single good (the most common shape).
+- **Mark good `<ref>` / Mark bad `<ref>` / Skip `<ref>`** added to
+  the ops dropdown when a session is active. They open the same
+  picker (single-select) and run `crate::bisect::good|bad|skip` with
+  the chosen ref's name or OID.
+
+### Internal
+
+- `BisectFocus::RefPicker` variant + `RefPickerState`
+  (`op` / `tab` / `all` / `idx` / `filter` / `bad_pick` /
+  `good_picks`). New `RefPickerOp` + `RefPickerTab` + `RefEntry` +
+  `RefKind` in `tui::app`.
+- New `views/bisect.rs::load_refs()` (uses libgit2 via `git2::*`)
+  and `filter_indexes()` exported so the events handler keeps the
+  ordering in sync with what the renderer shows.
+- New `handle_bisect_picker` + `commit_bisect_picker` in
+  `tui/events.rs`. The Start input overlay from 0.7.33 is now Run-
+  only — Run is a command line, not a ref, so the freeform input
+  fits.
+
 ## [0.7.33] - 2026-05-30
 
 ### Changed

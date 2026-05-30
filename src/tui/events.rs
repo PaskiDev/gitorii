@@ -2376,6 +2376,9 @@ fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             }
             None
         }
+        BisectFocus::RefPicker => {
+            return handle_bisect_picker(key, app);
+        }
         BisectFocus::InputArgs => {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Enter) => {
@@ -2389,26 +2392,6 @@ fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                         return None;
                     }
                     match op {
-                        BisectPendingOp::Start => {
-                            // First whitespace-delimited token is the
-                            // bad ref; the rest are good refs.
-                            let mut parts = trimmed.split_whitespace();
-                            let bad = parts.next().map(String::from);
-                            let good: Vec<String> = parts.map(String::from).collect();
-                            if good.is_empty() {
-                                app.set_status("✗ start needs at least one good ref");
-                            } else {
-                                let res = crate::bisect::start(
-                                    std::path::Path::new("."),
-                                    bad.as_deref(),
-                                    &good,
-                                );
-                                match res {
-                                    Ok(_)  => app.set_status("✓ bisect started"),
-                                    Err(e) => app.set_status(format!("✗ {}", e)),
-                                }
-                            }
-                        }
                         BisectPendingOp::Run => {
                             let cmd: Vec<String> = trimmed.split_whitespace().map(String::from).collect();
                             match crate::bisect::run(std::path::Path::new("."), &cmd) {
@@ -2453,18 +2436,31 @@ fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Action> {
 }
 
 fn dispatch_bisect_op(app: &mut App) -> Option<Action> {
-    use crate::tui::app::{BisectFocus, BisectPendingOp};
+    use crate::tui::app::{BisectFocus, BisectPendingOp, RefPickerOp, RefPickerState, RefPickerTab};
     let ops = crate::tui::views::bisect::ops_for(&app.bisect_view);
     let idx = app.bisect_view.dropdown_idx;
     let label = ops.get(idx).map(|o| o.0).unwrap_or("");
     let path = std::path::Path::new(".");
+
+    let open_picker = |app: &mut App, op: RefPickerOp| {
+        app.bisect_view.picker = RefPickerState {
+            op,
+            tab: RefPickerTab::Bad,
+            all: crate::tui::views::bisect::load_refs(),
+            idx: 0,
+            filter: String::new(),
+            bad_pick: None,
+            good_picks: Vec::new(),
+        };
+        app.bisect_view.focus = BisectFocus::RefPicker;
+    };
+
     match label {
-        "Start" => {
-            app.bisect_view.focus = BisectFocus::InputArgs;
-            app.bisect_view.input_buffer.clear();
-            app.bisect_view.input_prompt = "bad good… (e.g. HEAD v1.0)".to_string();
-            app.bisect_view.pending_op = BisectPendingOp::Start;
-        }
+        "Start" => open_picker(app, RefPickerOp::Start),
+        "Mark good <ref>…" => open_picker(app, RefPickerOp::MarkGood),
+        "Mark bad <ref>…"  => open_picker(app, RefPickerOp::MarkBad),
+        "Skip <ref>…"      => open_picker(app, RefPickerOp::Skip),
+
         "Mark HEAD good" => {
             match crate::bisect::good(path, None) {
                 Ok(_)  => app.set_status("✓ marked good"),
@@ -2500,6 +2496,170 @@ fn dispatch_bisect_op(app: &mut App) -> Option<Action> {
         }
         _ => {
             app.bisect_view.focus = BisectFocus::List;
+        }
+    }
+    None
+}
+
+fn handle_bisect_picker(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    use crate::tui::app::{RefPickerOp, RefPickerTab};
+
+    // Resolve the filtered slice + currently highlighted entry every
+    // call so any filter-buffer mutation immediately reflects in
+    // navigation.
+    let filtered = crate::tui::views::bisect::filter_indexes(
+        &app.bisect_view.picker.all,
+        &app.bisect_view.picker.filter,
+    );
+    let total = filtered.len();
+    let cur_idx = app.bisect_view.picker.idx.min(total.saturating_sub(1));
+
+    match (key.modifiers, key.code) {
+        // Navigation. `j`/`k` only when the filter is empty so they
+        // don't collide with typing into the filter.
+        (_, KeyCode::Up) => {
+            if cur_idx > 0 { app.bisect_view.picker.idx = cur_idx - 1; }
+        }
+        (_, KeyCode::Down) => {
+            if cur_idx + 1 < total { app.bisect_view.picker.idx = cur_idx + 1; }
+        }
+        (KeyModifiers::NONE, KeyCode::Char('k')) if app.bisect_view.picker.filter.is_empty() => {
+            if cur_idx > 0 { app.bisect_view.picker.idx = cur_idx - 1; }
+        }
+        (KeyModifiers::NONE, KeyCode::Char('j')) if app.bisect_view.picker.filter.is_empty() => {
+            if cur_idx + 1 < total { app.bisect_view.picker.idx = cur_idx + 1; }
+        }
+
+        // Tab switches Bad ↔ Good only for the Start op.
+        (_, KeyCode::Tab) | (_, KeyCode::BackTab) => {
+            if matches!(app.bisect_view.picker.op, RefPickerOp::Start) {
+                app.bisect_view.picker.tab = match app.bisect_view.picker.tab {
+                    RefPickerTab::Bad  => RefPickerTab::Good,
+                    RefPickerTab::Good => RefPickerTab::Bad,
+                };
+                app.bisect_view.picker.idx = 0;
+                app.bisect_view.picker.filter.clear();
+            }
+        }
+
+        // Space: in Start/Good tab, toggle the current entry in the
+        // good_picks set (multi-select). Ignored elsewhere.
+        (KeyModifiers::NONE, KeyCode::Char(' ')) => {
+            if matches!(app.bisect_view.picker.op, RefPickerOp::Start)
+                && app.bisect_view.picker.tab == RefPickerTab::Good
+                && total > 0
+            {
+                if let Some(&orig) = filtered.get(cur_idx) {
+                    let entry = app.bisect_view.picker.all[orig].clone();
+                    let pos = app.bisect_view.picker.good_picks
+                        .iter().position(|g| g.target == entry.target);
+                    match pos {
+                        Some(p) => { app.bisect_view.picker.good_picks.remove(p); }
+                        None    => { app.bisect_view.picker.good_picks.push(entry); }
+                    }
+                }
+            }
+        }
+
+        // Enter: commit the picker depending on op.
+        (_, KeyCode::Enter) => {
+            return commit_bisect_picker(app, filtered, cur_idx);
+        }
+
+        // Filter: backspace removes one char.
+        (_, KeyCode::Backspace) => {
+            app.bisect_view.picker.filter.pop();
+            app.bisect_view.picker.idx = 0;
+        }
+
+        // Filter: any printable char that isn't a navigation key.
+        (mods, KeyCode::Char(c))
+            if mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT =>
+        {
+            app.bisect_view.picker.filter.push(c);
+            app.bisect_view.picker.idx = 0;
+        }
+
+        _ => {}
+    }
+
+    None
+}
+
+fn commit_bisect_picker(app: &mut App, filtered: Vec<usize>, cur_idx: usize) -> Option<Action> {
+    use crate::tui::app::{BisectFocus, RefPickerOp, RefPickerTab};
+    let path = std::path::Path::new(".");
+
+    let Some(&orig) = filtered.get(cur_idx) else { return None };
+    let entry = app.bisect_view.picker.all[orig].clone();
+
+    match app.bisect_view.picker.op.clone() {
+        RefPickerOp::Start => {
+            match app.bisect_view.picker.tab {
+                RefPickerTab::Bad => {
+                    // Pick this as bad and advance to the Good tab.
+                    app.bisect_view.picker.bad_pick = Some(entry);
+                    app.bisect_view.picker.tab = RefPickerTab::Good;
+                    app.bisect_view.picker.idx = 0;
+                    app.bisect_view.picker.filter.clear();
+                }
+                RefPickerTab::Good => {
+                    // If the user hit Enter with nothing toggled, take
+                    // the highlighted row as the (single) good. Either
+                    // way we need at least one bad + one good.
+                    if app.bisect_view.picker.good_picks.is_empty() {
+                        app.bisect_view.picker.good_picks.push(entry);
+                    }
+                    let bad = app.bisect_view.picker.bad_pick.clone();
+                    let goods: Vec<String> = app.bisect_view.picker.good_picks.iter()
+                        .map(|e| e.target.clone()).collect();
+                    let Some(bad) = bad else {
+                        app.set_status("✗ no bad ref selected");
+                        return None;
+                    };
+                    let res = crate::bisect::start(path, Some(&bad.target), &goods);
+                    match res {
+                        Ok(_)  => app.set_status(format!(
+                            "✓ bisect started (bad: {} · {} good ref(s))",
+                            bad.display, goods.len()
+                        )),
+                        Err(e) => app.set_status(format!("✗ {}", e)),
+                    }
+                    app.bisect_view.focus = BisectFocus::List;
+                    app.bisect_view.picker = Default::default();
+                    crate::tui::views::bisect::refresh(app);
+                }
+            }
+        }
+        RefPickerOp::MarkGood => {
+            let res = crate::bisect::good(path, Some(&entry.target));
+            match res {
+                Ok(_)  => app.set_status(format!("✓ marked good: {}", entry.display)),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            app.bisect_view.picker = Default::default();
+            crate::tui::views::bisect::refresh(app);
+        }
+        RefPickerOp::MarkBad => {
+            let res = crate::bisect::bad(path, Some(&entry.target));
+            match res {
+                Ok(_)  => app.set_status(format!("✓ marked bad: {}", entry.display)),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            app.bisect_view.picker = Default::default();
+            crate::tui::views::bisect::refresh(app);
+        }
+        RefPickerOp::Skip => {
+            let res = crate::bisect::skip(path, Some(&entry.target));
+            match res {
+                Ok(_)  => app.set_status(format!("✓ skipped: {}", entry.display)),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.bisect_view.focus = BisectFocus::List;
+            app.bisect_view.picker = Default::default();
+            crate::tui::views::bisect::refresh(app);
         }
     }
     None
