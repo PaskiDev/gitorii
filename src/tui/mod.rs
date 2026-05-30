@@ -1446,6 +1446,11 @@ fn run_loop(
                         app.set_status("✗ no provider selected");
                     } else {
                         run_torii_subprocess(terminal, app, &["auth", "oauth", &provider]);
+                        // The child wrote the new token to auth.toml;
+                        // drop our in-process cache so the next
+                        // resolve_token picks up the fresh value
+                        // instead of serving the pre-rotate one.
+                        crate::auth::drop_token_cache();
                         crate::tui::views::auth::refresh(app);
                     }
                 }
@@ -1454,11 +1459,14 @@ fn run_loop(
                     let provider = app.auth_view.pending_provider.clone();
                     if provider.is_empty() {
                         app.set_status("✗ no provider selected");
-                    } else if pat {
-                        run_torii_subprocess(terminal, app, &["auth", "rotate", "--pat", &provider]);
-                        crate::tui::views::auth::refresh(app);
                     } else {
-                        run_torii_subprocess(terminal, app, &["auth", "rotate", &provider]);
+                        let args: &[&str] = if pat {
+                            &["auth", "rotate", "--pat", &provider]
+                        } else {
+                            &["auth", "rotate", &provider]
+                        };
+                        run_torii_subprocess(terminal, app, args);
+                        crate::auth::drop_token_cache();
                         crate::tui::views::auth::refresh(app);
                     }
                 }
