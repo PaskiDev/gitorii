@@ -58,10 +58,17 @@ pub struct ApiKey {
 /// Every credential torii knows about, in one struct. `tokens` is a
 /// map rather than fixed fields so `auth.toml` can keep older or
 /// newer entries without parser breakage when we add providers.
+///
+/// 0.7.25 added `expirations`: optional ISO-8601 timestamps recorded
+/// when a token was minted with a TTL. The expirations table is
+/// purely advisory — torii doesn't auto-rotate; `auth doctor` reads
+/// the timestamps to warn the user when a token is close to expiring
+/// and they should run `torii auth rotate <provider>`.
 #[derive(Debug, Clone, Default)]
 pub struct AuthStore {
     pub cloud: Option<ApiKey>,
     pub tokens: BTreeMap<String, String>,
+    pub expirations: BTreeMap<String, String>,
 }
 
 /// Recognised provider names. The CLI accepts these; readers ask by
@@ -164,6 +171,13 @@ fn save_to(path: &Path, store: &AuthStore) -> Result<()> {
         for (k, v) in &store.tokens {
             out.push_str(&format!("{} = \"{}\"\n", k, v));
         }
+        out.push('\n');
+    }
+    if !store.expirations.is_empty() {
+        out.push_str("[token_expires]\n");
+        for (k, v) in &store.expirations {
+            out.push_str(&format!("{} = \"{}\"\n", k, v));
+        }
     }
     fs::write(path, out)
         .map_err(|e| ToriiError::InvalidConfig(format!("write {}: {}", path.display(), e)))?;
@@ -229,20 +243,50 @@ pub fn normalise_provider(name: &str) -> Result<String> {
 }
 
 pub fn set_token(provider: &str, token: &str, local: Option<&Path>) -> Result<()> {
+    set_token_with_expiry(provider, token, None, local)
+}
+
+/// Same as [`set_token`], plus an optional ISO-8601 expiration
+/// timestamp. Stored under `[token_expires]` and surfaced by
+/// `torii auth doctor` as a "rotate before X" warning. Passing
+/// `None` clears any existing expiration entry for the provider
+/// (e.g. switching from a TTL-managed PAT to a stable bot token).
+pub fn set_token_with_expiry(
+    provider: &str,
+    token: &str,
+    expires_at: Option<&str>,
+    local: Option<&Path>,
+) -> Result<()> {
     let provider = normalise_provider(provider)?;
     let result = if let Some(repo) = local {
         let mut store = load_local_raw(repo);
-        store.tokens.insert(provider, token.to_string());
+        store.tokens.insert(provider.clone(), token.to_string());
+        apply_expiry(&mut store.expirations, &provider, expires_at);
         save_local(repo, &store)
     } else {
         let mut store = load_global();
-        store.tokens.insert(provider, token.to_string());
+        store.tokens.insert(provider.clone(), token.to_string());
+        apply_expiry(&mut store.expirations, &provider, expires_at);
         save_global(&store)
     };
-    // Invalidate the resolve_token cache so the next call picks up
-    // the new value instead of returning the pre-set state.
     invalidate_token_cache();
     result
+}
+
+fn apply_expiry(map: &mut BTreeMap<String, String>, provider: &str, expires_at: Option<&str>) {
+    match expires_at {
+        Some(s) if !s.is_empty() => { map.insert(provider.to_string(), s.to_string()); }
+        _ => { map.remove(provider); }
+    }
+}
+
+/// Return the recorded expiration timestamp for `provider`, if any.
+/// Reads global only — the same precedence as `resolve_token` would
+/// be misleading for expirations (a local override of the token
+/// usually means the local one has its own TTL semantics).
+pub fn token_expires_at(provider: &str) -> Option<String> {
+    let store = load_global();
+    store.expirations.get(&provider.to_lowercase()).cloned()
 }
 
 pub fn remove_token(provider: &str, local: Option<&Path>) -> Result<bool> {
@@ -250,11 +294,13 @@ pub fn remove_token(provider: &str, local: Option<&Path>) -> Result<bool> {
     let removed = if let Some(repo) = local {
         let mut store = load_local_raw(repo);
         let r = store.tokens.remove(&provider).is_some();
+        store.expirations.remove(&provider);
         save_local(repo, &store)?;
         r
     } else {
         let mut store = load_global();
         let r = store.tokens.remove(&provider).is_some();
+        store.expirations.remove(&provider);
         save_global(&store)?;
         r
     };
@@ -411,12 +457,14 @@ fn parse(text: &str) -> AuthStore {
         TopLevel,
         Cloud,
         Tokens,
+        TokenExpires,
     }
     let mut section = Section::TopLevel;
     let mut cloud_key = String::new();
     let mut cloud_endpoint = default_endpoint();
     let mut have_cloud = false;
     let mut tokens = BTreeMap::new();
+    let mut expirations = BTreeMap::new();
 
     for raw in text.lines() {
         let line = raw.trim();
@@ -428,6 +476,7 @@ fn parse(text: &str) -> AuthStore {
             section = match name.trim() {
                 "cloud" => Section::Cloud,
                 "tokens" => Section::Tokens,
+                "token_expires" => Section::TokenExpires,
                 _ => Section::TopLevel, // unknown section: tolerate, ignore lines
             };
             continue;
@@ -453,6 +502,11 @@ fn parse(text: &str) -> AuthStore {
                     tokens.insert(k.to_string(), v);
                 }
             }
+            Section::TokenExpires => {
+                if !v.is_empty() {
+                    expirations.insert(k.to_string(), v);
+                }
+            }
         }
     }
 
@@ -466,6 +520,7 @@ fn parse(text: &str) -> AuthStore {
             None
         },
         tokens,
+        expirations,
     }
 }
 
@@ -516,6 +571,7 @@ fn migrate_from_config_toml() -> Option<AuthStore> {
     let store = AuthStore {
         cloud: None,
         tokens,
+        expirations: BTreeMap::new(),
     };
     let _ = save_global(&store);
     Some(store)

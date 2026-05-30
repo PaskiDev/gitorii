@@ -65,6 +65,7 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         (PlatformSubTab::Jobs,      "[2] jobs"),
         (PlatformSubTab::Releases,  "[3] releases"),
         (PlatformSubTab::Packages,  "[4] packages"),
+        (PlatformSubTab::Runners,   "[5] runners"),
     ].iter().enumerate() {
         if i > 0 { tabs.push(Span::raw("  ")); }
         let active = pv.sub_tab == *st;
@@ -147,6 +148,7 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
             PlatformSubTab::Jobs      => render_jobs_items(app),
             PlatformSubTab::Releases  => render_releases_items(app),
             PlatformSubTab::Packages  => render_packages_items(app),
+            PlatformSubTab::Runners   => render_runners_items(app),
         }
     };
 
@@ -180,6 +182,7 @@ fn list_title(pv: &crate::tui::app::PlatformState) -> String {
         }
         PlatformSubTab::Releases => format!(" releases ({}) ", pv.releases.len()),
         PlatformSubTab::Packages => format!(" packages ({}) ", pv.packages.len()),
+        PlatformSubTab::Runners  => format!(" runners ({}) ", pv.runners.len()),
     }
 }
 
@@ -260,6 +263,33 @@ fn render_packages_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
     (list_title(pv), items, pv.packages_idx)
 }
 
+fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
+    let pv = &app.platform_view;
+    let items: Vec<ListItem> = pv.runners.iter().enumerate().map(|(i, r)| {
+        let is_sel = i == pv.runners_idx;
+        let style = if is_sel {
+            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
+        } else { Style::default() };
+        let prefix = if is_sel { "█ " } else { "  " };
+        let status_color = match r.status.as_str() {
+            "online" | "active" => C_GREEN,
+            "offline" | "stale" => C_DIM,
+            "paused"            => C_YELLOW,
+            _                   => C_SUBTLE,
+        };
+        let tags_str = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(",") };
+        ListItem::new(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(app.brand_color())),
+            Span::styled(format!("#{:<6}", r.id), Style::default().fg(C_CYAN)),
+            Span::styled(format!("{:<10}", r.status), Style::default().fg(status_color)),
+            Span::styled(format!("{:<24}", truncate(&r.description, 23)), Style::default().fg(C_WHITE)),
+            Span::styled(format!("{:<8}", truncate(&r.os, 7)), Style::default().fg(C_YELLOW)),
+            Span::styled(truncate(&tags_str, 30), Style::default().fg(C_DIM)),
+        ])).style(style)
+    }).collect();
+    (list_title(pv), items, pv.runners_idx)
+}
+
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
@@ -305,6 +335,31 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             line_kv("type",     &p.package_type,   C_YELLOW),
             line_kv("created",  &p.created_at,     C_DIM),
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
+
+        PlatformSubTab::Runners => pv.runners.get(pv.runners_idx).map(|r| {
+            let tags = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(", ") };
+            let status_c = match r.status.as_str() {
+                "online" | "active" => C_GREEN,
+                "offline" | "stale" => C_DIM,
+                "paused"            => C_YELLOW,
+                _                   => C_SUBTLE,
+            };
+            let mut v = vec![
+                line_kv("id",          &format!("#{}", r.id), C_CYAN),
+                line_kv("status",      &r.status,             status_c),
+                line_kv("description", &r.description,        C_WHITE),
+                line_kv("type",        &r.runner_type,        C_YELLOW),
+                line_kv("os",          &r.os,                 C_DIM),
+            ];
+            if !r.ip_address.is_empty() { v.push(line_kv("ip", &r.ip_address, C_DIM)); }
+            if !r.version.is_empty()    { v.push(line_kv("version", &r.version, C_DIM)); }
+            v.push(line_kv("tags", &tags, C_DIM));
+            if !r.web_url.is_empty() {
+                v.push(Line::from(""));
+                v.push(Line::from(Span::styled(r.web_url.clone(), Style::default().fg(C_CYAN))));
+            }
+            v
+        }).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
     };
 
     // 0.7.24: contextual-action hints + result feedback. Hints sit at the
@@ -314,6 +369,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let hint = match pv.sub_tab {
         PlatformSubTab::Pipelines => "[c] cancel  [x] retry  [s] status  [b] branch  [p] live  [Enter] jobs",
         PlatformSubTab::Jobs      => "[c] cancel  [x] retry  [a] artifacts  [s] status  [p] live  [Enter] log",
+        PlatformSubTab::Runners   => "[c] pause  [x] resume  [t] reset-token  [d] remove  [p] live",
         _ => "[p] live",
     };
     if !hint.is_empty() {

@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.25] - 2026-05-30
+
+Two new operating surfaces: **CI runners** (a CLI + TUI tab to manage
+self-hosted agents on GitLab and GitHub) and **token rotation** (an
+end-to-end command that re-auths and revokes the old credential in
+one shot, plus optional expirations that `auth doctor` watches).
+
+### Added
+
+- **`torii runner`** — CLI subcommand to manage CI runners.
+  - `runner list [--remote N]` — table of the project's runners
+    (status, OS, type, tags).
+  - `runner show <id>` — full detail (description, IP, version, tags,
+    web URL).
+  - `runner remove <id> [-y]` — delete the registration. The host-side
+    agent still needs uninstalling separately.
+  - `runner reset-token <id>` (GitLab) — generate a new authentication
+    token; prints it to stdout for the operator to paste into the
+    runner's `config.toml`.
+  - `runner pause <id>` / `runner resume <id>` (GitLab) — temporarily
+    stop / re-enable job pickup.
+  - GitHub Actions supports `list`/`show`/`remove` only; the unsupported
+    ops surface a clear error pointing at the documented workaround
+    (label gating, agent restart).
+- **TUI Platform — fifth sub-tab `[5] runners`**. Same drill-down +
+  refresh + filter machinery as the existing tabs. Per-runner
+  actions:
+  - `c` = pause, `x` = resume, `t` = reset-token, `d` = remove.
+  - Reset-token's new credential is routed to the **event log** (open
+    with `e`) so it never lands in the one-line status bar where it
+    could leak via screenshots or scrollback.
+- **`torii auth rotate <provider>`** — rotate a stored token end to end.
+  - Default flow (OAuth): re-runs the device or auth-code flow,
+    swaps in the new access token, then POSTs to the platform's
+    revoke endpoint so the old token stops working immediately.
+    GitLab revoke is universal (RFC 7009, no client secret needed);
+    GitHub revoke runs only when `TORII_GITHUB_APP_SECRET` is set
+    (confidential app). Other platforms print a "revoke manually
+    at …" hint.
+  - `--pat` (GitLab only) — uses the native
+    `POST /personal_access_tokens/self/rotate` endpoint, which
+    generates a new PAT with the same scopes and invalidates the
+    old one atomically (no browser round-trip).
+- **`--ttl` flag on `auth set` / `auth oauth` / `auth rotate`** —
+  record an expiration timestamp alongside the token (`30d`, `2h`,
+  `7d12h`, …). Stored under a new `[token_expires]` section in
+  `auth.toml`. Purely advisory: torii doesn't auto-rotate, but
+  **`auth doctor`** now prints `⛔ expired`, `⚠ expires in 3d`, or
+  `⏳ expires in 28d` next to each entry, with the warn band kicking
+  in inside 7 days. Lets you treat short-lived bot tokens as a habit
+  rather than a surprise.
+
+### Fixed
+
+- Pipeline/job list cursor handling: when an auto-refresh poll
+  returns, the index now **clamps** instead of jumping to 0. Auto-refresh
+  no longer yanks the cursor away while you're reading.
+
+### Internal
+
+- New `crate::runner` module with `RunnerClient` trait + GitLab and
+  GitHub implementations, factored the same way as `PipelineClient`.
+- `AuthStore` gained `expirations: BTreeMap<String, String>` (ISO-8601
+  per provider). Parser and serializer extended; legacy `auth.toml`
+  files keep loading unchanged.
+- `set_token_with_expiry`, `token_expires_at` public helpers in
+  `crate::auth`. The old `set_token` is now a thin shim.
+
 ## [0.7.24] - 2026-05-30
 
 Two things: a critical auth fix that was rejecting every GitLab OAuth
