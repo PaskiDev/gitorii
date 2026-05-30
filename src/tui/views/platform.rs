@@ -340,76 +340,93 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
 
-    let body: Vec<Line> = match pv.sub_tab {
-        PlatformSubTab::Pipelines => pv.pipelines.get(pv.pipelines_idx).map(|p| vec![
-            line_kv("id",        &format!("#{}", p.id), bc),
-            line_kv("status",    &p.raw_status,        status_color(&p.status)),
-            line_kv("branch",    &p.branch,            C_WHITE),
-            line_kv("sha",       &short_sha(&p.sha),   C_DIM),
-            line_kv("created",   &p.created_at,        C_DIM),
-            line_kv("updated",   &p.updated_at,        C_DIM),
-            Line::from(""),
-            Line::from(Span::styled(p.web_url.clone(), Style::default().fg(bc))),
-        ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
+    // Value column width = panel inner width − 2 side borders − key
+    // prefix. Clamp to a minimum so very narrow terminals still wrap
+    // sanely instead of producing 1-char-wide chunks.
+    let inner_w = (area.width as usize).saturating_sub(2);
+    let value_w = inner_w.saturating_sub(KV_PREFIX_W).max(20);
 
-        PlatformSubTab::Jobs => pv.jobs.get(pv.jobs_idx).map(|j| vec![
-            line_kv("id",        &format!("#{}", j.id), bc),
-            line_kv("pipeline",  &format!("#{}", j.pipeline_id), bc),
-            line_kv("status",    &j.raw_status,        status_color(&j.status)),
-            line_kv("stage",     &j.stage,             C_DIM),
-            line_kv("name",      &j.name,              C_WHITE),
-            line_kv("duration",  &j.duration_seconds.map(|s| format!("{}s", s as u64)).unwrap_or_default(), C_DIM),
-            Line::from(""),
-            Line::from(Span::styled(j.web_url.clone(), Style::default().fg(bc))),
-        ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
+    let mut body: Vec<Line<'static>> = Vec::new();
 
-        PlatformSubTab::Releases => pv.releases.get(pv.releases_idx).map(|r| vec![
-            line_kv("tag",       &r.tag,                                C_GREEN),
-            line_kv("name",      &r.name,                                C_WHITE),
-            line_kv("created",   &r.created_at,                         C_DIM),
-            Line::from(""),
-            Line::from(Span::styled(r.web_url.clone(), Style::default().fg(bc))),
-        ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
-
-        PlatformSubTab::Packages => pv.packages.get(pv.packages_idx).map(|p| vec![
-            line_kv("name",     &p.name,           C_WHITE),
-            line_kv("version",  &p.version,        C_GREEN),
-            line_kv("type",     &p.package_type,   C_DIM),
-            line_kv("created",  &p.created_at,     C_DIM),
-        ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
-
-        PlatformSubTab::Runners => pv.runners.get(pv.runners_idx).map(|r| {
-            let tags = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(", ") };
-            let status_c = match r.status.as_str() {
-                "online" | "active" => C_GREEN,
-                "offline" | "stale" => C_DIM,
-                "paused"            => C_DIM,
-                _                   => C_SUBTLE,
-            };
-            let mut v = vec![
-                line_kv("id",          &format!("#{}", r.id), bc),
-                line_kv("status",      &r.status,             status_c),
-                line_kv("description", &r.description,        C_WHITE),
-                line_kv("type",        &r.runner_type,        C_DIM),
-                line_kv("os",          &r.os,                 C_DIM),
-            ];
-            if !r.ip_address.is_empty() { v.push(line_kv("ip", &r.ip_address, C_DIM)); }
-            if !r.version.is_empty()    { v.push(line_kv("version", &r.version, C_DIM)); }
-            v.push(line_kv("tags", &tags, C_DIM));
-            if !r.web_url.is_empty() {
-                v.push(Line::from(""));
-                v.push(Line::from(Span::styled(r.web_url.clone(), Style::default().fg(bc))));
+    match pv.sub_tab {
+        PlatformSubTab::Pipelines => {
+            if let Some(p) = pv.pipelines.get(pv.pipelines_idx) {
+                kv(&mut body, "id",      &format!("#{}", p.id), bc, value_w);
+                kv(&mut body, "status",  &p.raw_status,         status_color(&p.status), value_w);
+                kv(&mut body, "branch",  &p.branch,             C_WHITE, value_w);
+                kv(&mut body, "sha",     &short_sha(&p.sha),    C_DIM, value_w);
+                kv(&mut body, "created", &p.created_at,         C_DIM, value_w);
+                kv(&mut body, "updated", &p.updated_at,         C_DIM, value_w);
+                body.push(Line::from(""));
+                kv(&mut body, "url",     &p.web_url,            bc, value_w);
             }
-            v
-        }).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
-    };
+        }
+        PlatformSubTab::Jobs => {
+            if let Some(j) = pv.jobs.get(pv.jobs_idx) {
+                let dur = j.duration_seconds.map(|s| format!("{}s", s as u64)).unwrap_or_default();
+                kv(&mut body, "id",       &format!("#{}", j.id),         bc, value_w);
+                kv(&mut body, "pipeline", &format!("#{}", j.pipeline_id), bc, value_w);
+                kv(&mut body, "status",   &j.raw_status,                 status_color(&j.status), value_w);
+                kv(&mut body, "stage",    &j.stage,                      C_DIM, value_w);
+                kv(&mut body, "name",     &j.name,                       C_WHITE, value_w);
+                kv(&mut body, "duration", &dur,                          C_DIM, value_w);
+                body.push(Line::from(""));
+                kv(&mut body, "url",      &j.web_url,                    bc, value_w);
+            }
+        }
+        PlatformSubTab::Releases => {
+            if let Some(r) = pv.releases.get(pv.releases_idx) {
+                kv(&mut body, "tag",     &r.tag,        C_GREEN, value_w);
+                kv(&mut body, "name",    &r.name,       C_WHITE, value_w);
+                kv(&mut body, "created", &r.created_at, C_DIM, value_w);
+                body.push(Line::from(""));
+                kv(&mut body, "url",     &r.web_url,    bc, value_w);
+            }
+        }
+        PlatformSubTab::Packages => {
+            if let Some(p) = pv.packages.get(pv.packages_idx) {
+                kv(&mut body, "name",    &p.name,         C_WHITE, value_w);
+                kv(&mut body, "version", &p.version,      C_GREEN, value_w);
+                kv(&mut body, "type",    &p.package_type, C_DIM, value_w);
+                kv(&mut body, "created", &p.created_at,   C_DIM, value_w);
+            }
+        }
+        PlatformSubTab::Runners => {
+            if let Some(r) = pv.runners.get(pv.runners_idx) {
+                let tags = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(", ") };
+                let status_c = match r.status.as_str() {
+                    "online" | "active" => C_GREEN,
+                    "offline" | "stale" => C_DIM,
+                    "paused"            => C_DIM,
+                    _                   => C_SUBTLE,
+                };
+                kv(&mut body, "id",          &format!("#{}", r.id), bc, value_w);
+                kv(&mut body, "status",      &r.status,             status_c, value_w);
+                kv(&mut body, "description", &r.description,        C_WHITE, value_w);
+                kv(&mut body, "type",        &r.runner_type,        C_DIM, value_w);
+                kv(&mut body, "os",          &r.os,                 C_DIM, value_w);
+                if !r.ip_address.is_empty() { kv(&mut body, "ip",      &r.ip_address, C_DIM, value_w); }
+                if !r.version.is_empty()    { kv(&mut body, "version", &r.version,    C_DIM, value_w); }
+                kv(&mut body, "tags", &tags, C_DIM, value_w);
+                if !r.web_url.is_empty() {
+                    body.push(Line::from(""));
+                    kv(&mut body, "url", &r.web_url, bc, value_w);
+                }
+            }
+        }
+    }
+
+    if body.is_empty() {
+        body.push(Line::from(Span::styled("no selection", Style::default().fg(C_DIM))));
+    }
 
     // 0.7.26: detail panel only carries entity data — hints and
     // action results live in the global bottom hint (ui.rs) and the
     // App-wide `status_msg` line, like every other view does.
-    let _ = pv;
+    // 0.7.28: no Paragraph wrap — we wrap manually above so the
+    // continuation lines stay indented to the value column.
     f.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }).block(
+        Paragraph::new(body).block(
             Block::default()
                 .title(Span::styled(" detail ", Style::default().fg(bc).add_modifier(Modifier::BOLD)))
                 .borders(Borders::ALL)
@@ -681,11 +698,49 @@ fn status_color(s: &str) -> ratatui::style::Color {
     }
 }
 
-fn line_kv<'a>(k: &'a str, v: &str, vc: ratatui::style::Color) -> Line<'a> {
-    Line::from(vec![
-        Span::styled(format!("  {:<10}", k), Style::default().fg(C_SUBTLE)),
-        Span::styled(v.to_string(), Style::default().fg(vc)),
-    ])
+/// Width of the key column (`"  description "` = 2 leading + 11 label + 1
+/// trailing space = 14). Used both to render the prefix and to compute
+/// the indent for word-wrapped continuation lines.
+const KV_PREFIX_W: usize = 14;
+
+/// Push a key/value pair into the detail panel `body`, wrapping the
+/// value to subsequent lines indented to the value column when it
+/// exceeds `value_w`. Without this, ratatui's block-level `Wrap` would
+/// drop the second half of a long value back to column 0, where it
+/// reads as part of the *next* kv entry — the "concatenated" look the
+/// user reported on long runner descriptions.
+fn kv(body: &mut Vec<Line<'static>>, k: &str, v: &str, vc: ratatui::style::Color, value_w: usize) {
+    let chunks = wrap_words(v, value_w.max(8));
+    let indent = " ".repeat(KV_PREFIX_W);
+    for (i, chunk) in chunks.into_iter().enumerate() {
+        let prefix = if i == 0 {
+            format!("  {:<11} ", k)
+        } else {
+            indent.clone()
+        };
+        body.push(Line::from(vec![
+            Span::styled(prefix, Style::default().fg(C_SUBTLE)),
+            Span::styled(chunk, Style::default().fg(vc)),
+        ]));
+    }
+}
+
+/// Greedy word-wrap. Breaks on whitespace; words longer than `max`
+/// are emitted whole on their own line (we don't hyphenate). Returns
+/// at least one chunk (empty string when input is empty).
+fn wrap_words(text: &str, max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        if !cur.is_empty() && cur.chars().count() + 1 + word.chars().count() > max {
+            out.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() { cur.push(' '); }
+        cur.push_str(word);
+    }
+    if !cur.is_empty() { out.push(cur); }
+    if out.is_empty() { out.push(String::new()); }
+    out
 }
 
 fn truncate(s: &str, max: usize) -> String {
