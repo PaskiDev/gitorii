@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.27] - 2026-05-30
+
+Polish pass on the 0.7.26 Platform rework: the custom footer was
+stacking over the global hint bar, the palette didn't match the other
+views (a `C_CYAN` "blue thing" + amarillos+rojos mezclados), and the
+result of contextual actions lived in a place it shouldn't. This
+release pulls the view back in line with the rest of the TUI.
+
+### Fixed
+
+- **Platform's local footer no longer overlaps the global hint bar.**
+  The view rendered its own 2-row hint+status panel inside its body,
+  which sat on top of the app-wide `render_hint` row at the bottom of
+  the screen. Both now share the same row — Platform's keys live in
+  the global hint bar, like every other view does.
+- **Colour palette aligned with the rest of the TUI**. IDs and URLs
+  use the brand colour (matching how commit hashes / refs render in
+  `log` and `branch`) instead of `C_CYAN`. Stage / type / OS / runner
+  type are `C_DIM` (secondary information) instead of `C_YELLOW`
+  (which competes with warnings). `running` status keeps `C_YELLOW`
+  (genuine attention) but `pending` drops to `C_DIM` so the warn
+  semantics aren't diluted. Detail panel title uses `bc` (matching
+  `log`'s side panels).
+- **Action result no longer renders inside the detail panel**. It
+  goes to the **event log** (`e`) — the canonical app-wide history
+  of what just happened, same as workspace/mirror sync — and to the
+  app-wide `status_msg` line. Detail panel goes back to being only
+  entity data.
+- **Tab divider switched from `│` to `·`** so the sub-tab labels
+  read as a row of tags instead of a fenced gauge.
+
+### Internal
+
+- Removed `PlatformState::action_msg` + `action_msg_at`. Their job is
+  now done by `App::status_msg` (set with `App::set_status`) and the
+  event log. Less local state, fewer places "what just happened?" can
+  diverge.
+- Dropped the in-view `render_footer` function. Hints flowed into the
+  `View::Platform` arm of `render_hint` in `tui/ui.rs` so the layout
+  is uniform.
+
 ## [0.7.26] - 2026-05-30
 
 UI-only release: TUI sidebar reorganised by user flow + Platform view

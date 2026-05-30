@@ -34,15 +34,14 @@ use ratatui::{
 };
 
 use crate::tui::app::{App, PlatformFocus, PlatformSubTab};
-use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED, C_YELLOW, C_CYAN};
+use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED, C_YELLOW};
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // header: Tabs + remote
+            Constraint::Length(3),  // header: Tabs
             Constraint::Min(1),     // body
-            Constraint::Length(2),  // footer: hints + status
         ])
         .split(area);
 
@@ -64,9 +63,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         render_detail(f, app, cols[1]);
     }
 
-    render_footer(f, app, rows[2]);
-
     // Overlays — drawn last so they sit on top of body content.
+    // (Bottom-of-screen hints are handled by `render_hint` in ui.rs,
+    // matching every other view; we don't add our own footer here.)
     match app.platform_view.focus {
         PlatformFocus::RemotePopup    => render_remote_popup(f, app, area),
         PlatformFocus::OpsDropdown    => render_ops_dropdown(f, app, area),
@@ -96,14 +95,27 @@ fn col(s: &str, width: usize) -> String {
 fn render_header(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let pv = &app.platform_view;
+    let focused = !app.sidebar_focused;
 
     // Title carries the active remote + resolved platform/owner/repo
     // so it doesn't compete with the Tabs widget for horizontal space.
-    let target = if pv.platform.is_empty() {
+    // Trailing markers show the active filter / live state in the same
+    // line so the user has them in eye-shot without dragging attention
+    // away from the body.
+    let mut title_text = if pv.platform.is_empty() {
         format!(" platform · {} ", pv.remote)
     } else {
         format!(" platform · {} → {}/{} ", pv.remote, pv.owner, pv.repo_name)
     };
+    if let Some(s) = &pv.filter_status {
+        title_text.push_str(&format!("· status:{} ", s));
+    }
+    if pv.filter_branch_only {
+        title_text.push_str("· branch-only ");
+    }
+    if pv.auto_refresh {
+        title_text.push_str("· ⟳ live ");
+    }
 
     let titles: Vec<&'static str> = vec![
         " 1 pipelines ", " 2 jobs ", " 3 releases ", " 4 packages ", " 5 runners ",
@@ -116,6 +128,11 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         PlatformSubTab::Runners   => 4,
     };
 
+    // Match the per-view title color convention used in log.rs / branch.rs:
+    // C_WHITE when focused, bc otherwise. Same for the border.
+    let title_color = if focused { C_WHITE } else { bc };
+    let border_color = if focused { C_WHITE } else { bc };
+
     let tabs = Tabs::new(titles)
         .select(active_idx)
         .style(Style::default().fg(bc))
@@ -125,15 +142,15 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
                 .bg(app.selected_bg())
                 .add_modifier(Modifier::BOLD),
         )
-        .divider(Span::styled("│", Style::default().fg(C_DIM)))
+        .divider(Span::styled("·", Style::default().fg(C_DIM)))
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(bc))
+                .border_style(Style::default().fg(border_color))
                 .title(Span::styled(
-                    target,
-                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                    title_text,
+                    Style::default().fg(title_color).add_modifier(Modifier::BOLD),
                 )),
         );
 
@@ -178,10 +195,15 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         state.select(Some(selected));
     }
 
+    let title_color = if focused && pv.focus == PlatformFocus::List {
+        C_WHITE
+    } else {
+        bc
+    };
     f.render_stateful_widget(
         List::new(items).block(
             Block::default()
-                .title(Span::styled(title, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(title, Style::default().fg(title_color).add_modifier(Modifier::BOLD)))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
                 .border_style(border)
@@ -218,7 +240,7 @@ fn render_pipelines_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) 
         let id = format!("#{}", p.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(col(&id, 13),       Style::default().fg(C_CYAN)),
+            Span::styled(col(&id, 13),       Style::default().fg(app.brand_color())),
             Span::styled(col(&p.status, 10), Style::default().fg(status_color(&p.status))),
             Span::styled(col(&p.branch, 18), Style::default().fg(C_WHITE)),
             Span::styled(col(&short_time(&p.created_at), 18), Style::default().fg(C_DIM)),
@@ -239,9 +261,9 @@ fn render_jobs_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
         let id = format!("#{}", j.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(col(&id, 13),       Style::default().fg(C_CYAN)),
+            Span::styled(col(&id, 13),       Style::default().fg(app.brand_color())),
             Span::styled(col(&j.status, 10), Style::default().fg(status_color(&j.status))),
-            Span::styled(col(&j.stage, 10),  Style::default().fg(C_YELLOW)),
+            Span::styled(col(&j.stage, 10),  Style::default().fg(C_DIM)),
             Span::styled(col(&j.name, 24),   Style::default().fg(C_WHITE)),
             Span::styled(col(&dur, 8),       Style::default().fg(C_DIM)),
         ])).style(style)
@@ -279,7 +301,7 @@ fn render_packages_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             Span::styled(prefix, Style::default().fg(app.brand_color())),
             Span::styled(col(&p.name, 22),         Style::default().fg(C_WHITE)),
             Span::styled(col(&p.version, 14),      Style::default().fg(C_GREEN)),
-            Span::styled(col(&p.package_type, 10), Style::default().fg(C_YELLOW)),
+            Span::styled(col(&p.package_type, 10), Style::default().fg(C_DIM)),
             Span::styled(col(&short_time(&p.created_at), 18), Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
@@ -297,17 +319,17 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
         let status_color = match r.status.as_str() {
             "online" | "active" => C_GREEN,
             "offline" | "stale" => C_DIM,
-            "paused"            => C_YELLOW,
+            "paused"            => C_DIM,
             _                   => C_SUBTLE,
         };
         let tags_str = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(",") };
         let id = format!("#{}", r.id);
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(col(&id, 8),         Style::default().fg(C_CYAN)),
+            Span::styled(col(&id, 8),         Style::default().fg(app.brand_color())),
             Span::styled(col(&r.status, 10),  Style::default().fg(status_color)),
             Span::styled(col(&r.description, 24), Style::default().fg(C_WHITE)),
-            Span::styled(col(&r.os, 8),       Style::default().fg(C_YELLOW)),
+            Span::styled(col(&r.os, 8),       Style::default().fg(C_DIM)),
             Span::styled(col(&tags_str, 30),  Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
@@ -320,29 +342,25 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
 
     let body: Vec<Line> = match pv.sub_tab {
         PlatformSubTab::Pipelines => pv.pipelines.get(pv.pipelines_idx).map(|p| vec![
-            line_kv("id",        &format!("#{}", p.id), C_CYAN),
+            line_kv("id",        &format!("#{}", p.id), bc),
             line_kv("status",    &p.raw_status,        status_color(&p.status)),
             line_kv("branch",    &p.branch,            C_WHITE),
-            line_kv("sha",       &short_sha(&p.sha),   C_YELLOW),
+            line_kv("sha",       &short_sha(&p.sha),   C_DIM),
             line_kv("created",   &p.created_at,        C_DIM),
             line_kv("updated",   &p.updated_at,        C_DIM),
             Line::from(""),
-            Line::from(Span::styled(p.web_url.clone(), Style::default().fg(C_CYAN))),
-            Line::from(""),
-            Line::from(Span::styled("Enter → drill into jobs", Style::default().fg(C_SUBTLE))),
+            Line::from(Span::styled(p.web_url.clone(), Style::default().fg(bc))),
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
 
         PlatformSubTab::Jobs => pv.jobs.get(pv.jobs_idx).map(|j| vec![
-            line_kv("id",        &format!("#{}", j.id), C_CYAN),
-            line_kv("pipeline",  &format!("#{}", j.pipeline_id), C_CYAN),
+            line_kv("id",        &format!("#{}", j.id), bc),
+            line_kv("pipeline",  &format!("#{}", j.pipeline_id), bc),
             line_kv("status",    &j.raw_status,        status_color(&j.status)),
-            line_kv("stage",     &j.stage,             C_YELLOW),
+            line_kv("stage",     &j.stage,             C_DIM),
             line_kv("name",      &j.name,              C_WHITE),
             line_kv("duration",  &j.duration_seconds.map(|s| format!("{}s", s as u64)).unwrap_or_default(), C_DIM),
             Line::from(""),
-            Line::from(Span::styled(j.web_url.clone(), Style::default().fg(C_CYAN))),
-            Line::from(""),
-            Line::from(Span::styled("Enter → fetch log", Style::default().fg(C_SUBTLE))),
+            Line::from(Span::styled(j.web_url.clone(), Style::default().fg(bc))),
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
 
         PlatformSubTab::Releases => pv.releases.get(pv.releases_idx).map(|r| vec![
@@ -350,13 +368,13 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             line_kv("name",      &r.name,                                C_WHITE),
             line_kv("created",   &r.created_at,                         C_DIM),
             Line::from(""),
-            Line::from(Span::styled(r.web_url.clone(), Style::default().fg(C_CYAN))),
+            Line::from(Span::styled(r.web_url.clone(), Style::default().fg(bc))),
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
 
         PlatformSubTab::Packages => pv.packages.get(pv.packages_idx).map(|p| vec![
             line_kv("name",     &p.name,           C_WHITE),
             line_kv("version",  &p.version,        C_GREEN),
-            line_kv("type",     &p.package_type,   C_YELLOW),
+            line_kv("type",     &p.package_type,   C_DIM),
             line_kv("created",  &p.created_at,     C_DIM),
         ]).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
 
@@ -365,14 +383,14 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             let status_c = match r.status.as_str() {
                 "online" | "active" => C_GREEN,
                 "offline" | "stale" => C_DIM,
-                "paused"            => C_YELLOW,
+                "paused"            => C_DIM,
                 _                   => C_SUBTLE,
             };
             let mut v = vec![
-                line_kv("id",          &format!("#{}", r.id), C_CYAN),
+                line_kv("id",          &format!("#{}", r.id), bc),
                 line_kv("status",      &r.status,             status_c),
                 line_kv("description", &r.description,        C_WHITE),
-                line_kv("type",        &r.runner_type,        C_YELLOW),
+                line_kv("type",        &r.runner_type,        C_DIM),
                 line_kv("os",          &r.os,                 C_DIM),
             ];
             if !r.ip_address.is_empty() { v.push(line_kv("ip", &r.ip_address, C_DIM)); }
@@ -380,20 +398,20 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             v.push(line_kv("tags", &tags, C_DIM));
             if !r.web_url.is_empty() {
                 v.push(Line::from(""));
-                v.push(Line::from(Span::styled(r.web_url.clone(), Style::default().fg(C_CYAN))));
+                v.push(Line::from(Span::styled(r.web_url.clone(), Style::default().fg(bc))));
             }
             v
         }).unwrap_or_else(|| vec![Line::from(Span::styled("no selection", Style::default().fg(C_DIM)))]),
     };
 
-    // 0.7.26: detail panel no longer carries hints or action results.
-    // Those moved to the dedicated footer below the body so the detail
-    // can stay focused on the selected entity's data.
-    let _ = pv; // silence "unused" once the local was only for the hint
+    // 0.7.26: detail panel only carries entity data — hints and
+    // action results live in the global bottom hint (ui.rs) and the
+    // App-wide `status_msg` line, like every other view does.
+    let _ = pv;
     f.render_widget(
         Paragraph::new(body).wrap(Wrap { trim: false }).block(
             Block::default()
-                .title(Span::styled(" detail ", Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(" detail ", Style::default().fg(bc).add_modifier(Modifier::BOLD)))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
                 .border_style(Style::default().fg(bc))
@@ -409,15 +427,21 @@ fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
 
     let live = if pv.job_log_live { " ● live  " } else { "" };
     let follow = if !pv.job_log_user_scrolled { "follow" } else { "manual" };
-    let title = format!(
-        " job log — {}{}  [p] live  [o] pager  [End] follow  Esc to back ",
-        live, follow,
-    );
-    let title_style = if pv.job_log_live {
-        Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-    };
+    // Title: "job log · <live?> · <follow|manual>". Same C_WHITE bold
+    // as the rest of the focused-view titles (log.rs / branch.rs). The
+    // live indicator is a coloured prefix span, not a colour-shifted
+    // title — keeps the chrome consistent across sub-tabs.
+    let mut title_spans: Vec<Span> = vec![
+        Span::styled(" job log ", Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)),
+    ];
+    if pv.job_log_live {
+        title_spans.push(Span::styled("· ● live ", Style::default().fg(C_GREEN)));
+    }
+    title_spans.push(Span::styled(
+        format!("· {} ", follow),
+        Style::default().fg(C_DIM),
+    ));
+    let _ = live;
 
     f.render_widget(
         Paragraph::new(log)
@@ -425,70 +449,11 @@ fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
-                    .title(Span::styled(title, title_style))
+                    .title(Line::from(title_spans))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
                     .border_style(Style::default().fg(bc))
             ),
-        area,
-    );
-}
-
-/// Footer line: contextual hints on the left, filter/live indicators
-/// in the middle, last action result on the right. Two rows so the
-/// indicators have room when the terminal is narrow.
-fn render_footer(f: &mut Frame, app: &App, area: Rect) {
-    let pv = &app.platform_view;
-    let bc = app.brand_color();
-
-    let hints = match pv.sub_tab {
-        PlatformSubTab::Pipelines | PlatformSubTab::Jobs | PlatformSubTab::Runners =>
-            "  [o] ops   [f] filter   [r] remote   [p] live   [Enter] drill in",
-        PlatformSubTab::Releases | PlatformSubTab::Packages =>
-            "  [r] remote   [p] live   [Enter] drill in",
-    };
-
-    let mut indicators: Vec<Span> = Vec::new();
-    if let Some(s) = &pv.filter_status {
-        indicators.push(Span::styled(
-            format!("status:{}  ", s),
-            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    if pv.filter_branch_only {
-        indicators.push(Span::styled(
-            "branch-only  ",
-            Style::default().fg(C_CYAN).add_modifier(Modifier::BOLD),
-        ));
-    }
-    if pv.auto_refresh {
-        indicators.push(Span::styled(
-            "⟳ live  ",
-            Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let result = if pv.action_in_flight {
-        Span::styled("⏳ action in flight…", Style::default().fg(C_YELLOW))
-    } else if let Some(msg) = &pv.action_msg {
-        let color = if msg.starts_with('✓') { C_GREEN } else { C_RED };
-        Span::styled(msg.clone(), Style::default().fg(color).add_modifier(Modifier::BOLD))
-    } else {
-        Span::raw("")
-    };
-
-    let row1 = Line::from(vec![Span::styled(hints, Style::default().fg(C_SUBTLE))]);
-    let mut row2_spans: Vec<Span> = vec![Span::raw("  ")];
-    row2_spans.extend(indicators);
-    row2_spans.push(result);
-    let row2 = Line::from(row2_spans);
-
-    f.render_widget(
-        Paragraph::new(vec![row1, row2]).block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(bc)),
-        ),
         area,
     );
 }
@@ -707,11 +672,11 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
 
 fn status_color(s: &str) -> ratatui::style::Color {
     match s {
-        "success" => C_GREEN,
-        "failed"  => C_RED,
-        "running" => C_CYAN,
+        "success"  => C_GREEN,
+        "failed"   => C_RED,
+        "running"  => C_YELLOW,
+        "pending"  => C_DIM,
         "canceled" => C_DIM,
-        "pending" => C_YELLOW,
         _ => C_SUBTLE,
     }
 }
