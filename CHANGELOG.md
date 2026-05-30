@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.35] - 2026-05-30
+
+GPG signing got a thorough audit + CLI surface this release. There's
+also a TUI input bug fix that bit the Commit view — see Fixed below.
+The TUI side of the GPG work (log column, armor overlay, Config
+editor, history reauthor `--sign-all`) is queued for 0.7.36 so this
+release stays digestible.
+
+### Fixed
+
+- **GPG no longer turns off silently when a repo has a local
+  `.torii/config.toml`.** The config merge replaced `base.git` with
+  `overlay.git` wholesale, so a local file that only declared (say)
+  `default_branch = "master"` reset `sign_commits` to `false` and
+  `gpg_key` to `None`. Now the `git` section merges field-by-field:
+  `sign_commits` / `pull_rebase` are OR'd so "true in either layer
+  wins", `gpg_key` / `gpg_program` are only overridden when the
+  overlay actually carries a value. (To explicitly *disable* signing
+  for one repo, use `torii config set --local git.sign_commits
+  false`, which goes through `set` and bypasses merge.)
+- **TUI Commit view's message input no longer traps you inside.**
+  When `typing == true` and the sidebar was focused, the global
+  dispatcher delegated keys only to PR/Issue/Branch/Tag — Commit
+  (plus Snapshot/Log/History/Remote/Mirror/Workspace/Config) fell
+  through to `None`, so Esc/Enter/Backspace/arrows did nothing
+  while in the message field. All views whose `typing` predicate
+  can be true are now routed to their own handlers.
+
+### Added
+
+- **`git.gpg_program` config key** (alias: `gpg.program`). Mirrors
+  git's own setting; lets you point at `gpg2` or a vendor build
+  when `gpg` isn't the right binary. Honoured by both the existing
+  sign path and the new verify / sign-rewrite paths.
+- **`torii show --signature [target]`** — prints the commit's
+  `gpgsig` ASCII armor plus a one-line verification verdict (good /
+  unknown signer / bad / other), produced by parsing gpg's
+  `--status-fd` output.
+- **`torii log --signatures`** — adds a single-letter column to the
+  log (`G` good / `U` unknown signer / `B` bad / `?` other gpg
+  error / `N` none). Only spawns `gpg --verify` for commits that
+  actually have an armor attached, so unsigned histories stay
+  cheap.
+- **`torii save -S` / `--sign` and `--no-sign`** — per-commit
+  signing override. Implemented as a process-scoped env var
+  (`TORII_SIGN_OVERRIDE`) that the `commit_inner_split` reader
+  honours; the CLI handler installs a guard that restores the
+  previous value on drop so we don't leak into subprocess hooks.
+- **`torii sign [target] [--print-only] [-y]`** — rewrites one
+  commit, or an `A..B` range, to include a fresh `gpgsig` header.
+  Refuses to run with a dirty working tree, walks the range
+  oldest-first, and moves any local-branch tip pointing at a
+  rewritten OID onto the new signed commit. `--print-only` lets
+  you sanity-check the armor without rewriting anything.
+
+### Internal
+
+- New `util::gpg::VerifyStatus` + `verify(armor, payload, program)`
+  on top of the existing `sign_blob`. Calls `gpg --status-fd 1
+  --verify <sigfile> -` and parses GOODSIG / BADSIG / NO_PUBKEY /
+  ERRSIG to bucket the result.
+- New `util::gpg::resolve_program(opt)` — single source of truth
+  for "which gpg binary do we run", used by both `sign_blob` and
+  `verify`.
+- `repo.log(...)` gained a `signatures: bool` arg; the renderer
+  calls `vcs::core_extensions::signature_letter(repo, oid)` (also
+  new) which is what the future TUI log column will read.
+
 ## [0.7.34] - 2026-05-30
 
 ### Added

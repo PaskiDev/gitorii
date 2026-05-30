@@ -855,7 +855,19 @@ pub(crate) fn commit_inner_split(
         .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
         .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
 
-    if !tc.git.sign_commits {
+    // 0.7.35 — per-invocation override set by `torii save -S` /
+    // `--no-sign`. The CLI handler sets this env var around the
+    // commit call so we don't have to thread a `force_sign: Option<bool>`
+    // through every commit path (initial commit, amend, history
+    // rewrite, the TUI's save action, …). Returned to its prior
+    // state by the CLI guard after the commit.
+    let should_sign = match std::env::var("TORII_SIGN_OVERRIDE").ok().as_deref() {
+        Some("true")  => true,
+        Some("false") => false,
+        _             => tc.git.sign_commits,
+    };
+
+    if !should_sign {
         return Ok(repo.commit(update_ref, author, committer, message, tree, parents)?);
     }
 
@@ -874,7 +886,13 @@ pub(crate) fn commit_inner_split(
         .map_err(|e| ToriiError::InvalidConfig(format!(
             "commit buffer not valid UTF-8 (cannot GPG-sign): {}", e
         )))?;
-    let signature = crate::gpg::sign_blob(&buffer, key, None)?;
+    // 0.7.35 — honour `git.gpg_program` so users on systems where gpg
+    // is shipped as gpg2 (or under a custom path) can point at it.
+    let signature = crate::gpg::sign_blob(
+        &buffer,
+        key,
+        tc.git.gpg_program.as_deref(),
+    )?;
     let new_oid = repo.commit_signed(buffer_str, &signature, Some("gpgsig"))?;
 
     // libgit2's commit_signed leaves ref updates to the caller. Move
