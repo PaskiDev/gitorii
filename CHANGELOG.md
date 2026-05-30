@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.32] - 2026-05-30
+
+### Changed
+
+- **OAuth and rotate flows now run entirely inside the TUI.** Until
+  0.7.31 we suspended the TUI and ran `torii auth oauth|rotate <p>`
+  as a subprocess, which dropped the user into a plain terminal for
+  the browser dance. From this release, picking "OAuth re-auth" /
+  "Rotate (OAuth)" from the Auth ops menu opens a centred modal —
+  same chrome family as the `sync` status panel — that shows the
+  verification URL, the user code, and a bouncing progress bar while
+  a background worker polls the platform's token endpoint. On
+  success the modal switches to a green "token saved: <masked>" line
+  and any keystroke closes it; Esc cancels mid-flight.
+  - **Rotate (OAuth)** captures the old token before starting the
+    flow so the worker can best-effort revoke it after the new one
+    is saved (same revoke endpoint as the CLI's `auth rotate`).
+  - **Rotate as PAT (GitLab)** stays in the TUI too, but doesn't
+    need a modal — it's one HTTP call. Dispatched inline and
+    surfaced via the app-wide `status_msg`.
+- **In-process token cache is dropped after every successful in-TUI
+  OAuth/rotate.** Same fix as 0.7.31 but now baked into the worker
+  itself rather than the dispatcher, so any future caller gets the
+  invalidation for free.
+
+### Internal
+
+- New `oauth::start_device_flow(provider) -> DeviceFlowSession` +
+  `oauth::poll_device_flow(session) -> DeviceFlowStep`. The blocking
+  `run_device_flow` could be rewritten on top of these but stays as
+  the CLI entry point.
+- New `AuthFocus::OauthFlow` + `OauthFlowState` + `OauthStatus`
+  variants on `AuthState`. Worker thread emits status updates over
+  `App::auth_oauth_rx`; main loop drains them into the modal.
+- Removed `Action::AuthOauthInPager` / `AuthRotateInPager` and the
+  `run_torii_subprocess` helper from 0.7.30 — no longer needed now
+  that the flow stays in-process.
+
 ## [0.7.31] - 2026-05-30
 
 ### Fixed
