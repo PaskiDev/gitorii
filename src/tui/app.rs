@@ -984,6 +984,34 @@ pub struct BisectState {
     #[allow(dead_code)]
     pub steps_left_estimate: Option<usize>,
     pub status: Option<String>,
+
+    /// 0.7.33 — interactive ops state. Same shape as the Auth view:
+    /// `focus` says which overlay (if any) is up; `dropdown_idx` is the
+    /// selection inside the ops menu; `input_buffer` collects free-form
+    /// text (Start args, Run command); `pending_op` says what to do
+    /// with that buffer when the user hits Enter.
+    pub focus: BisectFocus,
+    pub dropdown_idx: usize,
+    pub input_buffer: String,
+    pub input_prompt: String,
+    pub pending_op: BisectPendingOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BisectFocus {
+    #[default]
+    List,
+    OpsDropdown,
+    InputArgs,
+    ConfirmReset,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum BisectPendingOp {
+    #[default]
+    None,
+    Start,
+    Run,
 }
 
 // -- Auth view -------------------------------------------------------------
