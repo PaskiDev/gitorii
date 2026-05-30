@@ -2307,6 +2307,14 @@ the rewrite. A safety snapshot is taken by default (revert with
         /// Proceed even if the working tree has uncommitted changes.
         #[arg(long)]
         allow_dirty: bool,
+
+        /// Force GPG signing of every rewritten commit, even if
+        /// `git.sign_commits` is `false`. Lets you re-sign a range
+        /// of historical commits as part of a single reauthor pass,
+        /// instead of running reauthor + `torii sign` back-to-back.
+        /// Requires `git.gpg_key` to be set.
+        #[arg(long)]
+        sign: bool,
     },
 
     /// Apply a `.mailmap` file (standard git format) across history.
@@ -3715,6 +3723,7 @@ impl Cli {
                         no_snapshot,
                         committer,
                         allow_dirty,
+                        sign,
                     } => {
                         use crate::history_reauthor;
                         let old_m = history_reauthor::OldMatcher::parse_loose(old)?;
@@ -3726,6 +3735,12 @@ impl Cli {
                             committer: *committer,
                             allow_dirty: *allow_dirty,
                         };
+                        // 0.7.36 — `--sign` forces signing through
+                        // the same env-var override used by
+                        // `torii save -S`. commit_inner_split (the
+                        // path reauthor takes) reads it and signs
+                        // every rewritten commit.
+                        let _sign_guard = SignOverrideGuard::new(if *sign { Some(true) } else { None });
                         let stats = history_reauthor::reauthor(
                             std::path::Path::new("."),
                             old_m,

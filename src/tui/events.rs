@@ -593,6 +593,19 @@ fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         }
         return None;
     }
+    // 0.7.36 — armor overlay grabs every key so the user can dismiss
+    // it without accidentally firing log-navigation keybinds.
+    if app.log.signature_overlay.is_some() {
+        // Esc / any non-modifier key closes the modal.
+        match (key.modifiers, key.code) {
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+            _ => {
+                app.log.signature_overlay = None;
+                app.log_signature_rx = None;
+            }
+        }
+        return None;
+    }
     if let Some(a) = handle_global_nav(key, app) { return Some(a); }
     match (key.modifiers, key.code) {
         (_, KeyCode::Up)     | (_, KeyCode::Char('k')) => { app.log_move_up(); app.log.ops_mode = false; }
@@ -605,6 +618,25 @@ fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             app.log.search_mode = true;
             app.log.search_query.clear();
             app.log.filtered.clear();
+        }
+        // 0.7.36 — toggle the GPG signature column. Populates the
+        // verdict cache the first time it turns on (cheap because we
+        // only run gpg --verify on the commits already loaded into
+        // the log slice, typically ≤ page_size).
+        (KeyModifiers::SHIFT, KeyCode::Char('G')) | (_, KeyCode::Char('G')) => {
+            app.log.show_signatures = !app.log.show_signatures;
+            if app.log.show_signatures {
+                app.refresh_signature_cache();
+            }
+        }
+        // 0.7.36 — open the armor overlay for the currently selected
+        // commit. Spawns a worker so the modal can render `loading…`
+        // while gpg runs.
+        (KeyModifiers::SHIFT, KeyCode::Char('S')) | (_, KeyCode::Char('S')) => {
+            if let Some(c) = app.commits.get(app.log.idx) {
+                let oid = c.full_hash.clone();
+                app.start_signature_overlay(oid);
+            }
         }
         _ => {}
     }

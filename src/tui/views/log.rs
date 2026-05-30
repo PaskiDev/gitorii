@@ -77,6 +77,26 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(color).remove_modifier(Modifier::BOLD),
             ));
         }
+        if app.log.show_signatures {
+            // Letter + colour mirror the CLI's `log --signatures`
+            // column: G good (green), U unknown (yellow), B bad
+            // (red), ? other error (subtle), N none (dim), - cached
+            // miss (subtle).
+            let letter = app.log.signature_cache
+                .get(&c.full_hash).copied().unwrap_or('…');
+            let color = match letter {
+                'G' => C_GREEN,
+                'U' => C_YELLOW,
+                'B' => C_RED,
+                '?' => C_SUBTLE,
+                'N' => C_DIM,
+                _   => C_SUBTLE,
+            };
+            spans.push(Span::styled(
+                format!("{} ", letter),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        }
         spans.push(Span::styled(format!("{} ", c.hash), Style::default().fg(C_YELLOW)));
         spans.push(Span::styled(format!("{:<width$}", msg, width = msg_width), Style::default().fg(if is_sel { C_WHITE } else { msg_color })));
         spans.push(Span::styled(format!(" {:>10}", truncate(&c.author, 10)), Style::default().fg(C_CYAN)));
@@ -181,6 +201,89 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Clear, drop_area);
         f.render_stateful_widget(List::new(drop_items).block(drop_block), drop_area, &mut drop_state);
     }
+
+    if app.log.signature_overlay.is_some() {
+        render_signature_overlay(f, app, area);
+    }
+}
+
+/// 0.7.36 — armor overlay. Centered modal showing the ASCII-armored
+/// signature of the highlighted commit + the verify verdict. Any key
+/// closes (handled in events.rs); the worker thread populates
+/// `Done` / `Error` once gpg returns.
+fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
+    use crate::tui::app::{SignatureOverlay, SignatureVerdictColor};
+    let Some(state) = app.log.signature_overlay.as_ref() else { return };
+
+    let w: u16 = 78.min(area.width.saturating_sub(4));
+    let h: u16 = 22.min(area.height.saturating_sub(2));
+    let popup = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    f.render_widget(Clear, popup);
+
+    let (title, body): (String, Vec<Line>) = match state {
+        SignatureOverlay::Loading { oid } => (
+            format!(" signature · {} · loading… ", &oid[..oid.len().min(8)]),
+            vec![
+                Line::from(Span::styled(
+                    "  ▰▱▱▱▱▱▱▱▱▱  verifying signature…",
+                    Style::default().fg(C_YELLOW),
+                )),
+            ],
+        ),
+        SignatureOverlay::Done { oid, armor, verdict, verdict_color } => {
+            let vcolor = match verdict_color {
+                SignatureVerdictColor::Good    => C_GREEN,
+                SignatureVerdictColor::Unknown => C_YELLOW,
+                SignatureVerdictColor::Bad     => C_RED,
+                SignatureVerdictColor::Other   => C_SUBTLE,
+            };
+            let mut lines: Vec<Line> = Vec::new();
+            lines.push(Line::from(vec![
+                Span::styled("  verdict   ", Style::default().fg(C_SUBTLE)),
+                Span::styled(verdict.clone(), Style::default().fg(vcolor).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(""));
+            for line in armor.lines().take((h as usize).saturating_sub(6)) {
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(C_WHITE),
+                )));
+            }
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "  [any key] close",
+                Style::default().fg(C_DIM),
+            )));
+            (format!(" signature · {} ", &oid[..oid.len().min(8)]), lines)
+        }
+        SignatureOverlay::Error { oid, message } => (
+            format!(" signature · {} ", &oid[..oid.len().min(8)]),
+            vec![
+                Line::from(vec![
+                    Span::styled("  ✗ ", Style::default().fg(C_RED)),
+                    Span::styled(message.clone(), Style::default().fg(C_WHITE)),
+                ]),
+                Line::from(""),
+                Line::from(Span::styled("  [any key] close", Style::default().fg(C_DIM))),
+            ],
+        ),
+    };
+
+    f.render_widget(
+        ratatui::widgets::Paragraph::new(body).block(
+            Block::default()
+                .title(Span::styled(title, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(C_WHITE)),
+        ),
+        popup,
+    );
 }
 
 fn file_basename(path: &str) -> String {

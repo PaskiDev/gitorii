@@ -282,6 +282,14 @@ fn run_loop(
                 }
             }
         }
+        // 0.7.36 — armor overlay worker results.
+        if let Some(rx) = &app.log_signature_rx {
+            if let Ok(overlay) = rx.try_recv() {
+                app.log.signature_overlay = Some(overlay);
+                app.log_signature_rx = None;
+            }
+        }
+
         // OAuth flow updates from the in-TUI worker (0.7.32). Drain
         // every message available this tick (Starting → Waiting →
         // Saving → Done/Error) into a local vec, then apply — keeps

@@ -145,6 +145,34 @@ pub struct LogState {
     /// Per-commit graph rows aligned with `App.commits`. Always populated in
     /// the Log view to differentiate it visually from the History view.
     pub graph_rows: Vec<crate::graph::GraphRow>,
+
+    /// 0.7.36 — toggle for the GPG signature column. Off by default
+    /// because the verify loop spawns one `gpg --verify` per commit
+    /// and that's not free. `G` flips it.
+    pub show_signatures: bool,
+    /// Cached `signature_letter` results keyed by full commit OID.
+    /// Populated lazily when the column toggles on; cleared on log
+    /// refresh so a newly-signed commit doesn't stay stale.
+    pub signature_cache: std::collections::HashMap<String, char>,
+    /// 0.7.36 — armor overlay (`S` over the selected commit). `None`
+    /// = closed; `Some(Loading)` = the worker is computing; `Some(Done)`
+    /// / `Some(Error)` = the modal stays open until any key closes it.
+    pub signature_overlay: Option<SignatureOverlay>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SignatureOverlay {
+    Loading { oid: String },
+    Done { oid: String, armor: String, verdict: String, verdict_color: SignatureVerdictColor },
+    Error { oid: String, message: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SignatureVerdictColor {
+    Good,
+    Unknown,
+    Bad,
+    Other,
 }
 
 impl Default for LogState {
@@ -162,6 +190,9 @@ impl Default for LogState {
             ops_mode: false,
             ops_idx: 0,
             graph_rows: vec![],
+            show_signatures: false,
+            signature_cache: std::collections::HashMap::new(),
+            signature_overlay: None,
         }
     }
 }
@@ -1409,6 +1440,12 @@ pub struct App {
     /// `auth_view.oauth_flow.status`.
     pub auth_oauth_rx: Option<std::sync::mpsc::Receiver<crate::tui::app::OauthStatus>>,
 
+    /// 0.7.36 — armor overlay worker. The handler kicks one off when
+    /// the user presses `S` over a signed commit; the worker extracts
+    /// the gpgsig + verifies it; the main loop pumps the result into
+    /// `log.signature_overlay`.
+    pub log_signature_rx: Option<std::sync::mpsc::Receiver<crate::tui::app::SignatureOverlay>>,
+
     pub repo_picker_open: bool,
     pub repo_picker_idx: usize,
     pub active_workspace: Option<String>, // nombre del workspace activo, None si llegó por picker/carpeta
@@ -1471,6 +1508,7 @@ impl App {
             platform_job_log_rx: None,
             platform_action_rx: None,
             auth_oauth_rx: None,
+            log_signature_rx: None,
             repo_picker_open: false,
             repo_picker_idx: 0,
             active_workspace: None,
@@ -1492,6 +1530,98 @@ impl App {
             if let Some(v) = crate::updater::check() {
                 let _ = tx.send(v);
             }
+        });
+    }
+
+    /// 0.7.36 — populate the per-commit signature cache for every
+    /// commit currently in `self.commits`. Blocks (sequential
+    /// `gpg --verify` calls) but the typical log slice is ≤ 50
+    /// commits and each verify is fast on a local keyring. Called
+    /// when the user toggles the column on so the column isn't
+    /// stuck showing `…` forever.
+    pub fn refresh_signature_cache(&mut self) {
+        let repo = match git2::Repository::open(&self.repo_path) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        for c in &self.commits {
+            if self.log.signature_cache.contains_key(&c.full_hash) {
+                continue;
+            }
+            let Ok(oid) = git2::Oid::from_str(&c.full_hash) else { continue };
+            let letter = crate::vcs::core_extensions::signature_letter(&repo, oid);
+            let ch = letter.chars().next().unwrap_or('?');
+            self.log.signature_cache.insert(c.full_hash.clone(), ch);
+        }
+    }
+
+    /// 0.7.36 — start an armor overlay worker for the given commit
+    /// OID. Mirrors the OAuth pattern: status starts at `Loading`,
+    /// the worker emits `Done` (armor + verdict) or `Error` once it
+    /// finishes. Reused by the Log view's `S` keybind.
+    pub fn start_signature_overlay(&mut self, oid_str: String) {
+        use crate::tui::app::{SignatureOverlay, SignatureVerdictColor};
+        self.log.signature_overlay = Some(SignatureOverlay::Loading { oid: oid_str.clone() });
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.log_signature_rx = Some(rx);
+
+        let repo_path = self.repo_path.clone();
+        std::thread::spawn(move || {
+            let send_err = |msg: String| {
+                let _ = tx.send(SignatureOverlay::Error {
+                    oid: oid_str.clone(),
+                    message: msg,
+                });
+            };
+
+            let repo = match git2::Repository::open(&repo_path) {
+                Ok(r) => r,
+                Err(e) => { send_err(format!("open repo: {}", e)); return; }
+            };
+            let oid = match git2::Oid::from_str(&oid_str) {
+                Ok(o) => o,
+                Err(e) => { send_err(format!("bad oid: {}", e)); return; }
+            };
+            let (sig_buf, payload_buf) = match repo.extract_signature(&oid, None) {
+                Ok(pair) => pair,
+                Err(_) => {
+                    send_err("commit has no GPG signature".to_string());
+                    return;
+                }
+            };
+            let sig_bytes: &[u8] = &sig_buf;
+            let payload: Vec<u8> = (&*payload_buf).to_vec();
+            let armor = match std::str::from_utf8(sig_bytes) {
+                Ok(s) => s.to_string(),
+                Err(e) => { send_err(format!("armor utf-8: {}", e)); return; }
+            };
+
+            let program = repo.workdir()
+                .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+                .and_then(|c| c.git.gpg_program);
+
+            let (verdict, color) = match crate::gpg::verify(&armor, &payload, program.as_deref()) {
+                Ok(crate::gpg::VerifyStatus::Good { signer }) =>
+                    (format!("✓ Good signature from {}", signer), SignatureVerdictColor::Good),
+                Ok(crate::gpg::VerifyStatus::UnknownKey { key_id }) =>
+                    (format!("? Unknown signer key {} — import to verify",
+                            key_id.as_deref().unwrap_or("?")),
+                     SignatureVerdictColor::Unknown),
+                Ok(crate::gpg::VerifyStatus::Bad) =>
+                    ("✗ BAD signature — payload does not match".to_string(),
+                     SignatureVerdictColor::Bad),
+                Ok(crate::gpg::VerifyStatus::Other(msg)) =>
+                    (msg, SignatureVerdictColor::Other),
+                Err(e) =>
+                    (format!("verify error: {}", e), SignatureVerdictColor::Other),
+            };
+
+            let _ = tx.send(SignatureOverlay::Done {
+                oid: oid_str,
+                armor,
+                verdict,
+                verdict_color: color,
+            });
         });
     }
 
@@ -2702,6 +2832,8 @@ impl App {
             "user.editor",
             "git.default_branch",
             "git.sign_commits",
+            "git.gpg_key",
+            "git.gpg_program",
             "git.pull_rebase",
             "mirror.default_protocol",
             "mirror.autofetch_enabled",
