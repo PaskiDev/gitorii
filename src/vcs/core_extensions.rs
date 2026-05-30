@@ -1305,7 +1305,7 @@ impl GitRepo {
 /// raw signed payload; we hand them to `crate::gpg::verify` and bucket
 /// the result. Verifies against the local keyring, so an unfamiliar
 /// signer shows as `U` (unknown), not `B` (bad).
-pub(super) fn signature_letter(repo: &git2::Repository, oid: git2::Oid) -> &'static str {
+pub fn signature_letter(repo: &git2::Repository, oid: git2::Oid) -> &'static str {
     let (sig_buf, payload_buf) = match repo.extract_signature(&oid, None) {
         Ok(pair) => pair,
         Err(_)   => return "N",

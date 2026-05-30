@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.36] - 2026-05-31
+
+The TUI side of the GPG work from 0.7.35 — column, armor overlay,
+Config-view editing, and a `--sign` flag on `history reauthor` so a
+single command does both jobs.
+
+### Added
+
+- **TUI Log view — GPG signature column**. `G` toggles a one-letter
+  column ahead of the hash with the same vocabulary as
+  `torii log --signatures` (`G` good = green, `U` unknown signer =
+  yellow, `B` bad = red, `?` other error = subtle, `N` none = dim).
+  Populates a per-OID cache the first time the column turns on so
+  scrolling doesn't re-run `gpg --verify`. Cache is keyed on the
+  full hash, kept across navigation, and re-populated when the user
+  toggles off and on again.
+- **TUI Log view — armor overlay**. `S` over the selected commit
+  opens a centred modal that spawns a background worker (so the
+  modal renders `loading…` while `gpg --verify` does its thing),
+  then switches to the full ASCII-armored signature + the
+  verification verdict in the same colours as the column. Any key
+  closes; Ctrl-C still quits.
+- **`torii history reauthor --sign`** — force GPG signing of every
+  rewritten commit, regardless of `git.sign_commits`. Lets you do
+  reauthor + re-sign in one pass instead of chaining
+  `reauthor` + `torii sign A..B`. Requires `git.gpg_key` like the
+  other signing paths.
+- **`git.gpg_key` and `git.gpg_program` shown + editable in the
+  Config view**. They were already round-trippable through the
+  config layer; they just weren't in the TUI's `ALL_KEYS` list.
+  Now they show alongside `git.sign_commits` with the existing
+  in-view edit flow.
+
+### Internal
+
+- `LogState` gained `show_signatures: bool`, `signature_cache`
+  (`HashMap<String, char>`), and `signature_overlay:
+  Option<SignatureOverlay>`. New `SignatureOverlay` enum
+  (`Loading` / `Done` / `Error`) plus `SignatureVerdictColor` for
+  the modal's verdict line.
+- New `App::refresh_signature_cache` (sequential verify across the
+  loaded log slice) and `App::start_signature_overlay`
+  (background worker via a fresh `mpsc::Receiver`).
+- Main loop drains `log_signature_rx` each tick into the modal
+  state, same pattern as the OAuth modal.
+- `vcs::core_extensions::signature_letter` promoted from
+  `pub(super)` to `pub` so the TUI helpers can reuse it without a
+  copy-pasted verify pipeline.
+
 ## [0.7.35] - 2026-05-30
 
 GPG signing got a thorough audit + CLI surface this release. There's
