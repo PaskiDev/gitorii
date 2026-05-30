@@ -1081,12 +1081,11 @@ pub struct PlatformState {
     pub loading: bool,
     pub error: Option<String>,
 
-    /// 0.7.24 — feedback for contextual actions (cancel/retry/artifacts).
-    /// `action_msg` is shown in the detail panel; `action_msg_at` is used
-    /// to expire it after a few seconds so the UI doesn't linger on a
-    /// stale "✅ pipeline canceled" forever.
-    pub action_msg: Option<String>,
-    pub action_msg_at: Option<std::time::Instant>,
+    /// 0.7.24 — gate for contextual actions. While true, ops keys are
+    /// ignored so the user can't fire five retries by mashing Enter.
+    /// 0.7.27: the result/feedback no longer lives here — it goes to the
+    /// app-wide `status_msg` (the single source of "what just happened")
+    /// and to the event log, like every other view does.
     pub action_in_flight: bool,
 
     /// 0.7.24 — auto-refresh of the active list while in List focus.
@@ -1144,8 +1143,6 @@ impl Default for PlatformState {
             job_log_scroll: 0,
             loading: false,
             error: None,
-            action_msg: None,
-            action_msg_at: None,
             action_in_flight: false,
             auto_refresh: false,
             last_poll_at: None,
@@ -2645,15 +2642,13 @@ impl App {
             + Send + 'static,
     {
         let Some((platform, owner, repo)) = self.resolve_platform_target() else {
-            self.platform_view.action_msg = Some("✗ no remote/platform resolved".into());
-            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            self.set_status("✗ no remote/platform resolved");
             return;
         };
         let client = match crate::runner::get_runner_client(&platform) {
             Ok(c) => c,
             Err(e) => {
-                self.platform_view.action_msg = Some(format!("✗ {}", e));
-                self.platform_view.action_msg_at = Some(std::time::Instant::now());
+                self.set_status(format!("✗ {}", e));
                 return;
             }
         };
@@ -2892,16 +2887,13 @@ impl App {
             + Send + 'static,
     {
         let Some((platform, owner, repo)) = self.resolve_platform_target() else {
-            self.platform_view.action_msg =
-                Some("✗ no remote/platform resolved".into());
-            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            self.set_status("✗ no remote/platform resolved");
             return;
         };
         let client = match crate::pipeline::get_pipeline_client(&platform) {
             Ok(c) => c,
             Err(e) => {
-                self.platform_view.action_msg = Some(format!("✗ {}", e));
-                self.platform_view.action_msg_at = Some(std::time::Instant::now());
+                self.set_status(format!("✗ {}", e));
                 return;
             }
         };
@@ -2956,9 +2948,7 @@ impl App {
         // if they've used the non-TUI command before).
         let out_dir = std::path::PathBuf::from(&self.repo_path).join("artifacts");
         if let Err(e) = std::fs::create_dir_all(&out_dir) {
-            self.platform_view.action_msg =
-                Some(format!("✗ mkdir {}: {}", out_dir.display(), e));
-            self.platform_view.action_msg_at = Some(std::time::Instant::now());
+            self.set_status(format!("✗ mkdir {}: {}", out_dir.display(), e));
             return;
         }
         let out_path = out_dir.join(format!("job-{}.zip", id));

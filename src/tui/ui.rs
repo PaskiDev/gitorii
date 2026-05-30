@@ -1113,6 +1113,51 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::styled("[s]", Style::default().fg(bc)),
             Span::styled(" save", Style::default().fg(C_SUBTLE)),
         ]),
+        View::Platform => {
+            use crate::tui::app::PlatformFocus;
+            match app.platform_view.focus {
+                // Inside a dropdown / popup: navigate + enter to apply.
+                PlatformFocus::RemotePopup
+                | PlatformFocus::OpsDropdown
+                | PlatformFocus::FilterDropdown => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" apply  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                ]),
+                // Inside the job log scrollback.
+                PlatformFocus::JobLog => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" scroll  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[End]", Style::default().fg(bc)),
+                    Span::styled(" follow  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[p]", Style::default().fg(bc)),
+                    Span::styled(" live  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[o]", Style::default().fg(bc)),
+                    Span::styled(" pager  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" back", Style::default().fg(C_SUBTLE)),
+                ]),
+                // Browsing a sub-tab list.
+                PlatformFocus::List | PlatformFocus::JobsOfPipeline => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[o]", Style::default().fg(bc)),
+                    Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[f]", Style::default().fg(bc)),
+                    Span::styled(" filter  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[r]", Style::default().fg(bc)),
+                    Span::styled(" remote  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[p]", Style::default().fg(bc)),
+                    Span::styled(" live  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" drill", Style::default().fg(C_SUBTLE)),
+                ]),
+            }
+        }
         _ => Line::from(""),
     };
 

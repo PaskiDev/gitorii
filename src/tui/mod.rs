@@ -284,37 +284,35 @@ fn run_loop(
         }
         // Contextual actions (cancel/retry/artifacts/runner ops). On any
         // result we refresh the active sub-tab so the new status shows up
-        // without the user having to press Ctrl-R. Runner reset-token is
-        // the one path that returns sensitive payload (the new auth
-        // token) — we strip it from the status bar and push it to the
-        // event log so it's discoverable without leaking into UI chrome.
+        // without the user having to press Ctrl-R. Every result also lands
+        // in the event log (`e`) — that's the canonical "app-wide history
+        // of things that happened" surface, same as workspace sync / mirror
+        // sync use. Runner reset-token additionally carries a credential
+        // we strip out before showing the headline so it lives only in the
+        // event log, not in any UI chrome.
         if let Some(rx) = &app.platform_action_rx {
             if let Ok(result) = rx.try_recv() {
                 app.platform_action_rx = None;
                 app.platform_view.action_in_flight = false;
-                let mut msg = match result {
-                    Ok(m) => m,
-                    Err(e) => e,
+                let (msg, ok) = match result {
+                    Ok(m)  => (m, true),
+                    Err(e) => (e, false),
                 };
-                if let Some(idx) = msg.find("|token=") {
+                let headline = if let Some(idx) = msg.find("|token=") {
                     let (visible, payload) = msg.split_at(idx);
                     let token = payload.trim_start_matches("|token=");
                     app.log_event(
                         &format!("runner reset-token → new value: {}", token),
                         EventKind::Success,
                     );
-                    msg = format!("{} — open event log [e] for value", visible);
-                }
-                app.platform_view.action_msg = Some(msg);
-                app.platform_view.action_msg_at = Some(std::time::Instant::now());
+                    format!("{} — open event log [e] for value", visible)
+                } else {
+                    msg.clone()
+                };
+                let kind = if ok { EventKind::Success } else { EventKind::Error };
+                app.log_event(&headline, kind);
+                app.set_status(headline);
                 app.load_platform_active_sub_tab();
-            }
-        }
-        // Expire stale action messages after 5s so they don't linger.
-        if let Some(at) = app.platform_view.action_msg_at {
-            if at.elapsed() > std::time::Duration::from_secs(5) {
-                app.platform_view.action_msg = None;
-                app.platform_view.action_msg_at = None;
             }
         }
         // Auto-refresh tick: when enabled and we're on the Platform view,
@@ -1467,8 +1465,7 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
     let log = match app.platform_view.job_log.clone() {
         Some(l) if !l.is_empty() => l,
         _ => {
-            app.platform_view.action_msg = Some("✗ no log to open".into());
-            app.platform_view.action_msg_at = Some(std::time::Instant::now());
+            app.set_status("✗ no log to open");
             return;
         }
     };
@@ -1481,8 +1478,7 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
         .unwrap_or(0);
     path.push(format!("torii-joblog-{}.txt", stamp));
     if let Err(e) = std::fs::write(&path, &log) {
-        app.platform_view.action_msg = Some(format!("✗ tempfile: {}", e));
-        app.platform_view.action_msg_at = Some(std::time::Instant::now());
+        app.set_status(format!("✗ tempfile: {}", e));
         return;
     }
 
@@ -1505,17 +1501,10 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
     let _ = terminal.clear();
 
     match status {
-        Ok(s) if s.success() => {
-            app.platform_view.action_msg = Some(format!("✓ pager exited"));
-        }
-        Ok(s) => {
-            app.platform_view.action_msg = Some(format!("✗ pager exit {}", s));
-        }
-        Err(e) => {
-            app.platform_view.action_msg = Some(format!("✗ pager `{}`: {}", pager, e));
-        }
+        Ok(s) if s.success() => app.set_status("✓ pager exited"),
+        Ok(s)                => app.set_status(format!("✗ pager exit {}", s)),
+        Err(e)               => app.set_status(format!("✗ pager `{}`: {}", pager, e)),
     }
-    app.platform_view.action_msg_at = Some(std::time::Instant::now());
 
     // The tempfile lives until the OS cleans /tmp — leaving it lets the
     // user re-open it from another terminal while debugging.
