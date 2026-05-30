@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.31] - 2026-05-30
+
+### Fixed
+
+- **TUI re-auth no longer leaves the parent process serving the old
+  token.** 0.7.30 added the in-TUI OAuth / rotate flow by spawning
+  `torii auth oauth|rotate` as a subprocess. The child wrote the new
+  value to `auth.toml` and invalidated **its own** in-process token
+  cache (0.7.22), but the parent TUI's cache was untouched — so every
+  subsequent `pipeline list` / `pr list` / `issue list` kept handing
+  the now-revoked token to the platform and getting 401 back. Added
+  a public `auth::drop_token_cache()` that the TUI calls on return
+  from the subprocess; the next `resolve_token` re-reads `auth.toml`
+  and picks up the fresh value.
+
 ## [0.7.30] - 2026-05-30
 
 ### Added

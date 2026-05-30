@@ -351,6 +351,16 @@ fn invalidate_token_cache() {
     }
 }
 
+/// Public variant used by callers that mutated `auth.toml` out-of-band
+/// (e.g. the TUI's auth ops spawn a child process via `torii auth
+/// oauth …` — the child invalidates its own cache when it calls
+/// `set_token`, but the parent TUI has no way of knowing that
+/// without an explicit cue). Call this after any operation that
+/// could have changed a token outside this process.
+pub fn drop_token_cache() {
+    invalidate_token_cache();
+}
+
 /// `repo_path` is the path to the repo (`.` is usually fine); pass it
 /// even when you don't expect a local override, the local lookup is
 /// cheap when the file doesn't exist.
