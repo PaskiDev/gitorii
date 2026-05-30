@@ -16,6 +16,7 @@ impl GitRepo {
         until: Option<&str>,
         grep: Option<&str>,
         stat: bool,
+        signatures: bool,
     ) -> Result<()> {
         if graph {
             return self.log_graph(count.unwrap_or(50), true);
@@ -76,12 +77,31 @@ impl GitRepo {
                 }
             }
 
+            // 0.7.35: compute a single-letter signature status when
+            // the caller asked for it (G=good, U=unknown, B=bad,
+            // N=none). Pure presentation — we still iterate every
+            // commit but only spawn `gpg --verify` when there's an
+            // armor attached, so unsigned histories stay cheap.
+            let sig_letter: Option<&'static str> = if signatures {
+                Some(signature_letter(self.repository(), oid))
+            } else {
+                None
+            };
+
             if oneline {
                 let short_id = &oid.to_string()[..7];
                 let message = commit.message().unwrap_or("<no message>").lines().next().unwrap_or("");
-                println!("  {} {}", short_id, message);
+                if let Some(l) = sig_letter {
+                    println!("  {} {} {}", l, short_id, message);
+                } else {
+                    println!("  {} {}", short_id, message);
+                }
             } else {
-                println!("  commit {}", oid);
+                if let Some(l) = sig_letter {
+                    println!("  commit {} [{}]", oid, l);
+                } else {
+                    println!("  commit {}", oid);
+                }
                 if let Some(author_name) = commit.author().name() {
                     println!("  Author: {}", author_name);
                 }
@@ -1277,6 +1297,35 @@ impl GitRepo {
         }
 
         Ok(())
+    }
+}
+
+/// 0.7.35 — one-letter signature verdict for `log --signatures`.
+/// libgit2's `commit_extract_signature` returns both the armor and the
+/// raw signed payload; we hand them to `crate::gpg::verify` and bucket
+/// the result. Verifies against the local keyring, so an unfamiliar
+/// signer shows as `U` (unknown), not `B` (bad).
+pub(super) fn signature_letter(repo: &git2::Repository, oid: git2::Oid) -> &'static str {
+    let (sig_buf, payload_buf) = match repo.extract_signature(&oid, None) {
+        Ok(pair) => pair,
+        Err(_)   => return "N",
+    };
+    let sig_bytes: &[u8] = &sig_buf;
+    let payload: Vec<u8> = (&*payload_buf).to_vec();
+    let armor = match std::str::from_utf8(sig_bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => return "B",
+    };
+
+    let program = repo.workdir()
+        .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+        .and_then(|c| c.git.gpg_program);
+
+    match crate::gpg::verify(&armor, &payload, program.as_deref()) {
+        Ok(crate::gpg::VerifyStatus::Good { .. })          => "G",
+        Ok(crate::gpg::VerifyStatus::UnknownKey { .. })    => "U",
+        Ok(crate::gpg::VerifyStatus::Bad)                  => "B",
+        Ok(crate::gpg::VerifyStatus::Other(_)) | Err(_)    => "?",
     }
 }
 

@@ -185,11 +185,27 @@ impl EventHandler {
                         || (key.modifiers == KeyModifiers::CONTROL && key.code == KeyCode::Char('c'));
                     // when typing in an overlay, block sidebar nav entirely
                     if typing {
+                        // 0.7.35 bugfix — Commit/Snapshot/Log/Config
+                        // were missing from this delegation. Their text
+                        // inputs absorbed Char events through the
+                        // sidebar-focused path below, but Esc / Enter /
+                        // Backspace / arrows fell through to None and
+                        // the user was stuck inside the field with no
+                        // way to confirm or cancel. Now every view
+                        // whose `typing` predicate above can return
+                        // true is delegated here too.
                         return Ok(match app.view {
+                            View::Commit    => handle_commit(key, app),
                             View::Pr        => handle_pr(key, app),
                             View::Issue     => handle_issue(key, app),
                             View::Branch    => handle_branch(key, app),
                             View::Tag       => handle_tag(key, app),
+                            View::Snapshot  => handle_snapshot(key, app),
+                            View::Log       => handle_log(key, app),
+                            View::History   => handle_history(key, app),
+                            View::Remote | View::Mirror => handle_remote(key, app),
+                            View::Workspace => handle_workspace(key, app),
+                            View::Config    => handle_config(key, app),
                             _ => None,
                         });
                     }

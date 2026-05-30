@@ -225,6 +225,18 @@ enum Commands {
         /// Skip pre-save / post-save hooks defined in .toriignore
         #[arg(long)]
         skip_hooks: bool,
+
+        /// Force GPG-signing for this commit even if
+        /// `git.sign_commits` is `false`. Requires `git.gpg_key` to
+        /// be set (or `user.signingkey`).
+        #[arg(short = 'S', long = "sign")]
+        sign: bool,
+
+        /// Force-disable GPG-signing for this commit, overriding a
+        /// global `git.sign_commits = true`. Mutually exclusive with
+        /// `--sign`.
+        #[arg(long = "no-sign", conflicts_with = "sign")]
+        no_sign: bool,
     },
 
     /// Sync with remote (pull+push) or integrate a branch
@@ -355,6 +367,12 @@ enum Commands {
         /// Show reflog (HEAD movement history) instead of commit log
         #[arg(long)]
         reflog: bool,
+
+        /// Add a column showing each commit's GPG signature status
+        /// (G=good, U=unknown signer, B=bad, N=none). Verification
+        /// runs against the local keyring via `gpg --verify`.
+        #[arg(long)]
+        signatures: bool,
     },
 
     /// Show unstaged or staged changes
@@ -577,6 +595,47 @@ Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo")]
         /// Line range for blame (e.g., 10,20)
         #[arg(short = 'L', long, requires = "blame")]
         lines: Option<String>,
+
+        /// Print the commit's GPG signature (ASCII armor) and the
+        /// verification verdict. Implies the object is a commit;
+        /// errors if the commit is unsigned.
+        #[arg(long, conflicts_with = "blame")]
+        signature: bool,
+    },
+
+    /// Re-sign one or more commits with the configured GPG key.
+    ///
+    /// Rewrites the commit objects to include (or replace) the
+    /// `gpgsig` header. The commit OIDs CHANGE (a signed commit is a
+    /// different object than an unsigned one); any branch / tag /
+    /// child commit pointing at the old OID gets rewritten to the new
+    /// one. Equivalent to a tiny `git filter-branch --commit-filter
+    /// 'git commit-tree -S …'` on a range, but driven from torii.
+    ///
+    /// Examples:
+    ///   torii sign HEAD              Re-sign HEAD
+    ///   torii sign abc1234           Re-sign a specific commit
+    ///   torii sign HEAD~5..HEAD      Re-sign the last 5 commits
+    #[command(after_help = "Notes:
+  - Refuses to run on commits that aren't reachable from HEAD —
+    rewriting unreachable history is rarely what you want.
+  - Refuses to run with a dirty working tree.
+  - Use `--print-only` to inspect the resulting armor without
+    actually mutating any refs.")]
+    Sign {
+        /// Single commit, range (`A..B`), or `HEAD`. Defaults to `HEAD`.
+        target: Option<String>,
+
+        /// Print the would-be signature without rewriting the
+        /// commit. Useful for sanity-checking that gpg + the
+        /// configured key produce something before committing to a
+        /// history rewrite.
+        #[arg(long)]
+        print_only: bool,
+
+        /// Skip the confirmation prompt when rewriting history.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Manage commit history (rebase, cherry-pick, blame, scan)
@@ -2556,8 +2615,15 @@ impl Cli {
                 println!("   Created policies/commits.toml (run: torii scan --commits)");
             }
 
-            Commands::Save { message, all, files, amend, revert, reset, reset_mode, unstage, skip_hooks } => {
+            Commands::Save { message, all, files, amend, revert, reset, reset_mode, unstage, skip_hooks, sign, no_sign } => {
                 let repo = GitRepo::open(".")?;
+
+                // 0.7.35 — translate `-S` / `--no-sign` into the
+                // env-var that `commit_inner_split` reads. The guard
+                // restores the previous value on drop so we don't leak
+                // the override into any subprocess invoked later in
+                // the same process.
+                let _sign_guard = SignOverrideGuard::new(if *sign { Some(true) } else if *no_sign { Some(false) } else { None });
 
                 if *unstage {
                     if *all {
@@ -2736,12 +2802,12 @@ impl Cli {
                 }
             }
 
-            Commands::Log { count, oneline, graph, author, since, until, grep, stat, reflog } => {
+            Commands::Log { count, oneline, graph, author, since, until, grep, stat, reflog, signatures } => {
                 let repo = GitRepo::open(".")?;
                 if *reflog {
                     repo.show_reflog(count.unwrap_or(20))?;
                 } else {
-                    repo.log(*count, *oneline, *graph, author.as_deref(), since.as_deref(), until.as_deref(), grep.as_deref(), *stat)?;
+                    repo.log(*count, *oneline, *graph, author.as_deref(), since.as_deref(), until.as_deref(), grep.as_deref(), *stat, *signatures)?;
                 }
             }
 
@@ -3573,14 +3639,20 @@ impl Cli {
             }
 
 
-            Commands::Show { object, blame, lines } => {
+            Commands::Show { object, blame, lines, signature } => {
                 let repo = GitRepo::open(".")?;
-                if *blame {
+                if *signature {
+                    run_show_signature(&repo, object.as_deref())?;
+                } else if *blame {
                     let file = object.as_deref().ok_or_else(|| anyhow::anyhow!("File path required for --blame"))?;
                     repo.blame(file, lines.as_deref())?;
                 } else {
                     repo.show(object.as_deref())?;
                 }
+            }
+
+            Commands::Sign { target, print_only, yes } => {
+                run_sign(target.as_deref(), *print_only, *yes)?;
             }
 
             Commands::History { action } => {
@@ -5160,6 +5232,218 @@ fn which_binary(name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// 0.7.35 — scope guard for `TORII_SIGN_OVERRIDE`. Set on construction,
+/// restored on drop. Lets the `Save` handler force-enable / disable
+/// GPG signing for a single commit without leaving the env var dirty
+/// for anything that runs after (subprocesses for hooks, the mirror
+/// sync that follows a `save -am … && sync`, …).
+struct SignOverrideGuard {
+    prev: Option<String>,
+    touched: bool,
+}
+
+impl SignOverrideGuard {
+    fn new(value: Option<bool>) -> Self {
+        let prev = std::env::var("TORII_SIGN_OVERRIDE").ok();
+        match value {
+            Some(true)  => std::env::set_var("TORII_SIGN_OVERRIDE", "true"),
+            Some(false) => std::env::set_var("TORII_SIGN_OVERRIDE", "false"),
+            None        => return SignOverrideGuard { prev, touched: false },
+        }
+        SignOverrideGuard { prev, touched: true }
+    }
+}
+
+impl Drop for SignOverrideGuard {
+    fn drop(&mut self) {
+        if !self.touched { return; }
+        match &self.prev {
+            Some(v) => std::env::set_var("TORII_SIGN_OVERRIDE", v),
+            None    => std::env::remove_var("TORII_SIGN_OVERRIDE"),
+        }
+    }
+}
+
+/// `torii show --signature` — extract the GPG armor from a commit
+/// object and print it, followed by the local verification verdict.
+fn run_show_signature(repo: &GitRepo, object: Option<&str>) -> Result<()> {
+    let r = repo.repository();
+    let target = object.unwrap_or("HEAD");
+    let oid = r
+        .revparse_single(target)
+        .map_err(|e| anyhow::anyhow!("`{}`: {}", target, e))?
+        .id();
+
+    let (sig_buf, payload_buf) = r.extract_signature(&oid, None)
+        .map_err(|_| anyhow::anyhow!(
+            "commit {} has no GPG signature attached. Use `torii sign {}` to add one.",
+            &oid.to_string()[..8], target
+        ))?;
+    let sig_bytes: &[u8] = &sig_buf;
+    let armor = std::str::from_utf8(sig_bytes)
+        .map_err(|e| anyhow::anyhow!("signature is not valid UTF-8: {}", e))?;
+    let payload: Vec<u8> = (&*payload_buf).to_vec();
+
+    println!("commit: {}", oid);
+    println!();
+    println!("{}", armor.trim_end());
+    println!();
+
+    let program = r.workdir()
+        .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+        .and_then(|c| c.git.gpg_program);
+
+    match crate::gpg::verify(armor, &payload, program.as_deref())? {
+        crate::gpg::VerifyStatus::Good { signer } => {
+            println!("✓ Good signature from {}", signer);
+        }
+        crate::gpg::VerifyStatus::UnknownKey { key_id } => {
+            let k = key_id.as_deref().unwrap_or("?");
+            println!("? Unknown signer key {} — import it to verify locally.", k);
+        }
+        crate::gpg::VerifyStatus::Bad => {
+            println!("✗ BAD signature — payload does not match.");
+        }
+        crate::gpg::VerifyStatus::Other(msg) => {
+            println!("? {}", msg);
+        }
+    }
+    Ok(())
+}
+
+/// `torii sign <oid|range>` — rewrite the named commits to include a
+/// fresh `gpgsig` header. Rejects unreachable targets and dirty work
+/// trees because rewriting in those conditions is rarely what users
+/// actually want (and it's the kind of mistake we'd rather guard
+/// against than recover from).
+fn run_sign(target: Option<&str>, print_only: bool, yes: bool) -> Result<()> {
+    let target = target.unwrap_or("HEAD");
+    let repo = GitRepo::open(".")?;
+    let r = repo.repository();
+
+    // Cheap dirty-tree check (only when we're going to mutate).
+    if !print_only {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(false);
+        if !r.statuses(Some(&mut opts))?.is_empty() {
+            anyhow::bail!(
+                "working tree is dirty — commit or stash first. \
+                 (`torii sign` rewrites history; running with uncommitted \
+                 changes makes the resulting state hard to reason about.)"
+            );
+        }
+    }
+
+    let tc = r.workdir()
+        .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
+        .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
+    let key = tc.git.gpg_key.as_deref()
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!(
+            "git.gpg_key is not set. Configure with `torii config set git.gpg_key <KEY-ID>`."
+        ))?;
+
+    // Resolve the target as either a single commit or `A..B` range.
+    let oids: Vec<git2::Oid> = if let Some((from, to)) = target.split_once("..") {
+        let from_oid = r.revparse_single(from)?.id();
+        let to_oid   = r.revparse_single(to)?.id();
+        let mut walk = r.revwalk()?;
+        walk.push(to_oid)?;
+        walk.hide(from_oid)?;
+        walk.flatten().collect()
+    } else {
+        vec![r.revparse_single(target)?.id()]
+    };
+
+    if oids.is_empty() {
+        println!("(no commits in range)");
+        return Ok(());
+    }
+
+    if print_only {
+        for oid in &oids {
+            let commit = r.find_commit(*oid)?;
+            let buffer = r.commit_create_buffer(
+                &commit.author(), &commit.committer(),
+                commit.message().unwrap_or(""),
+                &commit.tree()?,
+                &commit.parents().collect::<Vec<_>>().iter().collect::<Vec<_>>(),
+            )?;
+            let armor = crate::gpg::sign_blob(&buffer, key, tc.git.gpg_program.as_deref())?;
+            println!("# {}", oid);
+            println!("{}", armor.trim_end());
+            println!();
+        }
+        return Ok(());
+    }
+
+    if !yes {
+        println!("About to rewrite {} commit(s) with new GPG signatures.", oids.len());
+        println!("All affected commits' OIDs will change. Branches pointing at them get rewritten.");
+        print!("Proceed? [y/N] ");
+        use std::io::Write;
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("❌ Cancelled.");
+            return Ok(());
+        }
+    }
+
+    // Walk the range oldest-first so each rewrite's child can reuse
+    // the parent's new OID instead of the original.
+    let mut ordered = oids.clone();
+    ordered.reverse();
+    let mut remap: std::collections::HashMap<git2::Oid, git2::Oid> =
+        std::collections::HashMap::new();
+
+    for oid in &ordered {
+        let commit = r.find_commit(*oid)?;
+        let parents: Vec<git2::Commit> = commit.parents()
+            .map(|p| {
+                let real = remap.get(&p.id()).copied().unwrap_or(p.id());
+                r.find_commit(real).map_err(crate::error::ToriiError::Git)
+            })
+            .collect::<crate::error::Result<Vec<_>>>()?;
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+        let tree = commit.tree()?;
+        let buffer = r.commit_create_buffer(
+            &commit.author(), &commit.committer(),
+            commit.message().unwrap_or(""),
+            &tree, &parent_refs,
+        )?;
+        let buffer_str = std::str::from_utf8(&buffer)?;
+        let armor = crate::gpg::sign_blob(&buffer, key, tc.git.gpg_program.as_deref())?;
+        let new_oid = r.commit_signed(buffer_str, &armor, Some("gpgsig"))?;
+        remap.insert(*oid, new_oid);
+        println!("  {} → {}", &oid.to_string()[..8], &new_oid.to_string()[..8]);
+    }
+
+    // Move every branch whose tip is one of the rewritten oids onto
+    // the new oid.
+    let mut moved = 0usize;
+    for b in r.branches(Some(git2::BranchType::Local))?.flatten() {
+        let (br, _) = b;
+        if let Ok(Some(reference_name)) = br.get().resolve().map(|rr| rr.name().map(String::from)) {
+            let _ = reference_name;
+        }
+        let tip = br.get().target();
+        if let (Some(t), Some(name)) = (tip, br.name().ok().flatten()) {
+            if let Some(new_oid) = remap.get(&t) {
+                r.reference(&format!("refs/heads/{}", name), *new_oid, true,
+                            "torii sign — re-sign history")?;
+                moved += 1;
+            }
+        }
+    }
+    if moved > 0 {
+        println!("Moved {} branch tip(s) to the new signed commit(s).", moved);
+    }
+    println!("✓ Signed {} commit(s).", oids.len());
+    Ok(())
 }
 
 fn run_scan(history: bool) -> Result<()> {

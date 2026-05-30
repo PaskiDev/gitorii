@@ -146,13 +146,19 @@ pub struct MirrorConfig {
 pub struct GitConfig {
     /// Default branch name for new repos
     pub default_branch: String,
-    
+
     /// Auto-sign commits with GPG
     pub sign_commits: bool,
-    
+
     /// GPG key ID
     pub gpg_key: Option<String>,
-    
+
+    /// 0.7.35 — Binary used to invoke GPG. Defaults to `gpg`; set this
+    /// when your distro ships GPG as `gpg2` or you have a vendor-built
+    /// install at a different path. Mirrors git's `gpg.program`.
+    #[serde(default)]
+    pub gpg_program: Option<String>,
+
     /// Always use rebase instead of merge for pulls
     pub pull_rebase: bool,
 }
@@ -195,6 +201,7 @@ impl Default for ToriiConfig {
                 default_branch: "main".to_string(),
                 sign_commits: false,
                 gpg_key: None,
+                gpg_program: None,
                 pull_rebase: false,
             },
             ui: UiConfig {
@@ -296,8 +303,33 @@ impl ToriiConfig {
         // Mirror config
         base.mirror = overlay.mirror;
         
-        // Git config
-        base.git = overlay.git;
+        // Git config — 0.7.35 fix: merge field-by-field instead of a
+        // wholesale replace. With the old `base.git = overlay.git` line,
+        // a local `.torii/config.toml` that only declared (say)
+        // `default_branch = "master"` would reset `sign_commits` to
+        // `false` and `gpg_key` to `None` because the deserialized
+        // local config carries the *struct defaults* for the unset
+        // fields. Result: GPG signing silently turning off whenever
+        // the user had any local git override. Now we only let the
+        // overlay override the fields the user actually meant to set:
+        // strings/options only if non-empty/Some, bool only when the
+        // local file literally writes the key.
+        //
+        // Bool fields are still tricky because TOML doesn't tell us
+        // "unset vs false". We pragmatically OR them — `true` in
+        // either layer wins. That matches the historical "set in
+        // global, keep in local" expectation for `sign_commits` and
+        // `pull_rebase`. If a user genuinely wants to *disable*
+        // signing locally they can `torii config set --local
+        // git.sign_commits false`, which goes through the explicit
+        // `set` path that doesn't traverse merge logic.
+        if !overlay.git.default_branch.is_empty() && overlay.git.default_branch != "main" {
+            base.git.default_branch = overlay.git.default_branch;
+        }
+        base.git.sign_commits = base.git.sign_commits || overlay.git.sign_commits;
+        if overlay.git.gpg_key.is_some()     { base.git.gpg_key     = overlay.git.gpg_key; }
+        if overlay.git.gpg_program.is_some() { base.git.gpg_program = overlay.git.gpg_program; }
+        base.git.pull_rebase = base.git.pull_rebase || overlay.git.pull_rebase;
 
         // UI config
         base.ui = overlay.ui;
@@ -336,6 +368,9 @@ impl ToriiConfig {
             ("git", "default_branch") => Some(self.git.default_branch.clone()),
             ("git", "sign_commits") => Some(self.git.sign_commits.to_string()),
             ("git", "gpg_key") => self.git.gpg_key.clone(),
+            ("git", "gpg_program") => self.git.gpg_program.clone(),
+            // git-friendly alias for the gpg.program key git itself uses.
+            ("gpg", "program") => self.git.gpg_program.clone(),
             // 0.7.14: git-friendly alias. Mirrors how git stores it.
             ("user", "signingkey") => self.git.gpg_key.clone(),
             ("commit", "gpgsign") => Some(self.git.sign_commits.to_string()),
@@ -408,9 +443,12 @@ impl ToriiConfig {
                     .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
             }
             ("git", "gpg_key") => self.git.gpg_key = Some(value.to_string()),
+            ("git", "gpg_program") => self.git.gpg_program = Some(value.to_string()),
             // 0.7.14: git-friendly aliases that map to git.gpg_key /
-            // git.sign_commits respectively. Either name works.
+            // git.sign_commits respectively. 0.7.35 adds gpg.program.
+            // Either name works.
             ("user", "signingkey") => self.git.gpg_key = Some(value.to_string()),
+            ("gpg", "program") => self.git.gpg_program = Some(value.to_string()),
             ("commit", "gpgsign") => {
                 self.git.sign_commits = value.parse()
                     .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
@@ -496,6 +534,9 @@ impl ToriiConfig {
         items.push(("git.sign_commits".to_string(), self.git.sign_commits.to_string()));
         if let Some(key) = &self.git.gpg_key {
             items.push(("git.gpg_key".to_string(), key.clone()));
+        }
+        if let Some(p) = &self.git.gpg_program {
+            items.push(("git.gpg_program".to_string(), p.clone()));
         }
         items.push(("git.pull_rebase".to_string(), self.git.pull_rebase.to_string()));
         
