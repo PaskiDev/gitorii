@@ -1113,6 +1113,45 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
             Span::styled("[s]", Style::default().fg(bc)),
             Span::styled(" save", Style::default().fg(C_SUBTLE)),
         ]),
+        View::Auth => {
+            use crate::tui::app::AuthFocus;
+            match app.auth_view.focus {
+                AuthFocus::OpsDropdown => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                ]),
+                AuthFocus::InputToken => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[type/paste]", Style::default().fg(bc)),
+                    Span::styled(" token  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" save  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                ]),
+                AuthFocus::ConfirmRemove => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[y]", Style::default().fg(bc)),
+                    Span::styled(" remove  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[n/Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                ]),
+                AuthFocus::List => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[o]", Style::default().fg(bc)),
+                    Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" sidebar", Style::default().fg(C_SUBTLE)),
+                ]),
+            }
+        }
         View::Platform => {
             use crate::tui::app::PlatformFocus;
             match app.platform_view.focus {

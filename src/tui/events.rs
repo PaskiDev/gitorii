@@ -79,6 +79,14 @@ pub enum Action {
     /// 0.7.24 — open the currently focused job log in `$PAGER` (or `less`).
     /// Handled in the main loop because the pager replaces the TUI.
     OpenJobLogInPager,
+    /// 0.7.30 — suspend the TUI and run `torii auth oauth <provider>`
+    /// for the provider currently selected in the Auth view. OAuth
+    /// device flow needs a browser dance + token paste prompt that's
+    /// awful to recreate inside ratatui — wrapping the CLI is simpler
+    /// and matches the user's muscle memory.
+    AuthOauthInPager,
+    /// 0.7.30 — same idea, runs `torii auth rotate [--pat] <provider>`.
+    AuthRotateInPager { pat: bool },
 }
 
 pub struct EventHandler;
@@ -371,6 +379,17 @@ impl EventHandler {
                         // drill-down (popup → JobLog → JobsOfPipeline →
                         // List, then defers to the global handler which
                         // returns focus to the sidebar).
+                        // 0.7.30 — Auth overlays close on Esc; back to list.
+                        View::Auth => {
+                            use crate::tui::app::AuthFocus;
+                            if app.auth_view.focus != AuthFocus::List {
+                                app.auth_view.focus = AuthFocus::List;
+                                true
+                            } else {
+                                false
+                            }
+                        }
+
                         View::Platform  => {
                             use crate::tui::app::PlatformFocus;
                             match app.platform_view.focus {
@@ -422,7 +441,8 @@ impl EventHandler {
                     // 0.7.2: no custom keybinds yet for the four new views;
                     // they're informative and refresh on entry. ↑/↓ etc. are
                     // handled in the generic list navigation block above.
-                    View::Worktree | View::Submodule | View::Bisect | View::Auth => None,
+                    View::Worktree | View::Submodule | View::Bisect => None,
+                    View::Auth      => handle_auth(key, app),
                     // 0.7.12 — unified Platform view.
                     View::Platform  => handle_platform(key, app),
                     View::Config    => handle_config(key, app),
@@ -2313,6 +2333,170 @@ fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action> {
 // On the Jobs list (drill-down), Enter fetches the job log into a
 // scrollable panel; Esc walks the drill-down back (handled outside).
 // Ctrl-R re-runs the loader for whatever sub-tab is active.
+// 0.7.30 — Auth view: contextual operations on the selected provider
+// (oauth re-auth / rotate / set-token paste / remove). Same dropdown-
+// driven pattern as Platform: `o` opens the menu, Enter dispatches,
+// Esc closes. OAuth and rotate are externalised to a subprocess (the
+// CLI variants) because they require a browser dance — the main loop
+// suspends the TUI for them, same as the job-log pager.
+fn handle_auth(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    use crate::tui::app::{AuthFocus, AuthPendingOp};
+
+    match app.auth_view.focus {
+        AuthFocus::List => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                    if app.auth_view.idx > 0 { app.auth_view.idx -= 1; }
+                }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                    if app.auth_view.idx + 1 < app.auth_view.items.len() {
+                        app.auth_view.idx += 1;
+                    }
+                }
+                (_, KeyCode::Char('o')) => {
+                    if let Some(e) = app.auth_view.items.get(app.auth_view.idx) {
+                        app.auth_view.pending_provider = e.provider.clone();
+                        app.auth_view.dropdown_idx = 0;
+                        app.auth_view.focus = AuthFocus::OpsDropdown;
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        AuthFocus::OpsDropdown => {
+            let ops = crate::tui::views::auth::ops_for(&app.auth_view);
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+                    if app.auth_view.dropdown_idx > 0 {
+                        app.auth_view.dropdown_idx -= 1;
+                    }
+                }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+                    if app.auth_view.dropdown_idx + 1 < ops.len() {
+                        app.auth_view.dropdown_idx += 1;
+                    }
+                }
+                (_, KeyCode::Enter) => {
+                    return dispatch_auth_op(app);
+                }
+                _ => {}
+            }
+            None
+        }
+        AuthFocus::InputToken => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Enter) => {
+                    let token = std::mem::take(&mut app.auth_view.input_buffer);
+                    let provider = app.auth_view.pending_provider.clone();
+                    let op = app.auth_view.pending_op.clone();
+                    app.auth_view.focus = AuthFocus::List;
+                    app.auth_view.pending_op = AuthPendingOp::None;
+                    if token.trim().is_empty() {
+                        app.set_status("✗ empty token, aborted");
+                        return None;
+                    }
+                    match op {
+                        AuthPendingOp::SetToken => {
+                            match crate::auth::set_token(&provider, token.trim(), None) {
+                                Ok(_)  => app.set_status(format!("✓ {} token saved", provider)),
+                                Err(e) => app.set_status(format!("✗ {}", e)),
+                            }
+                        }
+                        AuthPendingOp::Login => {
+                            let endpoint = crate::auth::default_endpoint();
+                            match crate::auth::save_cloud(token.trim(), &endpoint) {
+                                Ok(_)  => app.set_status("✓ cloud key saved"),
+                                Err(e) => app.set_status(format!("✗ {}", e)),
+                            }
+                        }
+                        AuthPendingOp::None => {}
+                    }
+                    crate::tui::views::auth::refresh(app);
+                }
+                (_, KeyCode::Backspace) => {
+                    app.auth_view.input_buffer.pop();
+                }
+                (_, KeyCode::Char(c)) => {
+                    if key.modifiers != KeyModifiers::CONTROL {
+                        app.auth_view.input_buffer.push(c);
+                    }
+                }
+                _ => {}
+            }
+            None
+        }
+        AuthFocus::ConfirmRemove => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Char('y')) | (_, KeyCode::Char('Y')) => {
+                    let provider = app.auth_view.pending_provider.clone();
+                    match crate::auth::remove_token(&provider, None) {
+                        Ok(true)  => app.set_status(format!("✓ {} token removed", provider)),
+                        Ok(false) => app.set_status(format!("(no {} token was set)", provider)),
+                        Err(e)    => app.set_status(format!("✗ {}", e)),
+                    }
+                    app.auth_view.focus = AuthFocus::List;
+                    crate::tui::views::auth::refresh(app);
+                }
+                (_, KeyCode::Char('n')) | (_, KeyCode::Char('N')) | (_, KeyCode::Esc) => {
+                    app.auth_view.focus = AuthFocus::List;
+                }
+                _ => {}
+            }
+            None
+        }
+    }
+}
+
+fn dispatch_auth_op(app: &mut App) -> Option<Action> {
+    use crate::tui::app::{AuthFocus, AuthPendingOp};
+    let provider = app.auth_view.pending_provider.clone();
+    let ops = crate::tui::views::auth::ops_for(&app.auth_view);
+    let idx = app.auth_view.dropdown_idx;
+    let label = ops.get(idx).map(|o| o.0).unwrap_or("");
+    match label {
+        "Set token (paste)" => {
+            app.auth_view.focus = AuthFocus::InputToken;
+            app.auth_view.input_buffer.clear();
+            app.auth_view.input_prompt = format!("Paste token for {}:", provider);
+            app.auth_view.pending_op = AuthPendingOp::SetToken;
+        }
+        "Remove token" => {
+            app.auth_view.focus = AuthFocus::ConfirmRemove;
+        }
+        "OAuth re-auth" => {
+            app.auth_view.focus = AuthFocus::List;
+            return Some(Action::AuthOauthInPager);
+        }
+        "Rotate (OAuth)" => {
+            app.auth_view.focus = AuthFocus::List;
+            return Some(Action::AuthRotateInPager { pat: false });
+        }
+        "Rotate as PAT (GitLab)" => {
+            app.auth_view.focus = AuthFocus::List;
+            return Some(Action::AuthRotateInPager { pat: true });
+        }
+        "Login (paste cloud key)" => {
+            app.auth_view.focus = AuthFocus::InputToken;
+            app.auth_view.input_buffer.clear();
+            app.auth_view.input_prompt = "Paste gitorii_sk_… key:".to_string();
+            app.auth_view.pending_op = AuthPendingOp::Login;
+        }
+        "Logout (cloud)" => {
+            match crate::auth::delete() {
+                Ok(_)  => app.set_status("✓ cloud key removed"),
+                Err(e) => app.set_status(format!("✗ {}", e)),
+            }
+            app.auth_view.focus = AuthFocus::List;
+            crate::tui::views::auth::refresh(app);
+        }
+        _ => {
+            app.auth_view.focus = AuthFocus::List;
+        }
+    }
+    None
+}
+
 fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     use crate::tui::app::{PlatformFocus, PlatformSubTab};
 

@@ -1440,6 +1440,29 @@ fn run_loop(
                     open_job_log_in_pager(terminal, app);
                 }
 
+                Action::AuthOauthInPager => {
+                    let provider = app.auth_view.pending_provider.clone();
+                    if provider.is_empty() {
+                        app.set_status("✗ no provider selected");
+                    } else {
+                        run_torii_subprocess(terminal, app, &["auth", "oauth", &provider]);
+                        crate::tui::views::auth::refresh(app);
+                    }
+                }
+
+                Action::AuthRotateInPager { pat } => {
+                    let provider = app.auth_view.pending_provider.clone();
+                    if provider.is_empty() {
+                        app.set_status("✗ no provider selected");
+                    } else if pat {
+                        run_torii_subprocess(terminal, app, &["auth", "rotate", "--pat", &provider]);
+                        crate::tui::views::auth::refresh(app);
+                    } else {
+                        run_torii_subprocess(terminal, app, &["auth", "rotate", &provider]);
+                        crate::tui::views::auth::refresh(app);
+                    }
+                }
+
             }
         }
 
@@ -1508,6 +1531,39 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
 
     // The tempfile lives until the OS cleans /tmp — leaving it lets the
     // user re-open it from another terminal while debugging.
+}
+
+/// Suspend the TUI and run `torii <args…>` inheriting stdio. Used by
+/// auth ops (`oauth`, `rotate`) where the underlying CLI prompts on
+/// stdin / prints a URL the user has to click. Wrapping the CLI as a
+/// subprocess is far simpler than rebuilding the browser dance + token
+/// paste flow inside ratatui — and the resulting credential ends up in
+/// the same `auth.toml` either way.
+fn run_torii_subprocess<B: ratatui::backend::Backend + std::io::Write>(
+    terminal: &mut ratatui::Terminal<B>,
+    app: &mut App,
+    args: &[&str],
+) {
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+
+    let bin = std::env::current_exe()
+        .map(|p| p.into_os_string())
+        .unwrap_or_else(|_| "torii".into());
+    let status = std::process::Command::new(&bin)
+        .args(args)
+        .status();
+
+    let _ = enable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), EnterAlternateScreen);
+    let _ = terminal.clear();
+
+    let label = args.join(" ");
+    match status {
+        Ok(s) if s.success() => app.set_status(format!("✓ `{}` ok", label)),
+        Ok(s)                => app.set_status(format!("✗ `{}` exit {}", label, s)),
+        Err(e)               => app.set_status(format!("✗ run `{}`: {}", label, e)),
+    }
 }
 
 // ── Git operations ────────────────────────────────────────────────────────────

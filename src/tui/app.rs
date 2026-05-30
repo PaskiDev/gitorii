@@ -1001,6 +1001,33 @@ pub struct AuthState {
     pub status: Option<String>,
     pub cloud_key_set: bool,
     pub cloud_endpoint: String,
+
+    /// 0.7.30 — interactive ops state. `focus` says what overlay (if
+    /// any) is currently active; `dropdown_idx` is the selection in
+    /// the ops menu; `input_buffer` holds the pasted token while in
+    /// `InputToken`; `pending_provider` captures which provider the
+    /// in-flight operation applies to.
+    pub focus: AuthFocus,
+    pub dropdown_idx: usize,
+    pub input_buffer: String,
+    pub input_prompt: String,
+    pub pending_provider: String,
+    pub pending_op: AuthPendingOp,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthFocus {
+    List,
+    OpsDropdown,
+    InputToken,
+    ConfirmRemove,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AuthPendingOp {
+    None,
+    SetToken,
+    Login,
 }
 
 impl Default for AuthState {
@@ -1011,6 +1038,12 @@ impl Default for AuthState {
             status: None,
             cloud_key_set: false,
             cloud_endpoint: String::new(),
+            focus: AuthFocus::List,
+            dropdown_idx: 0,
+            input_buffer: String::new(),
+            input_prompt: String::new(),
+            pending_provider: String::new(),
+            pending_op: AuthPendingOp::None,
         }
     }
 }
