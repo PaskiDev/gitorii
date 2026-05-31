@@ -322,15 +322,28 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             "paused"            => C_DIM,
             _                   => C_SUBTLE,
         };
+        // 0.8.1 — distinguish online platform runners from torii-
+        // spawned Docker containers on this host. `🌐` for online,
+        // `🐳` for local-docker.
+        let scope_glyph = if r.runner_type == "local-docker" { "🐳" } else { "🌐" };
+        let scope_label = if r.runner_type == "local-docker" { "local" } else { "online" };
+        let scope_color = if r.runner_type == "local-docker" { C_YELLOW } else { app.brand_color() };
         let tags_str = if r.tags.is_empty() { "—".to_string() } else { r.tags.join(",") };
-        let id = format!("#{}", r.id);
+        // Local containers use their container name as the id; the
+        // platform's runners use the numeric id from the API.
+        let id_disp = if r.runner_type == "local-docker" {
+            r.id.clone()
+        } else {
+            format!("#{}", r.id)
+        };
         ListItem::new(Line::from(vec![
             Span::styled(prefix, Style::default().fg(app.brand_color())),
-            Span::styled(col(&id, 8),         Style::default().fg(app.brand_color())),
-            Span::styled(col(&r.status, 10),  Style::default().fg(status_color)),
-            Span::styled(col(&r.description, 24), Style::default().fg(C_WHITE)),
-            Span::styled(col(&r.os, 8),       Style::default().fg(C_DIM)),
-            Span::styled(col(&tags_str, 30),  Style::default().fg(C_DIM)),
+            Span::styled(format!("{} ", scope_glyph), Style::default().fg(scope_color)),
+            Span::styled(col(scope_label, 7), Style::default().fg(scope_color)),
+            Span::styled(col(&id_disp, 18),       Style::default().fg(app.brand_color())),
+            Span::styled(col(&r.status, 10),      Style::default().fg(status_color)),
+            Span::styled(col(&r.description, 22), Style::default().fg(C_WHITE)),
+            Span::styled(col(&tags_str, 24),      Style::default().fg(C_DIM)),
         ])).style(style)
     }).collect();
     (list_title(pv), items, pv.runners_idx)

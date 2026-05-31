@@ -3616,14 +3616,25 @@ fn dispatch_ops_action(app: &mut App) {
             }
         }
         PlatformSubTab::Runners => {
-            let id = app.platform_view.runners
-                .get(app.platform_view.runners_idx).map(|r| r.id.clone());
-            if let Some(id) = id {
+            // 0.8.1 — local-docker runners aren't reachable via the
+            // platform API. Until v0.8.2 wires the in-TUI docker
+            // verbs, surface a clear pointer to the CLI commands
+            // instead of failing the platform API call.
+            let row = app.platform_view.runners
+                .get(app.platform_view.runners_idx).cloned();
+            if let Some(r) = row {
+                if r.runner_type == "local-docker" {
+                    app.set_status(format!(
+                        "this is a local container — run from shell: torii runner start/stop/logs/destroy {}",
+                        r.id
+                    ));
+                    return;
+                }
                 match idx {
-                    0 => app.action_runner_pause(id),
-                    1 => app.action_runner_resume(id),
-                    2 => app.action_runner_reset_token(id),
-                    3 => app.action_runner_remove(id),
+                    0 => app.action_runner_pause(r.id),
+                    1 => app.action_runner_resume(r.id),
+                    2 => app.action_runner_reset_token(r.id),
+                    3 => app.action_runner_remove(r.id),
                     _ => {}
                 }
             }
