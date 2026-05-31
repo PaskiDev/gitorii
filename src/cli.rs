@@ -4615,9 +4615,7 @@ impl Cli {
                             crate::tui::run_with_workspace(name)?;
                         }
                         PickerResult::OpenWorkspace(name) => {
-                            let ws_path = dirs::home_dir()
-                                .map(|h| h.join(".torii/workspaces.toml"))
-                                .unwrap_or_default();
+                            let ws_path = crate::tui::app::workspaces_toml_path().unwrap_or_default();
                             if let Ok(content) = std::fs::read_to_string(&ws_path) {
                                 let mut in_ws = false;
                                 let mut first_path: Option<std::path::PathBuf> = None;

@@ -98,7 +98,15 @@ fn default_interval() -> u64 { 5 }
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum TokenResponse {
-    Success { access_token: String, #[serde(default)] #[allow(dead_code)] token_type: Option<String> },
+    Success {
+        access_token: String,
+        #[serde(default)] #[allow(dead_code)] token_type: Option<String>,
+        // 0.7.39 — GitLab device flow returns these. GitHub OAuth
+        // Apps don't, so we keep them Option-typed and the helpers
+        // that need them check for `Some(...)` before using.
+        #[serde(default)] refresh_token: Option<String>,
+        #[serde(default)] expires_in:    Option<u64>,
+    },
     Error   { error: String, #[serde(default)] error_description: Option<String> },
 }
 
@@ -180,6 +188,10 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
         match body {
             TokenResponse::Success { access_token, .. } => {
                 println!("✅ Authorised. Token saved.");
+                // The blocking CLI path doesn't persist
+                // refresh_token (set_token() is what it calls
+                // afterwards, and it doesn't have a refresh slot).
+                // The in-TUI worker (start_oauth_flow) does.
                 return Ok(access_token);
             }
             TokenResponse::Error { error, error_description } => match error.as_str() {
@@ -239,8 +251,16 @@ pub enum DeviceFlowStep {
     /// Provider asked us to back off; caller should sleep
     /// `interval` (which was just increased) before the next poll.
     SlowDown,
-    /// Final state — access token in hand.
-    Done(String),
+    /// Final state — access token in hand. Carries the refresh token
+    /// + expiry hint so `auth::set_token_with_refresh` can persist
+    /// them and `auth::refresh_if_needed` can renew without prompting
+    /// the user again. `None` when the provider didn't issue one
+    /// (GitHub OAuth Apps).
+    Done {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in:   Option<u64>,
+    },
 }
 
 pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
@@ -311,7 +331,8 @@ pub fn poll_device_flow(session: &mut DeviceFlowSession) -> Result<DeviceFlowSte
     let body: TokenResponse = resp.json()
         .map_err(|e| ToriiError::InvalidConfig(format!("OAuth poll: malformed JSON: {}", e)))?;
     match body {
-        TokenResponse::Success { access_token, .. } => Ok(DeviceFlowStep::Done(access_token)),
+        TokenResponse::Success { access_token, refresh_token, expires_in, .. } =>
+            Ok(DeviceFlowStep::Done { access_token, refresh_token, expires_in }),
         TokenResponse::Error { error, error_description } => match error.as_str() {
             "authorization_pending" => Ok(DeviceFlowStep::Pending),
             "slow_down" => {
@@ -328,6 +349,52 @@ pub fn poll_device_flow(session: &mut DeviceFlowSession) -> Result<DeviceFlowSte
                 "OAuth device flow error '{}': {}",
                 other, error_description.unwrap_or_default()
             ))),
+        }
+    }
+}
+
+/// 0.7.39 — exchange a refresh_token for a fresh access_token.
+/// GitLab supports this end-to-end with the same token endpoint used
+/// by the device flow; GitHub OAuth Apps don't issue refresh tokens
+/// for device flow, so callers should check before calling.
+///
+/// Returns `(new_access_token, new_refresh_token, expires_in_seconds)`
+/// — providers may rotate the refresh token, so we always store
+/// whatever they hand back.
+pub fn refresh_access_token(provider: &str, refresh_token: &str)
+    -> Result<(String, Option<String>, Option<u64>)>
+{
+    let cfg = device_flow_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
+        "OAuth refresh not configured for `{}`. Re-auth manually with `torii auth oauth {}`.",
+        provider, provider
+    )))?;
+    let client_id = std::env::var(cfg.client_id_env).ok()
+        .or_else(|| cfg.bundled_client_id.map(String::from))
+        .ok_or_else(|| ToriiError::InvalidConfig(format!(
+            "No OAuth client_id for `{}` refresh.", provider
+        )))?;
+
+    let client = crate::http::make_client();
+    let req = client.post(cfg.token_url)
+        .header("Accept", "application/json")
+        .form(&[
+            ("client_id",     client_id.as_str()),
+            ("refresh_token", refresh_token),
+            ("grant_type",    "refresh_token"),
+        ]);
+    let body: TokenResponse = req.send()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth refresh: {}", e)))?
+        .json()
+        .map_err(|e| ToriiError::InvalidConfig(format!("OAuth refresh: malformed JSON: {}", e)))?;
+    match body {
+        TokenResponse::Success { access_token, refresh_token, expires_in, .. } => {
+            Ok((access_token, refresh_token, expires_in))
+        }
+        TokenResponse::Error { error, error_description } => {
+            Err(ToriiError::InvalidConfig(format!(
+                "OAuth refresh error '{}': {}",
+                error, error_description.unwrap_or_default()
+            )))
         }
     }
 }
