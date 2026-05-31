@@ -69,6 +69,13 @@ pub struct AuthStore {
     pub cloud: Option<ApiKey>,
     pub tokens: BTreeMap<String, String>,
     pub expirations: BTreeMap<String, String>,
+    /// 0.7.39 — refresh tokens issued by OAuth device flow. Lets
+    /// `resolve_token` quietly mint a fresh `access_token` when one
+    /// is close to expiry, instead of forcing the user to re-run
+    /// `auth oauth <provider>`. Persisted under a `[token_refresh]`
+    /// table in `auth.toml`. Empty for providers that don't issue
+    /// refresh tokens (GitHub OAuth Apps).
+    pub refresh_tokens: BTreeMap<String, String>,
 }
 
 /// Recognised provider names. The CLI accepts these; readers ask by
@@ -178,6 +185,13 @@ fn save_to(path: &Path, store: &AuthStore) -> Result<()> {
         for (k, v) in &store.expirations {
             out.push_str(&format!("{} = \"{}\"\n", k, v));
         }
+        out.push('\n');
+    }
+    if !store.refresh_tokens.is_empty() {
+        out.push_str("[token_refresh]\n");
+        for (k, v) in &store.refresh_tokens {
+            out.push_str(&format!("{} = \"{}\"\n", k, v));
+        }
     }
     fs::write(path, out)
         .map_err(|e| ToriiError::InvalidConfig(format!("write {}: {}", path.display(), e)))?;
@@ -271,6 +285,68 @@ pub fn set_token_with_expiry(
     };
     invalidate_token_cache();
     result
+}
+
+/// 0.7.39 — store `access_token` + `refresh_token` + an `expires_at`
+/// derived from `expires_in`. Called by the OAuth worker so the next
+/// `resolve_token` can auto-refresh transparently. `local` is always
+/// `None` here because refresh tokens are user-scoped, not repo-
+/// scoped.
+pub fn set_token_with_refresh(
+    provider: &str,
+    access_token: &str,
+    refresh_token: Option<&str>,
+    expires_in_seconds: Option<u64>,
+) -> Result<()> {
+    let provider = normalise_provider(provider)?;
+    let expires_at = expires_in_seconds.map(|s| {
+        let when = chrono::Utc::now() + chrono::Duration::seconds(s as i64);
+        when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    });
+    let mut store = load_global();
+    store.tokens.insert(provider.clone(), access_token.to_string());
+    apply_expiry(&mut store.expirations, &provider, expires_at.as_deref());
+    if let Some(r) = refresh_token {
+        store.refresh_tokens.insert(provider.clone(), r.to_string());
+    }
+    save_global(&store)?;
+    invalidate_token_cache();
+    Ok(())
+}
+
+/// 0.7.39 — best-effort auto-refresh. Returns Ok(true) if a refresh
+/// actually happened (new access token persisted, cache cleared),
+/// Ok(false) if nothing was due, Err on real errors. Safe to call
+/// from any path; failures are non-fatal (the caller still sees the
+/// stale token and the platform will return 401 if it's expired,
+/// at which point a manual re-auth is the answer).
+pub fn refresh_if_needed(provider: &str) -> Result<bool> {
+    let provider_lc = provider.to_lowercase();
+    let store = load_global();
+    let Some(refresh) = store.refresh_tokens.get(&provider_lc).cloned() else {
+        return Ok(false);
+    };
+    // Only refresh when within 5 minutes of expiry. Earlier than
+    // that and we waste round-trips; later than that and the platform
+    // may already be rejecting.
+    let due = store.expirations.get(&provider_lc)
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|when| {
+            let now = chrono::Utc::now();
+            when.with_timezone(&chrono::Utc) - now < chrono::Duration::minutes(5)
+        })
+        .unwrap_or(false);
+    if !due { return Ok(false); }
+
+    let (new_access, new_refresh, expires_in) =
+        crate::oauth::refresh_access_token(&provider_lc, &refresh)?;
+    set_token_with_refresh(
+        &provider_lc,
+        &new_access,
+        new_refresh.as_deref().or(Some(&refresh)),
+        expires_in,
+    )?;
+    Ok(true)
 }
 
 fn apply_expiry(map: &mut BTreeMap<String, String>, provider: &str, expires_at: Option<&str>) {
@@ -369,6 +445,16 @@ pub fn drop_token_cache() {
 /// re-reading the global / local TOML on every platform-client
 /// construction. `set_token` and `remove_token` invalidate the cache.
 pub fn resolve_token<P: AsRef<Path>>(provider: &str, repo_path: P) -> ResolvedToken {
+    // 0.7.39 — best-effort proactive refresh BEFORE we serve any
+    // cached value. `refresh_if_needed` is a no-op when the provider
+    // has no refresh token or when the access token isn't close to
+    // expiry; it logs nothing. If a refresh happened it also
+    // clears the cache, so the lookup below picks up the fresh
+    // value transparently. Network errors here are swallowed: the
+    // resolver still returns the stale token and the API call's
+    // own error path decides what to do with the 401 that follows.
+    let _ = refresh_if_needed(provider);
+
     let key = format!("{}|{}", provider.to_lowercase(), repo_path.as_ref().display());
     if let Ok(g) = token_cache().lock() {
         if let Some(hit) = g.get(&key) {
@@ -468,6 +554,7 @@ fn parse(text: &str) -> AuthStore {
         Cloud,
         Tokens,
         TokenExpires,
+        TokenRefresh,
     }
     let mut section = Section::TopLevel;
     let mut cloud_key = String::new();
@@ -475,6 +562,7 @@ fn parse(text: &str) -> AuthStore {
     let mut have_cloud = false;
     let mut tokens = BTreeMap::new();
     let mut expirations = BTreeMap::new();
+    let mut refresh_tokens = BTreeMap::new();
 
     for raw in text.lines() {
         let line = raw.trim();
@@ -487,6 +575,7 @@ fn parse(text: &str) -> AuthStore {
                 "cloud" => Section::Cloud,
                 "tokens" => Section::Tokens,
                 "token_expires" => Section::TokenExpires,
+                "token_refresh" => Section::TokenRefresh,
                 _ => Section::TopLevel, // unknown section: tolerate, ignore lines
             };
             continue;
@@ -517,6 +606,11 @@ fn parse(text: &str) -> AuthStore {
                     expirations.insert(k.to_string(), v);
                 }
             }
+            Section::TokenRefresh => {
+                if !v.is_empty() {
+                    refresh_tokens.insert(k.to_string(), v);
+                }
+            }
         }
     }
 
@@ -531,6 +625,7 @@ fn parse(text: &str) -> AuthStore {
         },
         tokens,
         expirations,
+        refresh_tokens,
     }
 }
 
@@ -582,6 +677,7 @@ fn migrate_from_config_toml() -> Option<AuthStore> {
         cloud: None,
         tokens,
         expirations: BTreeMap::new(),
+        refresh_tokens: BTreeMap::new(),
     };
     let _ = save_global(&store);
     Some(store)

@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.39] - 2026-05-31
+
+The two pain points the user surfaced this week: re-auth fatigue and
+the empty Workspace view. Plus a full pass on the Worktrees TUI to
+match the chrome we shipped for Auth / Bisect / Platform.
+
+### Fixed
+
+- **Workspace view was empty when launched from inside a repo (and
+  most other times).** `torii workspace add` writes to
+  `~/.config/torii/workspaces.toml` (canonical XDG via `dirs::
+  config_dir`); the TUI loader was reading from `~/.torii/
+  workspaces.toml` (legacy). Two different files, so nothing the
+  user added from the shell ever showed up. Now we look at the
+  canonical path first and fall back to the legacy path for installs
+  that pre-date the move. New `workspaces_toml_path()` helper used
+  by all four call sites (`load_workspaces`, the repo picker, the
+  workspace status pump, the CLI's workspace lookup).
+- **`torii auth oauth` now persists the refresh token + expiry** so
+  the next time the user opens Pipelines / PR / Issues, torii can
+  renew the access token silently instead of returning 401 and
+  forcing a manual `auth oauth <provider>` round.
+
+### Added
+
+- **Automatic OAuth refresh** in `auth::resolve_token`. When a stored
+  token is within 5 minutes of its `[token_expires]`, the resolver
+  calls the platform's refresh endpoint (`grant_type=refresh_token`
+  via `oauth::refresh_access_token`), saves the new access /
+  refresh / expiry, and drops the cache so the next call gets the
+  fresh value. Failures are non-fatal: if the refresh endpoint is
+  down or the refresh token was revoked, the resolver still returns
+  the (possibly stale) cached token and lets the API call fail with
+  its own 401 — which is the only point a manual re-auth is actually
+  needed.
+- **Worktree TUI ops dropdown**. `o` opens a context menu with
+  add / open / lock / unlock / move / remove / prune / repair,
+  wired to `crate::cmd::worktree::*` directly. Add / Lock / Move
+  open an input overlay; Remove / Prune gate behind a y/n confirm.
+  Palette aligned with the rest (brand colour for branch, `C_DIM`
+  for paths, `C_GREEN` for clean, `C_YELLOW` for dirty). Static
+  "CLI:" cheat-sheet block removed — keybinds flow through the
+  global hint bar like every other view.
+
+### Internal
+
+- New `auth::set_token_with_refresh` (access + refresh + expiry in
+  one call) used by the in-TUI OAuth worker.
+- New `auth::refresh_if_needed(provider)` — best-effort, idempotent;
+  bails fast when no refresh token is stored or the access token
+  isn't close to expiry.
+- New `oauth::refresh_access_token(provider, refresh_token) ->
+  (new_access, new_refresh, expires_in)`. GitLab device flow
+  supports it end-to-end; GitHub OAuth Apps don't issue refresh
+  tokens, so callers should check for `Some(...)` first.
+- `DeviceFlowStep::Done` is now a struct variant carrying the
+  refresh token + expires_in alongside the access token.
+- New `WorktreeFocus` (`List` / `OpsDropdown` / `InputArgs` /
+  `ConfirmRemove` / `ConfirmPrune`) + `WorktreePendingOp`
+  (`AddBranch` / `LockReason` / `MoveNewPath`). Same shape as the
+  Auth / Bisect ops scaffolds.
+
+### Notes
+
+- The Submodules view still doesn't have its own ops dropdown —
+  the state types are in place but the handler / dropdown / hints
+  land in 0.7.40.
+- Existing OAuth installs need to **re-run `torii auth oauth
+  <provider>` once** to start the refresh token flow. After that
+  the renewal is silent.
+
 ## [0.7.38] - 2026-05-31
 
 ### Added

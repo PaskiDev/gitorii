@@ -972,10 +972,48 @@ pub struct WorktreeState {
     pub items: Vec<WorktreeEntry>,
     pub idx: usize,
     pub status: Option<String>,
+
+    /// 0.7.39 — interactive ops state. Same shape as the Auth /
+    /// Bisect views: `focus` says what overlay is up; `dropdown_idx`
+    /// is the selection inside the ops menu; `input_buffer` collects
+    /// free-form text for the ops that need it (Add branch, Lock
+    /// reason, Move new path); `pending_op` says what to do with
+    /// the buffer when the user hits Enter.
+    pub focus: WorktreeFocus,
+    pub dropdown_idx: usize,
+    pub input_buffer: String,
+    pub input_prompt: String,
+    pub pending_op: WorktreePendingOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum WorktreeFocus {
+    #[default]
+    List,
+    OpsDropdown,
+    InputArgs,
+    ConfirmRemove,
+    ConfirmPrune,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum WorktreePendingOp {
+    #[default]
+    None,
+    AddBranch,
+    LockReason,
+    MoveNewPath,
 }
 
 impl Default for WorktreeState {
-    fn default() -> Self { Self { items: Vec::new(), idx: 0, status: None } }
+    fn default() -> Self { Self {
+        items: Vec::new(), idx: 0, status: None,
+        focus: WorktreeFocus::List,
+        dropdown_idx: 0,
+        input_buffer: String::new(),
+        input_prompt: String::new(),
+        pending_op: WorktreePendingOp::None,
+    } }
 }
 
 // -- Submodule view --------------------------------------------------------
@@ -994,10 +1032,47 @@ pub struct SubmoduleState {
     pub items: Vec<SubmoduleEntry>,
     pub idx: usize,
     pub status: Option<String>,
+
+    /// 0.7.39 — same interactive ops scaffold as the Worktree view.
+    pub focus: SubmoduleFocus,
+    pub dropdown_idx: usize,
+    pub input_buffer: String,
+    pub input_prompt: String,
+    pub pending_op: SubmodulePendingOp,
+    /// Two-step Add: first URL, then path. `pending_url` stashes the
+    /// URL between the two prompts.
+    pub pending_url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SubmoduleFocus {
+    #[default]
+    List,
+    OpsDropdown,
+    InputArgs,
+    ConfirmRemove,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum SubmodulePendingOp {
+    #[default]
+    None,
+    /// Two-step Add: URL first, then path.
+    AddUrl,
+    AddPath,
+    Foreach,
 }
 
 impl Default for SubmoduleState {
-    fn default() -> Self { Self { items: Vec::new(), idx: 0, status: None } }
+    fn default() -> Self { Self {
+        items: Vec::new(), idx: 0, status: None,
+        focus: SubmoduleFocus::List,
+        dropdown_idx: 0,
+        input_buffer: String::new(),
+        input_prompt: String::new(),
+        pending_op: SubmodulePendingOp::None,
+        pending_url: String::new(),
+    } }
 }
 
 // -- Bisect view -----------------------------------------------------------
@@ -1660,12 +1735,13 @@ impl App {
             });
 
             // 2. Poll until done or error.
-            let token = loop {
+            let (token, refresh, expires_in) = loop {
                 std::thread::sleep(crate::oauth::device_flow_interval(&session));
                 match crate::oauth::poll_device_flow(&mut session) {
                     Ok(crate::oauth::DeviceFlowStep::Pending)
                     | Ok(crate::oauth::DeviceFlowStep::SlowDown) => continue,
-                    Ok(crate::oauth::DeviceFlowStep::Done(t)) => break t,
+                    Ok(crate::oauth::DeviceFlowStep::Done { access_token, refresh_token, expires_in })
+                        => break (access_token, refresh_token, expires_in),
                     Err(e) => {
                         let _ = tx.send(OauthStatus::Error(e.to_string()));
                         return;
@@ -1673,9 +1749,11 @@ impl App {
                 }
             };
 
-            // 3. Save + optional revoke.
+            // 3. Save (+ refresh_token / expiry hint) + optional revoke.
             let _ = tx.send(OauthStatus::Saving);
-            if let Err(e) = crate::auth::set_token(&provider, &token, None) {
+            if let Err(e) = crate::auth::set_token_with_refresh(
+                &provider, &token, refresh.as_deref(), expires_in,
+            ) {
                 let _ = tx.send(OauthStatus::Error(format!("save: {}", e)));
                 return;
             }
@@ -2747,9 +2825,15 @@ impl App {
 
     fn load_workspaces(&mut self) {
         self.workspace_view.workspaces.clear();
-        let ws_path = dirs::home_dir()
-            .map(|h| h.join(".torii/workspaces.toml"))
-            .unwrap_or_default();
+        // 0.7.39 fix — `torii workspace add` (CLI) writes to
+        // `~/.config/torii/workspaces.toml` (canonical via dirs's
+        // config_dir), but the TUI loader used to read from
+        // `~/.torii/workspaces.toml` (legacy). The two paths never
+        // matched, so any workspace created from the shell stayed
+        // invisible in the TUI. Now we prefer the canonical path and
+        // fall back to the legacy one for installs that pre-date the
+        // move.
+        let Some(ws_path) = workspaces_toml_path() else { return };
         if !ws_path.exists() { return; }
         let Ok(content) = std::fs::read_to_string(&ws_path) else { return };
         let mut current_ws: Option<WorkspaceEntry> = None;
@@ -3460,6 +3544,24 @@ fn detect_platform(url: &str) -> String {
     else if url.contains("bitbucket.org") { "Bitbucket".into() }
     else if url.contains("codeberg.org")  { "Codeberg".into() }
     else { "git".into() }
+}
+
+/// 0.7.39 — return the on-disk path to `workspaces.toml`. Prefers
+/// the canonical XDG-style `~/.config/torii/workspaces.toml` (where
+/// `torii workspace add` writes), falls back to the legacy
+/// `~/.torii/workspaces.toml` for installs that pre-date the move.
+pub fn workspaces_toml_path() -> Option<std::path::PathBuf> {
+    let canonical = dirs::config_dir().map(|d| d.join("torii/workspaces.toml"));
+    let legacy = dirs::home_dir().map(|h| h.join(".torii/workspaces.toml"));
+    match (canonical.clone(), legacy.clone()) {
+        (Some(p), _) if p.exists() => Some(p),
+        (_, Some(p)) if p.exists() => Some(p),
+        // No file yet — return the canonical path so callers that
+        // want to *write* land in the right place.
+        (Some(p), _) => Some(p),
+        (_, Some(p)) => Some(p),
+        _ => None,
+    }
 }
 
 fn repo_quick_status(path: &str) -> (String, usize, usize, bool) {

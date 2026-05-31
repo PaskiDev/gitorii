@@ -47,9 +47,7 @@ struct SavedWorkspace {
 }
 
 fn load_saved_workspaces() -> Vec<SavedWorkspace> {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".torii/workspaces.toml"))
-        .unwrap_or_default();
+    let path = crate::tui::app::workspaces_toml_path().unwrap_or_default();
     let Ok(content) = std::fs::read_to_string(&path) else { return vec![] };
     let mut out = Vec::new();
     let mut current: Option<SavedWorkspace> = None;
@@ -574,9 +572,7 @@ fn default_ws_name(dir: &Path) -> String {
 }
 
 pub fn save_workspace(name: &str, repos: &[PathBuf]) -> crate::error::Result<()> {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".torii/workspaces.toml"))
-        .unwrap_or_default();
+    let path = crate::tui::app::workspaces_toml_path().unwrap_or_default();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }

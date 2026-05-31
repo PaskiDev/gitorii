@@ -1136,9 +1136,7 @@ fn run_loop(
                         (ws.name.clone(), app.workspace_view.input.trim().to_string())
                     } else { continue; };
                     app.workspace_view.input.clear();
-                    let ws_path = dirs::home_dir()
-                        .map(|h| h.join(".torii/workspaces.toml"))
-                        .unwrap_or_default();
+                    let ws_path = crate::tui::app::workspaces_toml_path().unwrap_or_default();
                     let result = std::fs::read_to_string(&ws_path).ok().map(|content| {
                         content.lines().map(|line| {
                             if line.trim() == format!("[{}]", old_name) {
