@@ -1820,6 +1820,46 @@ enum RunnerCommands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+
+    /// Run a single CI job locally, without pushing anything.
+    ///
+    /// Wraps the platform's local-exec tool:
+    ///   - GitLab: `gitlab-runner exec <executor> <job>` (deprecated
+    ///     in GitLab Runner 17.x but still functional). If you have
+    ///     `gitlab-ci-local` on PATH and pass `--use-gitlab-ci-local`,
+    ///     torii calls that instead.
+    ///   - GitHub: `act -j <job>`. Install `act` from
+    ///     <https://github.com/nektos/act>.
+    ///
+    /// Useful for iterating on a `.gitlab-ci.yml` / GitHub workflow
+    /// without burning CI minutes or polluting pipelines.
+    #[command(after_help = "Examples:
+  torii runner exec build                              GitLab `build` job, docker executor
+  torii runner exec test --executor shell              Shell executor instead
+  torii runner exec deploy --env STAGE=prod --env KEY=… Pass env vars
+  torii runner exec test --ci-file .gitlab-ci.alt.yml   Different CI file
+  torii runner exec unit --remote github-paskidev      GitHub workflow via `act`")]
+    Exec {
+        /// Name of the job to run. Must exist in the resolved CI
+        /// file.
+        job: String,
+        /// CI config file. Defaults to `.gitlab-ci.yml` (GitLab) or
+        /// the autodetected GitHub workflow (act picks one).
+        #[arg(long)]
+        ci_file: Option<String>,
+        /// Executor passed to `gitlab-runner exec`. Ignored on
+        /// GitHub.
+        #[arg(long, default_value = "docker")]
+        executor: String,
+        /// Pass an environment variable to the job. Repeatable:
+        /// `--env KEY=VAL --env OTHER=VAL`.
+        #[arg(long = "env", value_name = "KEY=VAL")]
+        env: Vec<String>,
+        /// Prefer `gitlab-ci-local` over the deprecated
+        /// `gitlab-runner exec`. The binary must be on PATH.
+        #[arg(long)]
+        use_gitlab_ci_local: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4343,6 +4383,15 @@ impl Cli {
                         let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
                         run_runner_docker_inherit(&argv)?;
                     }
+                    RunnerCommands::Exec { job, ci_file, executor, env, use_gitlab_ci_local } => {
+                        run_runner_exec(
+                            &platform, job,
+                            ci_file.as_deref(),
+                            executor,
+                            env,
+                            *use_gitlab_ci_local,
+                        )?;
+                    }
                     RunnerCommands::Destroy { name, yes } => {
                         let full = container_name(name);
                         if !*yes {
@@ -5315,6 +5364,113 @@ fn run_runner_register(
     }
     println!("✅ Runner registered.");
     Ok(())
+}
+
+/// `torii runner exec` — run a CI job locally without push. Detects
+/// platform from the remote and wraps the right local-exec binary;
+/// inherits stdio so the user sees the build log live.
+fn run_runner_exec(
+    platform: &str,
+    job: &str,
+    ci_file: Option<&str>,
+    executor: &str,
+    env: &[String],
+    use_gitlab_ci_local: bool,
+) -> Result<()> {
+    match platform {
+        "gitlab" => {
+            // Two paths, picked by `--use-gitlab-ci-local`. The
+            // gitlab-ci-local project is the modern replacement now
+            // that `gitlab-runner exec` is deprecated (17.x).
+            if use_gitlab_ci_local {
+                which_binary("gitlab-ci-local").ok_or_else(|| anyhow::anyhow!(
+                    "`gitlab-ci-local` not on PATH. Install from \
+                     https://github.com/firecow/gitlab-ci-local (npm i -g gitlab-ci-local)."
+                ))?;
+                let mut argv: Vec<String> = vec![job.to_string()];
+                if let Some(f) = ci_file {
+                    argv.push("--file".to_string());
+                    argv.push(f.to_string());
+                }
+                for kv in env {
+                    argv.push("--variable".to_string());
+                    argv.push(kv.clone());
+                }
+                let argv_refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+                println!("🛠  gitlab-ci-local {}", argv_refs.join(" "));
+                let status = std::process::Command::new("gitlab-ci-local")
+                    .args(&argv_refs)
+                    .status()
+                    .map_err(|e| anyhow::anyhow!("spawn gitlab-ci-local: {}", e))?;
+                if !status.success() {
+                    anyhow::bail!("gitlab-ci-local exited {}", status);
+                }
+                Ok(())
+            } else {
+                which_binary("gitlab-runner").ok_or_else(|| anyhow::anyhow!(
+                    "`gitlab-runner` not on PATH. Install from \
+                     https://docs.gitlab.com/runner/install/, or pass \
+                     `--use-gitlab-ci-local` if you have that installed instead."
+                ))?;
+                let mut argv: Vec<String> = vec![
+                    "exec".to_string(),
+                    executor.to_string(),
+                    job.to_string(),
+                ];
+                if let Some(f) = ci_file {
+                    argv.push("--cicd-config-file".to_string());
+                    argv.push(f.to_string());
+                }
+                for kv in env {
+                    argv.push("--env".to_string());
+                    argv.push(kv.clone());
+                }
+                let argv_refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+                eprintln!(
+                    "ℹ  `gitlab-runner exec` is deprecated in GitLab Runner 17.x. \
+                     Consider `gitlab-ci-local` (`--use-gitlab-ci-local`)."
+                );
+                println!("🛠  gitlab-runner {}", argv_refs.join(" "));
+                let status = std::process::Command::new("gitlab-runner")
+                    .args(&argv_refs)
+                    .status()
+                    .map_err(|e| anyhow::anyhow!("spawn gitlab-runner: {}", e))?;
+                if !status.success() {
+                    anyhow::bail!("gitlab-runner exec exited {}", status);
+                }
+                Ok(())
+            }
+        }
+        "github" => {
+            which_binary("act").ok_or_else(|| anyhow::anyhow!(
+                "`act` not on PATH. Install from https://github.com/nektos/act."
+            ))?;
+            let mut argv: Vec<String> = vec!["-j".to_string(), job.to_string()];
+            if let Some(f) = ci_file {
+                argv.push("-W".to_string());
+                argv.push(f.to_string());
+            }
+            for kv in env {
+                argv.push("--env".to_string());
+                argv.push(kv.clone());
+            }
+            let argv_refs: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+            println!("🛠  act {}", argv_refs.join(" "));
+            let status = std::process::Command::new("act")
+                .args(&argv_refs)
+                .status()
+                .map_err(|e| anyhow::anyhow!("spawn act: {}", e))?;
+            if !status.success() {
+                anyhow::bail!("act exited {}", status);
+            }
+            Ok(())
+        }
+        other => anyhow::bail!(
+            "`torii runner exec` doesn't know how to drive a local executor for `{}`. \
+             Supported: gitlab (gitlab-runner / gitlab-ci-local), github (act).",
+            other
+        ),
+    }
 }
 
 /// Final docker container name for a torii-managed runner. Single

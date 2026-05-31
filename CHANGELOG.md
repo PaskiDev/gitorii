@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.38] - 2026-05-31
+
+### Added
+
+- **`torii runner exec <job>`** — run a single CI job locally
+  without pushing anything. Wraps the platform's local-exec tool
+  and inherits stdio so the user sees the build log live.
+  - **GitLab**: by default invokes `gitlab-runner exec <executor>
+    <job>` (still functional but deprecated in GitLab Runner 17.x;
+    torii prints a one-line nudge toward `gitlab-ci-local`). Pass
+    `--use-gitlab-ci-local` to switch to that binary instead — same
+    `.gitlab-ci.yml` parsing, no deprecation tail.
+  - **GitHub**: invokes `act -j <job>`. Install from
+    <https://github.com/nektos/act>.
+  - **Other platforms**: bails with a clear message — no local
+    executor wired (Bitbucket Pipelines, Azure DevOps, sourcehut).
+- Flags: `--ci-file <path>` (override the default config file),
+  `--executor <docker|shell|…>` (GitLab only, forwarded to
+  `gitlab-runner exec`), `--env KEY=VAL` (repeatable; forwarded as
+  `--env` to gitlab-runner / act, `--variable` to gitlab-ci-local).
+
+### Internal
+
+- New `run_runner_exec(platform, job, ci_file, executor, env,
+  use_gitlab_ci_local)` in `cli.rs`. Same pattern as the rest of
+  the runner subcommands: `which_binary` first for a clear
+  install-from-here error, then `Command::status()` with stdio
+  inheritance.
+
 ## [0.7.37] - 2026-05-31
 
 Dockerized runner lifecycle from torii. Wraps the `docker` CLI
