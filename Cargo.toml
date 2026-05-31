@@ -1,15 +1,16 @@
 [package]
 name = "gitorii"
-version = "0.8.1"
+version = "0.8.2"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Paski <paski@paski.dev>"]
-description = "A human-first Git client with simplified commands, snapshots, multi-platform mirrors and built-in secret scanning"
+description = "Human-first Git client. Simpler commands, a TUI, snapshots, multi-platform mirrors, secret scanning, OAuth, GPG, CI runners, self-hosted platform registry."
 license-file = "LICENSE"
-repository = "https://github.com/paskidev/gitorii"
+readme = "README.md"
+repository = "https://gitlab.com/paskidev/gitorii"
 homepage = "https://gitorii.com"
-documentation = "https://github.com/paskidev/gitorii/blob/main/README.md"
-keywords = ["git", "vcs", "cli", "mirror", "developer-tools"]
+documentation = "https://gitlab.com/paskidev/gitorii/-/blob/main/README.md"
+keywords = ["git", "tui", "vcs", "cli", "developer-tools"]
 categories = ["command-line-utilities", "development-tools"]
 publish = true
 

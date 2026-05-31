@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-05-31
+
+Docs-only release. Refreshed the crates.io presence so the listing
+actually reflects what shipped between 0.5 and 0.8.
+
+### Changed
+
+- **`Cargo.toml` description** rewritten to mention the TUI, OAuth /
+  refresh tokens, GPG, CI runners, and the self-hosted platform
+  registry — features that landed since the original "snapshots +
+  multi-platform mirrors + secret scanning" tagline.
+- **Cargo.toml metadata**: `keywords` now includes `tui` (was a slot
+  short of mentioning the most distinctive surface); `repository` and
+  `documentation` point at the GitLab mirror (the canonical home
+  since the GitHub-radioactive memo); explicit `readme = "README.md"`
+  for tooling that doesn't auto-detect.
+- **`README.md` top-of-fold rewritten** for crates.io / GitHub
+  rendering: shields-style badges, a tagline that names the binary
+  (`torii`), and a "What you get" bullet list that names every
+  surface we actually ship — TUI, multi-platform, self-hosted,
+  OAuth+refresh, GPG, CI runners, snapshots, secret scanner,
+  pure-Rust transports. Replaces a wall of install caveats that
+  used to live above the fold.
+- **Install section trimmed**: the prebuilt-binary path is one
+  command up top; the long `rustc` ICE / SIGSEGV troubleshooting
+  block moved to a `## Troubleshooting` section near the end of the
+  README so it doesn't scare new readers off.
+- **Link list** points at the GitLab mirror for releases / issues /
+  changelog (was github.com).
+
 ## [0.8.1] - 2026-05-31
 
 ### Added
