@@ -7,6 +7,74 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-31
+
+First release with first-class **self-hosted** platform support.
+Self-hosted GitLab works end-to-end this release; Gitea / Forgejo /
+GitHub Enterprise / Bitbucket Data Center get the registry + CLI +
+detection plumbing but the rest of their clients (PR, issue,
+release, package, runner) still hardcode their builtin URLs and
+land in 0.8.1.
+
+### Added
+
+- **`platforms.toml` registry** at two locations:
+  - `~/.config/torii/platforms.toml` (global)
+  - `<repo>/.torii/platforms.toml` (per-repo override)
+  Local entries shadow global ones by `name`. Builtins
+  (github.com, gitlab.com, codeberg.org, bitbucket.org) live in
+  code and can be shadowed with `torii platforms add` if you need
+  different URLs.
+- **`torii platforms list / add / remove / test`** CLI surface.
+  - `list` prints builtins + custom side by side, with a `*`
+    marker on customs.
+  - `add <name> --kind X --domain D --api URL --web URL
+    [--client-id ID] [--local]` writes the entry.
+  - `remove <name> [--local]` drops a custom; nudges you toward
+    `add` to shadow a builtin.
+  - `test <name>` pings the API root with the stored token and
+    surfaces the HTTP status.
+- **Remote → platform detection now consults the registry**. When
+  a remote URL doesn't match any builtin domain,
+  `detect_platform_from_remote_named` looks at `platforms.toml`
+  (longest-domain match wins, so subdomains can shadow umbrellas)
+  and returns the matching kind. New `detect_platform_full` helper
+  also surfaces the API base URL alongside the platform / owner /
+  repo, ready to thread into the right client.
+- **GitLab pipeline client honours custom base URLs** end to end
+  via `GitLabPipelineClient::new_with_base_url` +
+  `get_pipeline_client_with_base_url`. The CLI's `torii pipeline
+  …` already calls through the new path, so a self-hosted GitLab
+  declared in `platforms.toml` will list / cancel / retry / log
+  exactly like gitlab.com does today.
+
+### Internal
+
+- New `crate::platforms::registry` module with `PlatformEntry`,
+  `load_global` / `load_local` / `merged` / `all` / `find_by_host`,
+  and `add_entry` / `remove_entry`.
+- New URL helpers in `crate::pr`: `extract_host`,
+  `extract_owner_repo`. Handle `https://`, `ssh://`, `git@host:`
+  and the rare `host/owner/repo` shorthand.
+- Re-exported as `crate::platforms_registry` from main.rs.
+
+### Notes for self-hosted
+
+- **Self-hosted GitLab works fully**: pipelines / jobs / logs /
+  cancel / retry, plus everything that already passes through
+  `detect_platform_full`.
+- **Gitea / Forgejo / GitHub Enterprise / Bitbucket Data Center**
+  are detected and `platforms list / add / remove / test` will
+  surface them, but their PR / issue / release / package / runner
+  clients still hit their builtin SaaS endpoints. Extending the
+  base-URL override across the rest of the platforms-side clients
+  lands in 0.8.1 — that pass is mechanical (each `*Client::new`
+  gets a `_with_base_url` sibling) and will use the same
+  `detect_platform_full` plumbing this release introduced.
+- **Backwards compat**: no breaking changes. `get_pipeline_client`
+  still exists as a thin shim over the new
+  `get_pipeline_client_with_base_url(p, None)`.
+
 ## [0.7.40] - 2026-05-31
 
 ### Added

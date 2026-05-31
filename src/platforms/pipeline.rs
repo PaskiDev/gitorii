@@ -333,13 +333,21 @@ pub struct GitLabPipelineClient {
 
 impl GitLabPipelineClient {
     pub fn new() -> Result<Self> {
+        Self::new_with_base_url(None)
+    }
+
+    /// 0.8.0 — construct against a custom GitLab API base URL
+    /// (self-hosted instances declared in `platforms.toml`). `None`
+    /// falls back to `GITLAB_URL` env or `https://gitlab.com/api/v4`.
+    pub fn new_with_base_url(base_url: Option<&str>) -> Result<Self> {
         let token = crate::auth::resolve_token("gitlab", ".").value
             .ok_or_else(|| ToriiError::InvalidConfig(
                 "GitLab token not found. Run: torii auth set gitlab YOUR_TOKEN".to_string()
             ))?;
-        let base_url = std::env::var("GITLAB_URL")
-            .unwrap_or_else(|_| "https://gitlab.com/api/v4".to_string());
-        Ok(Self { token, base_url })
+        let resolved = base_url.map(|s| s.trim_end_matches('/').to_string())
+            .or_else(|| std::env::var("GITLAB_URL").ok())
+            .unwrap_or_else(|| "https://gitlab.com/api/v4".to_string());
+        Ok(Self { token, base_url: resolved })
     }
 
     fn client(&self) -> Client {
@@ -1468,9 +1476,21 @@ fn parse_azure_timeline_job(v: &serde_json::Value, pipeline_id: &str) -> Result<
 // ============================================================================
 
 pub fn get_pipeline_client(platform: &str) -> Result<Box<dyn PipelineClient>> {
+    get_pipeline_client_with_base_url(platform, None)
+}
+
+/// 0.8.0 — same as `get_pipeline_client` but lets the caller override
+/// the API base URL from a `platforms.toml` entry. Today only GitLab
+/// honours the override end-to-end; the rest of the kinds still
+/// build against their builtin defaults. v0.8.1 will extend the
+/// override to Gitea / GitHub Enterprise / Bitbucket Data Center.
+pub fn get_pipeline_client_with_base_url(
+    platform: &str,
+    base_url: Option<&str>,
+) -> Result<Box<dyn PipelineClient>> {
     match platform.to_lowercase().as_str() {
         "github"    => Ok(Box::new(GitHubPipelineClient::new()?)),
-        "gitlab"    => Ok(Box::new(GitLabPipelineClient::new()?)),
+        "gitlab"    => Ok(Box::new(GitLabPipelineClient::new_with_base_url(base_url)?)),
         "gitea"     => Ok(Box::new(GiteaPipelineClient::new()?)),
         "sourcehut" => Ok(Box::new(SourcehutPipelineClient::new()?)),
         "radicle"   => Ok(Box::new(RadiclePipelineClient::new()?)),

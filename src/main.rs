@@ -44,6 +44,7 @@ pub use platforms::pipeline;
 pub use platforms::package;
 pub use platforms::release;
 pub use platforms::runner;
+pub use platforms::registry as platforms_registry;
 
 // vcs/
 pub use vcs::core;

@@ -14,3 +14,4 @@ pub mod pipeline;
 pub mod release;
 pub mod package;
 pub mod runner;
+pub mod registry;

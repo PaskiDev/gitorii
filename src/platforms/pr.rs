@@ -1102,6 +1102,90 @@ pub fn detect_platform_from_remote(repo_path: &str) -> Option<(String, String, S
     detect_platform_from_remote_named(repo_path, "origin")
 }
 
+/// 0.8.0 — fuller detect that also returns the API base URL the
+/// rest of torii should hit. Tries the platforms.toml registry
+/// first (so self-hosted instances get their custom URL); falls
+/// back to the builtin per-platform default. Returns None if the
+/// remote doesn't resolve to any known platform.
+pub fn detect_platform_full(
+    repo_path: &str,
+    remote_name: &str,
+) -> Option<(String, String, String, String)> {
+    let (platform, owner, repo) = detect_platform_from_remote_named(repo_path, remote_name)?;
+    let api_base_url = resolve_api_base_url(repo_path, remote_name, &platform);
+    Some((platform, owner, repo, api_base_url))
+}
+
+fn resolve_api_base_url(repo_path: &str, remote_name: &str, platform: &str) -> String {
+    // Try the registry first.
+    if let Ok(repo) = git2::Repository::discover(repo_path) {
+        if let Ok(rem) = repo.find_remote(remote_name) {
+            if let Some(url) = rem.url() {
+                if let Some(host) = extract_host(url) {
+                    if let Some(entry) = crate::platforms_registry::find_by_host(repo_path, &host) {
+                        return entry.api_base_url;
+                    }
+                }
+            }
+        }
+    }
+    // Fall back to the builtin default for the resolved platform.
+    match platform {
+        "github"    => "https://api.github.com".to_string(),
+        "gitlab"    => "https://gitlab.com/api/v4".to_string(),
+        "gitea"     => "https://codeberg.org/api/v1".to_string(),
+        "bitbucket" => "https://api.bitbucket.org/2.0".to_string(),
+        _ => String::new(),
+    }
+}
+
+/// 0.8.0 — extract the host from a git remote URL. Handles the four
+/// shapes the rest of torii deals with: `https://host/...`,
+/// `git@host:owner/repo.git`, `ssh://git@host:22/owner/repo.git`,
+/// and the rare `host/owner/repo` shorthand we tolerate.
+fn extract_host(url: &str) -> Option<String> {
+    if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+        let host = rest.split(['/', ':']).next()?;
+        return Some(host.to_string());
+    }
+    if let Some(rest) = url.strip_prefix("ssh://") {
+        // Skip optional `user@`.
+        let after_user = rest.split('@').last()?;
+        let host = after_user.split([':', '/']).next()?;
+        return Some(host.to_string());
+    }
+    if let Some(at) = url.find('@') {
+        if let Some(colon) = url[at + 1..].find(':') {
+            return Some(url[at + 1..at + 1 + colon].to_string());
+        }
+    }
+    None
+}
+
+/// Pull owner / repo out of a git remote URL. The path after the
+/// host is split on `/`; the last two non-empty segments are the
+/// owner + repo (with `.git` trimmed). Subgroups (GitLab) collapse
+/// into the owner field — that's already how the GitLab client
+/// expects it.
+fn extract_owner_repo(url: &str) -> Option<(String, String)> {
+    let path_part: String = if let Some(at) = url.find('@') {
+        // git@host:owner/repo.git → owner/repo.git
+        url[at + 1..].splitn(2, ':').nth(1)?.to_string()
+    } else if let Some(after_scheme) = url.split("://").nth(1) {
+        // https://host/owner/repo.git → owner/repo.git
+        after_scheme.splitn(2, '/').nth(1)?.to_string()
+    } else {
+        url.to_string()
+    };
+    let cleaned = path_part.trim_end_matches('/').trim_end_matches(".git");
+    let segments: Vec<&str> = cleaned.split('/').filter(|s| !s.is_empty()).collect();
+    if segments.len() < 2 { return None; }
+    let repo = segments.last()?.to_string();
+    let owner_segments = &segments[..segments.len() - 1];
+    let owner = owner_segments.join("/");
+    Some((owner, repo))
+}
+
 /// Same as `detect_platform_from_remote` but takes the remote name
 /// explicitly. Used by the platform-management commands
 /// (`pipeline`, `job`, `package`, `release`) to support managing a
@@ -1137,7 +1221,40 @@ pub fn detect_platform_from_remote_named(repo_path: &str, remote_name: &str) -> 
         else if url.starts_with("rad://") || url.starts_with("rad@") { "radicle" }
         else if url.contains("bitbucket.org") { "bitbucket" }
         else if url.contains("dev.azure.com") || url.contains(".visualstudio.com") { "azure" }
-        else { return None; };
+        else {
+            // 0.8.0 — self-hosted lookup via platforms.toml registry.
+            // We parse the URL host out of the remote (ssh / https
+            // both work) and ask the registry for a matching entry.
+            // Codeberg / Forgejo route through the Gitea client, so
+            // their `kind` strings map onto the platform string the
+            // rest of torii's switch tables key on.
+            if let Some(host) = extract_host(&url) {
+                if let Some(entry) = crate::platforms_registry::find_by_host(repo_path, &host) {
+                    // Map registry `kind` strings onto the platform
+                    // discriminators the rest of torii uses.
+                    let mapped: &str = match entry.kind.as_str() {
+                        "gitlab" => "gitlab",
+                        "github" | "github_enterprise" => "github",
+                        "gitea" | "forgejo" | "codeberg" => "gitea",
+                        "bitbucket" | "bitbucket_data_center" => "bitbucket",
+                        other => other,
+                    };
+                    // Static-lifetime requirement of the local `platform`
+                    // binding above is satisfied by the matched arms;
+                    // for an unknown kind we bail rather than guess.
+                    let static_kind: &'static str = match mapped {
+                        "gitlab" => "gitlab",
+                        "github" => "github",
+                        "gitea"  => "gitea",
+                        "bitbucket" => "bitbucket",
+                        _ => return None,
+                    };
+                    let owner_repo = extract_owner_repo(&url)?;
+                    return Some((static_kind.to_string(), owner_repo.0, owner_repo.1));
+                }
+            }
+            return None;
+        };
 
     // Radicle URLs are `rad://<seed-host>/<RID>` — there's no
     // owner/repo split, the RID identifies the project globally. We
