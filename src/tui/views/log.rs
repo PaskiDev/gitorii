@@ -160,23 +160,19 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.log.ops_mode {
-        const OPS: &[(&str, bool)] = &[
-            ("diff",       false),
-            ("copy hash",  false),
-            ("search",     false),
-        ];
-        let dropdown_w = 16u16;
-        let dropdown_h = OPS.len() as u16 + 2;
+        let ops = log_ops();
+        let dropdown_w: u16 = 50;
+        let dropdown_h: u16 = ops.len() as u16 + 2;
         let sel_display_pos = sel_pos.unwrap_or(0);
         let entry_y = chunks[0].y + 1 + sel_display_pos as u16 + 1;
         let drop_y = if entry_y + dropdown_h < chunks[0].y + chunks[0].height {
             entry_y
         } else {
-            chunks[0].y + chunks[0].height - dropdown_h
+            chunks[0].y + chunks[0].height.saturating_sub(dropdown_h)
         };
         let drop_area = Rect::new(chunks[0].x + 3, drop_y, dropdown_w, dropdown_h);
 
-        let drop_items: Vec<ListItem> = OPS.iter().enumerate().map(|(i, (label, danger))| {
+        let drop_items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (label, desc, danger))| {
             let is_sel = i == app.log.ops_idx;
             let color = if *danger { C_RED } else if is_sel { C_WHITE } else { C_SUBTLE };
             let prefix = if is_sel { "▶ " } else { "  " };
@@ -187,7 +183,8 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             };
             ListItem::new(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(*label, Style::default().fg(color)),
+                Span::styled(format!("{:<18}", label), Style::default().fg(color)),
+                Span::styled(*desc, Style::default().fg(C_DIM)),
             ])).style(style)
         }).collect();
 
@@ -195,8 +192,12 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         drop_state.select(Some(app.log.ops_idx));
 
         let drop_block = Block::default()
+            .title(Span::styled(
+                " ops — Enter run · Esc close ",
+                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+            ))
             .borders(Borders::ALL).border_type(app.border_type())
-            .border_style(Style::default().fg(bc));
+            .border_style(Style::default().fg(C_WHITE));
 
         f.render_widget(Clear, drop_area);
         f.render_stateful_widget(List::new(drop_items).block(drop_block), drop_area, &mut drop_state);
@@ -284,6 +285,27 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
         ),
         popup,
     );
+}
+
+/// 0.8.3 — ops menu for the Log view. Built once and consumed by
+/// both the renderer and the events dispatcher so the index → label
+/// mapping can't drift. Each entry is `(label, description, danger)`.
+/// Danger turns the label red and is used for ops that rewrite
+/// history.
+pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
+    vec![
+        ("diff",            "open diff for the selected commit",   false),
+        ("copy hash",       "copy short hash to status bar",       false),
+        ("search",          "filter commits by message",           false),
+        ("cherry-pick",     "apply selected commit to current branch", false),
+        ("rebase onto",     "rebase current branch onto selected commit", false),
+        ("show signature",  "open the GPG armor + verify overlay", false),
+        ("blame",           "line-by-line origin of a file",       false),
+        ("remove file",     "purge a path from every commit ⚠",    true),
+        ("rewrite dates",   "shift author/committer dates ⚠",      true),
+        ("scan history",    "find secrets across every commit",    false),
+        ("compact",         "gc + reflog expire (recovers space)", false),
+    ]
 }
 
 fn file_basename(path: &str) -> String {

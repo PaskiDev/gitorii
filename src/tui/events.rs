@@ -584,16 +584,29 @@ fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         return None;
     }
     if app.log.ops_mode {
+        let ops_len = crate::tui::views::log::log_ops().len();
         match (key.modifiers, key.code) {
             (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
                 if app.log.ops_idx > 0 { app.log.ops_idx -= 1; }
             }
             (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.log.ops_idx < 2 { app.log.ops_idx += 1; }
+                if app.log.ops_idx + 1 < ops_len { app.log.ops_idx += 1; }
             }
             (_, KeyCode::Enter) => {
                 let idx = app.log.ops_idx;
                 app.log.ops_mode = false;
+                // 0.8.3 — extended ops menu. Indices map onto the
+                // `log_ops()` list; the renderer reads the same list
+                // so the order can't drift. Ops that already have a
+                // dispatcher (cherry-pick / blame / scan / clean,
+                // wired in 0.7.2 when history fused into log) come
+                // back as Action variants and run from the main
+                // loop's handler. Ops that need an interactive prompt
+                // (remove-file, rewrite) flip the same `confirm`
+                // state the old History view used, which the global
+                // dispatcher already routes correctly. Show-signature
+                // opens the armor overlay directly because the worker
+                // is already a method on App.
                 match idx {
                     0 => return Some(Action::OpenDiffFromLog),
                     1 => return Some(Action::LogCopyHash),
@@ -602,6 +615,19 @@ fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                         app.log.search_query.clear();
                         app.log.filtered.clear();
                     }
+                    3 => return Some(Action::HistoryCherryPick),
+                    4 => return Some(Action::HistoryRebase),
+                    5 => {
+                        if let Some(c) = app.commits.get(app.log.idx) {
+                            let oid = c.full_hash.clone();
+                            app.start_signature_overlay(oid);
+                        }
+                    }
+                    6 => return Some(Action::HistoryBlame),
+                    7 => return Some(Action::HistoryRemoveFile),
+                    8 => return Some(Action::HistoryRewrite),
+                    9 => return Some(Action::HistoryScan),
+                    10 => return Some(Action::HistoryClean),
                     _ => {}
                 }
             }
