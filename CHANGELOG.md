@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.40] - 2026-05-31
+
+### Added
+
+- **Submodule TUI ops dropdown** — closes the gap left in 0.7.39.
+  `o` opens a context menu with **Add new submodule** (two-step
+  input: URL → path), **Update** (`submodule update`), **Update +
+  init** (`--init`), **Init** (register without cloning), **Sync
+  URLs** (rewrite `.git/config` from `.gitmodules`), **Foreach
+  `<cmd>`** (run a shell command in each submodule, input overlay),
+  and **Remove** (confirm `y/n`). All entries route directly to
+  `crate::cmd::submodule::*` — same wrapping pattern as Worktrees.
+- Submodule view's hint bar (`render_hint` in `tui/ui.rs`) gains
+  state-aware arms for the four focus modes (List / OpsDropdown /
+  InputArgs / ConfirmRemove), matching Worktrees / Bisect / Auth.
+
+### Changed
+
+- Static **CLI cheat-sheet** removed from the Submodule info panel
+  (was telling the user to drop to the shell). Hints flow through
+  the global hint bar like every other view.
+- **Palette aligned** with the rest of the TUI: `bc` (brand) for
+  the working OID column (was `C_CYAN`), `C_DIM` for path/url
+  secondary text, `C_GREEN`/`C_YELLOW` for clean/dirty state.
+
+### Internal
+
+- `views/submodule.rs::ops_for(state)` exported so events.rs can
+  size the dropdown without duplicating the model — same export
+  pattern as the rest of the ops-driven views.
+- `handle_submodule` + `dispatch_submodule_op` in `tui/events.rs`.
+- Esc closes overlays back to List, then defers to the global Esc
+  path (sidebar focus).
+
 ## [0.7.39] - 2026-05-31
 
 The two pain points the user surfaced this week: re-auth fatigue and
