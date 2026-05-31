@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-31
+
+### Added
+
+- **TUI Runners sub-tab now combines online + local containers**.
+  The platform's runners (API-side) and any torii-spawned Docker
+  container on this host (`torii-runner-*`) show up in the same
+  list with a scope marker:
+  - `🐳 local` (yellow) — local-docker container
+  - `🌐 online` (brand) — registered against the platform
+  Local entries land first so the "what's running on my machine"
+  answer is at the top. When the platform call fails but local
+  containers exist, the view still renders them instead of going
+  empty.
+- **Docker state mapped onto the existing status colours**:
+  `running` → `online` (green), `exited` → `offline` (dim),
+  `paused` → `paused` (dim), `restarting` → `online` (green).
+- **Guard in the ops dropdown** when the selected row is a local
+  container: instead of firing the platform-API verbs (which would
+  404 against a docker name) the status line points at the right
+  CLI verb — `torii runner start/stop/logs/destroy <name>`. In-TUI
+  docker verbs land in v0.8.2 alongside the rest of the base_url
+  override pass.
+
+### Internal
+
+- New `list_local_runner_containers()` helper in `tui::app`. Calls
+  `docker ps -a --filter name=torii-runner- --format
+  Names\tState\tImage` and maps each row into a `runner::Runner`
+  with `runner_type = "local-docker"`. Silently returns an empty
+  vec when docker isn't installed / the daemon's down — the
+  Runners view degrades to platform-only instead of failing the
+  load.
+- `load_platform_runners` now spawns a single worker that runs the
+  platform API call + the docker query, concatenates the results
+  (local first), and ships the combined vec through the existing
+  `platform_runners_rx`.
+
 ## [0.8.0] - 2026-05-31
 
 First release with first-class **self-hosted** platform support.

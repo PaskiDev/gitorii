@@ -3095,7 +3095,32 @@ impl App {
         self.platform_runners_rx = Some(rx);
 
         std::thread::spawn(move || {
-            let _ = tx.send(client.list(&owner, &repo));
+            // 0.8.1 — the list shown in the TUI is the *combined*
+            // view: every runner the platform knows about (online)
+            // *plus* every torii-spawned Docker container on this
+            // host (local). The local ones get `runner_type =
+            // "local-docker"` so the renderer can distinguish them.
+            // Local entries are listed first so the "what's running
+            // on my machine" answer is at the top.
+            let online = client.list(&owner, &repo);
+            let mut combined: Vec<crate::runner::Runner> =
+                list_local_runner_containers();
+            match online {
+                Ok(mut items) => {
+                    combined.append(&mut items);
+                    let _ = tx.send(Ok(combined));
+                }
+                Err(e) => {
+                    // Even when the platform call fails we surface
+                    // the local containers — the user still wants to
+                    // see what's running locally.
+                    if combined.is_empty() {
+                        let _ = tx.send(Err(e));
+                    } else {
+                        let _ = tx.send(Ok(combined));
+                    }
+                }
+            }
         });
     }
 
@@ -3562,6 +3587,59 @@ pub fn workspaces_toml_path() -> Option<std::path::PathBuf> {
         (_, Some(p)) => Some(p),
         _ => None,
     }
+}
+
+/// 0.8.1 — query `docker ps -a --filter name=torii-runner-` and
+/// return one synthetic `Runner` per container. Synthetic ids use
+/// the container *name* so the TUI's Detail/Ops paths (which key on
+/// `id`) can map back to a `docker` command. Returns an empty vec
+/// when the docker binary isn't installed or the daemon isn't up —
+/// the runners list silently degrades to "platform only" instead of
+/// failing the whole load.
+fn list_local_runner_containers() -> Vec<crate::runner::Runner> {
+    let out = std::process::Command::new("docker")
+        .args([
+            "ps", "-a",
+            "--filter", "name=torii-runner-",
+            "--format", "{{.Names}}\t{{.State}}\t{{.Image}}",
+        ])
+        .output();
+    let Ok(out) = out else { return Vec::new() };
+    if !out.status.success() { return Vec::new() }
+
+    let body = String::from_utf8_lossy(&out.stdout);
+    body.lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| {
+            let cols: Vec<&str> = line.split('\t').collect();
+            let name  = cols.first().copied().unwrap_or("").to_string();
+            let state = cols.get(1).copied().unwrap_or("").to_string();
+            let image = cols.get(2).copied().unwrap_or("").to_string();
+            // Bucket the docker state into the same labels the
+            // platform reports so the existing colour table just
+            // works. "running" stays running, "exited" maps onto
+            // "offline" so it dims, "paused" onto our paused.
+            let status = match state.as_str() {
+                "running"    => "online",
+                "exited"     => "offline",
+                "paused"     => "paused",
+                "restarting" => "running",
+                _            => "offline",
+            }.to_string();
+            crate::runner::Runner {
+                id: name.clone(),
+                description: name,
+                status,
+                paused: state == "paused",
+                ip_address: String::new(),
+                os: String::new(),
+                tags: Vec::new(),
+                version: image,
+                runner_type: "local-docker".to_string(),
+                web_url: String::new(),
+            }
+        })
+        .collect()
 }
 
 fn repo_quick_status(path: &str) -> (String, usize, usize, bool) {
