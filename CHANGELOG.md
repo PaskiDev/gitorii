@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-05-31
+
+### Added
+
+- **TUI Log ops dropdown gained every history operation**. The
+  History view was fused into Log back in 0.7.2 but the dropdown
+  inside Log only carried `diff` / `copy hash` / `search` until
+  now. With this release, `o` over the log list opens a menu of:
+  1. **diff** — open the diff for the selected commit
+  2. **copy hash** — copy the short hash to the status bar
+  3. **search** — filter commits by message
+  4. **cherry-pick** — apply selected commit to current branch
+  5. **rebase onto** — rebase current branch onto selected commit
+     (`torii history rebase` under the hood)
+  6. **show signature** — open the GPG armor + verify overlay for
+     the selected commit (same modal `S` opens directly)
+  7. **blame** — line-by-line origin of a file (prompts for path)
+  8. **remove file** ⚠ — purge a path from every commit
+  9. **rewrite dates** ⚠ — shift author/committer dates in a range
+  10. **scan history** — find secrets across every commit
+  11. **compact** — `gc` + reflog expire (recovers space)
+
+  Each entry is routed through the existing `Action::History*`
+  variants (cherry-pick, rebase, blame, remove-file, rewrite, scan,
+  clean) — the dispatchers were already in place from when the
+  History view existed as a top-level sidebar entry.
+
+### Internal
+
+- `tui/views/log.rs::log_ops()` exported as the single source of
+  truth for the ops list. The renderer and the events handler both
+  read it so the index → label mapping can't drift. Each entry is
+  `(label, description, danger)`; `danger` paints the row red and
+  is used for the two history-rewriting ops.
+- Log ops dropdown title now reads ` ops — Enter run · Esc close `
+  with a white border, matching the chrome the Auth / Bisect /
+  Worktree / Submodule / Platform views use.
+- Dropdown width grew from 16 to 50 cols so the descriptions can
+  render inline.
+
 ## [0.8.2] - 2026-05-31
 
 Docs-only release. Refreshed the crates.io presence so the listing
