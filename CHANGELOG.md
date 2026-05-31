@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.37] - 2026-05-31
+
+Dockerized runner lifecycle from torii. Wraps the `docker` CLI
+instead of pulling in the `bollard` crate — same trade-off as the
+`runner register` flow from 0.7.29: simpler, no extra dep, and the
+user's existing Docker auth Just Works.
+
+### Added
+
+- **`torii runner spawn`** — bring up a Dockerized GitLab Runner
+  against the current project. Two-phase: `docker run -d
+  --restart=unless-stopped -v /var/run/docker.sock:/var/run/
+  docker.sock -v <name>-config:/etc/gitlab-runner
+  gitlab/gitlab-runner:latest`, then `docker exec <name>
+  gitlab-runner register --non-interactive --url <reg-url>
+  --registration-token <token> --executor <executor>
+  [--docker-image <image>] [--description <desc>] [--tag-list
+  <tags>]`. Container name is `torii-runner-<slug>`, slug derived
+  from owner/repo (override with `--name`).
+- **`torii runner status`** — `docker ps -a --filter
+  name=torii-runner-` with a coloured icon column (🟢/⚪/⏸/🔄).
+  No local state file — everything lives in Docker.
+- **`torii runner start <name>` / `runner stop <name>`** — thin
+  wrappers around `docker start|stop` against the
+  `torii-runner-<name>` container.
+- **`torii runner logs <name> [-f] [--tail N]`** — `docker logs`
+  with stdio inheritance so `-f` streams the runner output live.
+- **`torii runner destroy <name> [-y]`** — `docker rm -f`, with a
+  confirmation prompt unless `-y`. Doesn't unregister the runner
+  on the platform side; use `torii runner remove <id>` for that.
+
+### Internal
+
+- New CLI helpers in `cli.rs`:
+  - `container_name(suffix)` — single source of truth for the
+    `torii-runner-*` naming.
+  - `run_runner_spawn` / `run_runner_status` — the wrappers around
+    `docker run` / `docker ps`.
+  - `run_runner_docker(args, label)` — output-captured helper for
+    start/stop/rm.
+  - `run_runner_docker_inherit(args)` — stdio-inheriting variant
+    used by `spawn` and `logs -f`.
+- GitHub Actions self-hosted runners deferred: the container shape
+  (ephemeral tokens, JIT config) is different enough that we bail
+  with a clear pointer at `runner register --runner-dir` instead.
+
 ## [0.7.36] - 2026-05-31
 
 The TUI side of the GPG work from 0.7.35 — column, armor overlay,

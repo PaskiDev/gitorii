@@ -1740,6 +1740,86 @@ enum RunnerCommands {
     /// `torii runner register` has a place to land its block. Does
     /// NOT install the binary.
     Init,
+
+    /// Spawn a Dockerized runner against the current platform.
+    ///
+    /// Pulls the upstream image, runs it as a detached container
+    /// with the Docker socket mounted (so the runner can launch its
+    /// own job containers), then runs `gitlab-runner register`
+    /// inside to attach it to the project.
+    ///
+    /// Container is named `torii-runner-<slug>` so the rest of
+    /// `torii runner status / start / stop / logs / destroy` can
+    /// list and drive it without any local state file. GitLab only
+    /// for now — GitHub Actions self-hosted runners use a different
+    /// container shape (ephemeral tokens, JIT config) we haven't
+    /// wired yet.
+    #[command(after_help = "Examples:
+  torii runner spawn                                  GitLab project, docker executor
+  torii runner spawn --name void-torii                Custom container name suffix
+  torii runner spawn --executor shell                 Use the shell executor inside the container
+  torii runner spawn --image rust:1.94                Run jobs inside this Docker image
+  torii runner spawn --tags torii,docker              Tag list passed to register
+  torii runner spawn --remote github-paskidev         (rejected — GitHub spawn not implemented)")]
+    Spawn {
+        /// Human-readable suffix appended to the container name. Final
+        /// name is `torii-runner-<name>`. Defaults to a slug derived
+        /// from the owner/repo.
+        #[arg(long)]
+        name: Option<String>,
+        /// Image used for the runner container itself. Defaults to
+        /// the upstream `gitlab/gitlab-runner:latest`.
+        #[arg(long, default_value = "gitlab/gitlab-runner:latest")]
+        runner_image: String,
+        /// Executor passed to `gitlab-runner register`.
+        #[arg(long, default_value = "docker")]
+        executor: String,
+        /// Image used for the jobs the runner picks up (only meaningful
+        /// when `--executor docker`).
+        #[arg(long, default_value = "alpine:latest")]
+        image: String,
+        /// Tag list for the runner. Comma-separated.
+        #[arg(long)]
+        tags: Option<String>,
+        /// Description shown in the platform's runner list.
+        #[arg(long)]
+        description: Option<String>,
+        /// Skip confirmation prompt for the resolved docker commands.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
+
+    /// List dockerized runners managed by torii (`torii-runner-*`
+    /// containers) and their status.
+    Status,
+
+    /// Start a stopped torii-managed runner container.
+    Start { name: String },
+
+    /// Stop a running torii-managed runner container.
+    Stop { name: String },
+
+    /// Tail the logs of a torii-managed runner container.
+    Logs {
+        name: String,
+        /// Follow the log stream (`docker logs -f`). Press Ctrl-C to
+        /// detach; the container keeps running.
+        #[arg(short = 'f', long)]
+        follow: bool,
+        /// Show only the last N lines of historical logs.
+        #[arg(long)]
+        tail: Option<usize>,
+    },
+
+    /// Remove a torii-managed runner container completely. Stops it
+    /// first if needed. Doesn't touch the platform-side runner
+    /// registration — use `torii runner remove <id>` for that.
+    Destroy {
+        name: String,
+        /// Skip confirmation prompt.
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -4231,6 +4311,54 @@ impl Cli {
                     RunnerCommands::Init => {
                         run_runner_init(&platform)?;
                     }
+                    RunnerCommands::Spawn {
+                        name, runner_image, executor, image, tags, description, yes,
+                    } => {
+                        let reg = client.registration_token(&owner, &repo_name)?;
+                        run_runner_spawn(
+                            &platform, &owner, &repo_name, &reg,
+                            name.as_deref(),
+                            runner_image,
+                            executor,
+                            image,
+                            tags.as_deref(),
+                            description.as_deref(),
+                            *yes,
+                        )?;
+                    }
+                    RunnerCommands::Status => {
+                        run_runner_status()?;
+                    }
+                    RunnerCommands::Start { name } => {
+                        run_runner_docker(&["start", &container_name(name)], "start")?;
+                    }
+                    RunnerCommands::Stop { name } => {
+                        run_runner_docker(&["stop", &container_name(name)], "stop")?;
+                    }
+                    RunnerCommands::Logs { name, follow, tail } => {
+                        let mut args: Vec<String> = vec!["logs".to_string()];
+                        if *follow { args.push("-f".to_string()); }
+                        if let Some(n) = tail { args.push(format!("--tail={}", n)); }
+                        args.push(container_name(name));
+                        let argv: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+                        run_runner_docker_inherit(&argv)?;
+                    }
+                    RunnerCommands::Destroy { name, yes } => {
+                        let full = container_name(name);
+                        if !*yes {
+                            print!("Destroy container `{}` (still leaves the runner registered on the platform)? [y/N] ", full);
+                            use std::io::Write;
+                            std::io::stdout().flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input)?;
+                            if !input.trim().eq_ignore_ascii_case("y") {
+                                println!("❌ Cancelled.");
+                                return Ok(());
+                            }
+                        }
+                        // `rm -f` stops + removes in one go.
+                        run_runner_docker(&["rm", "-f", &full], "rm")?;
+                    }
                 }
             }
 
@@ -5186,6 +5314,231 @@ fn run_runner_register(
         );
     }
     println!("✅ Runner registered.");
+    Ok(())
+}
+
+/// Final docker container name for a torii-managed runner. Single
+/// source of truth so `spawn` and the other commands agree on the
+/// name shape.
+fn container_name(suffix: &str) -> String {
+    let trimmed = suffix.trim();
+    if trimmed.is_empty() {
+        return "torii-runner".to_string();
+    }
+    if trimmed.starts_with("torii-runner-") || trimmed == "torii-runner" {
+        return trimmed.to_string();
+    }
+    format!("torii-runner-{}", trimmed)
+}
+
+/// `torii runner spawn` — bring a Dockerized GitLab Runner up against
+/// the current project. Two-phase: `docker run` to start the agent,
+/// then `docker exec gitlab-runner register` inside to attach it.
+/// Mirrors the manual flow the user has been doing by hand.
+fn run_runner_spawn(
+    platform: &str,
+    owner: &str,
+    repo: &str,
+    reg: &crate::runner::RegistrationToken,
+    name: Option<&str>,
+    runner_image: &str,
+    executor: &str,
+    job_image: &str,
+    tags: Option<&str>,
+    description: Option<&str>,
+    yes: bool,
+) -> Result<()> {
+    if platform != "gitlab" {
+        anyhow::bail!(
+            "`torii runner spawn` is GitLab-only for now. GitHub Actions self-hosted \
+             runners use a different container shape (ephemeral tokens, JIT config) — \
+             use `torii runner register --runner-dir <path>` against an unpacked \
+             actions-runner tarball instead."
+        );
+    }
+
+    which_binary("docker").ok_or_else(|| anyhow::anyhow!(
+        "`docker` not found on PATH. Install Docker (or Podman with a `docker` shim) \
+         and re-run."
+    ))?;
+
+    let slug = name
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{}-{}", owner.replace('/', "-"), repo.replace('/', "-")));
+    let cname = container_name(&slug);
+
+    // Phase 1 — the docker run command. Mount the host socket so the
+    // runner (executor=docker) can launch sibling job containers.
+    // `--restart=unless-stopped` matches the convention from
+    // gitlab-runner Docker docs.
+    let run_args: Vec<String> = vec![
+        "run".to_string(),
+        "-d".to_string(),
+        "--name".to_string(),       cname.clone(),
+        "--restart".to_string(),    "unless-stopped".to_string(),
+        "-v".to_string(),           "/var/run/docker.sock:/var/run/docker.sock".to_string(),
+        "-v".to_string(),           format!("{}-config:/etc/gitlab-runner", cname),
+        runner_image.to_string(),
+    ];
+
+    // Phase 2 — register inside.
+    let mut register_args: Vec<String> = vec![
+        "exec".to_string(), cname.clone(),
+        "gitlab-runner".to_string(), "register".to_string(),
+        "--non-interactive".to_string(),
+        "--url".to_string(),                reg.register_url.clone(),
+        "--registration-token".to_string(), reg.token.clone(),
+        "--executor".to_string(),           executor.to_string(),
+    ];
+    if executor == "docker" {
+        register_args.push("--docker-image".to_string());
+        register_args.push(job_image.to_string());
+    }
+    if let Some(d) = description {
+        register_args.push("--description".to_string());
+        register_args.push(d.to_string());
+    } else {
+        register_args.push("--description".to_string());
+        register_args.push(format!("torii-spawned {}", cname));
+    }
+    if let Some(t) = tags {
+        register_args.push("--tag-list".to_string());
+        register_args.push(t.to_string());
+    }
+
+    let pretty_run = run_args.join(" ");
+    let pretty_reg = register_args.iter()
+        .map(|a| if a == &reg.token { "<TOKEN>".to_string() } else { a.clone() })
+        .collect::<Vec<_>>()
+        .join(" ");
+    println!("🛠  Will run:");
+    println!("     docker {}", pretty_run);
+    println!("     docker {}", pretty_reg);
+
+    if !yes {
+        use std::io::Write;
+        print!("Proceed? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        if !input.trim().eq_ignore_ascii_case("y") {
+            println!("❌ Cancelled.");
+            return Ok(());
+        }
+    }
+
+    // Spawn phase. We don't pipe stdout because the user just wants
+    // the container id back, same as bare `docker run -d` prints.
+    let run_argv: Vec<&str> = run_args.iter().map(|s| s.as_str()).collect();
+    run_runner_docker_inherit(&run_argv)?;
+
+    // Brief pause: the freshly-started container may still be coming
+    // up when we run exec; gitlab-runner takes a beat to settle. A
+    // tight loop polling `docker exec` would be cleaner but a single
+    // 1s sleep is enough for the common case and keeps the code
+    // trivial.
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    let reg_argv: Vec<&str> = register_args.iter().map(|s| s.as_str()).collect();
+    run_runner_docker_inherit(&reg_argv)?;
+
+    println!("✓ Runner container `{}` up and registered.", cname);
+    println!("  · `torii runner status`           list torii-managed runners");
+    println!("  · `torii runner logs {} -f`       follow output", cname);
+    println!("  · `torii runner stop {}`          pause without unregistering", cname);
+    println!("  · `torii runner destroy {}`       remove the container", cname);
+    Ok(())
+}
+
+/// `torii runner status` — surface every container whose name starts
+/// with `torii-runner-`, with its docker state column.
+fn run_runner_status() -> Result<()> {
+    which_binary("docker").ok_or_else(|| anyhow::anyhow!(
+        "`docker` not found on PATH. (`runner status` only knows about Dockerized \
+         runners spawned by `torii runner spawn`.)"
+    ))?;
+
+    let out = std::process::Command::new("docker")
+        .args([
+            "ps", "-a",
+            "--filter", "name=torii-runner-",
+            "--format", "{{.Names}}\t{{.State}}\t{{.Status}}\t{{.Image}}",
+        ])
+        .output()
+        .map_err(|e| anyhow::anyhow!("run docker ps: {}", e))?;
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("docker ps failed: {}", err.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().filter(|l| !l.is_empty()).collect();
+    if lines.is_empty() {
+        println!("No torii-managed runner containers found.");
+        println!("Spawn one with: `torii runner spawn`");
+        return Ok(());
+    }
+
+    println!("{:<32} {:<10} {:<24} IMAGE", "NAME", "STATE", "STATUS");
+    for line in lines {
+        let cols: Vec<&str> = line.split('\t').collect();
+        let (name, state, status, image) = (
+            cols.first().copied().unwrap_or(""),
+            cols.get(1).copied().unwrap_or(""),
+            cols.get(2).copied().unwrap_or(""),
+            cols.get(3).copied().unwrap_or(""),
+        );
+        let icon = match state {
+            "running"    => "🟢",
+            "exited"     => "⚪",
+            "paused"     => "⏸",
+            "restarting" => "🔄",
+            _            => "·",
+        };
+        println!("{:<32} {} {:<8} {:<24} {}", name, icon, state, status, image);
+    }
+    Ok(())
+}
+
+/// Run `docker <args>` capturing stdout/stderr, surface stderr on
+/// failure with the original status code. Used for the short ops
+/// (start/stop) where there's no useful output to stream.
+fn run_runner_docker(args: &[&str], label: &str) -> Result<()> {
+    which_binary("docker").ok_or_else(|| anyhow::anyhow!(
+        "`docker` not found on PATH."
+    ))?;
+    let out = std::process::Command::new("docker")
+        .args(args)
+        .output()
+        .map_err(|e| anyhow::anyhow!("spawn docker {}: {}", label, e))?;
+    if out.status.success() {
+        let s = String::from_utf8_lossy(&out.stdout);
+        let trimmed = s.trim();
+        if !trimmed.is_empty() {
+            println!("{}", trimmed);
+        }
+        println!("✓ {} ok", label);
+        Ok(())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        anyhow::bail!("docker {} failed: {}", label, err.trim());
+    }
+}
+
+/// Same as `run_runner_docker` but inherits stdio. Used for `spawn`
+/// (the docker run prints the container id) and `logs` (where the
+/// user wants the stream live).
+fn run_runner_docker_inherit(args: &[&str]) -> Result<()> {
+    which_binary("docker").ok_or_else(|| anyhow::anyhow!(
+        "`docker` not found on PATH."
+    ))?;
+    let status = std::process::Command::new("docker")
+        .args(args)
+        .status()
+        .map_err(|e| anyhow::anyhow!("spawn docker: {}", e))?;
+    if !status.success() {
+        anyhow::bail!("docker {} exited {}", args.first().copied().unwrap_or("?"), status);
+    }
     Ok(())
 }
 
