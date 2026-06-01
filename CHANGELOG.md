@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-01
+
+### Changed
+
+- README badges updated: `license-custom` → `MIT OR Apache-2.0`, Rust
+  badge bumped to `1.95+`.
+- `rust-version` in `Cargo.toml` bumped from `1.85` to `1.95` to
+  reflect the actual minimum that builds the current dep tree.
+
 ## [0.9.1] - 2026-06-01
 
 ### Changed

@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/gitorii.svg)](https://crates.io/crates/gitorii)
 [![Downloads](https://img.shields.io/crates/d/gitorii.svg)](https://crates.io/crates/gitorii)
-[![License](https://img.shields.io/badge/license-custom-blue.svg)](LICENSE)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT_OR_Apache--2.0-blue.svg)](#license)
 [![Rust 1.95+](https://img.shields.io/badge/rust-1.95+-orange.svg)](https://www.rust-lang.org)
 
 **A human-first Git client.** Simpler commands, a built-in TUI, snapshots,
