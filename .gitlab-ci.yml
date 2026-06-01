@@ -66,9 +66,8 @@ variables:
   before_script:
     # gitlab.com shared runners use Docker executor — each job starts
     # from a fresh `rust:1-bookworm` image that already has cargo and
-    # a recent stable rustc, but not the cross-compile toolchains or
-    # the specific 1.94 toolchain pinned by rust-toolchain.toml. We
-    # apt-install the cross-compile gcc(s) and let rustup-init lay
+    # a recent stable rustc, but not the cross-compile toolchains.
+    # We apt-install the cross-compile gcc(s) and let rustup-init lay
     # down the matching toolchain on top.
     - apt-get update -qq && apt-get install -y -qq curl build-essential $EXTRA_PKGS
     - curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
@@ -91,7 +90,7 @@ variables:
 
 # Self-hosted-runner template. Runs on the `void-torii` shell executor
 # on the user's Arch host. Assumes the host already has:
-#   · cargo + rustc (via rustup honouring rust-toolchain.toml = 1.94.0)
+#   · cargo + rustc (via rustup; stable channel works since 0.9.1)
 #   · gcc (native)
 #   · aarch64-linux-gnu-gcc  (Arch pkg: aarch64-linux-gnu-gcc)
 #   · x86_64-w64-mingw32-gcc (Arch pkg: mingw-w64-gcc)

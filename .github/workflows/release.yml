@@ -56,11 +56,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Rust
-        # Pinned to 1.94.0 to avoid rustc 1.95.0's ICE in mono-item
-        # partitioning that the russh→rsa-rc→crypto-bigint-rc chain
-        # triggers. Keep in sync with `rust-toolchain.toml`.
-        # TODO: revert to @stable once a fixed stable rustc lands.
-        uses: dtolnay/rust-toolchain@1.94.0
+        uses: dtolnay/rust-toolchain@stable
 
       # Auth chain (try OIDC first, fall back to a stored PAT):
       #

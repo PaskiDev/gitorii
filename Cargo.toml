@@ -1,6 +1,6 @@
 [package]
 name = "gitorii"
-version = "0.9.0"
+version = "0.9.1"
 edition = "2021"
 rust-version = "1.85"
 authors = ["Paski <paski@paski.dev>"]
@@ -51,7 +51,7 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 update-informer = { version = "1.2", default-features = false, features = ["crates", "ureq"] }
 
 # SSH transport (pure Rust, no openssl/libssh2)
-russh = "=0.60.2"
+russh = "0.61"
 tokio = { version = "1", features = ["rt", "io-util", "macros", "net", "sync"] }
 
 # Regex for custom secret patterns in .toriignore + commit-scan policies
