@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-06-01
+
+### Changed
+
+- **Relicensed from TSAL-1.0 to `MIT OR Apache-2.0`.** Gitorii (the
+  `torii` binary and core CLI/TUI) is now dual-licensed under the
+  permissive open-source standard of the Rust ecosystem. Existing
+  users are unaffected — TSAL-1.0 already allowed personal and
+  non-production use; the new dual license simply removes the
+  restrictions on production and organizational use without any
+  additional cost or registration.
+- The previous `LICENSE` file (TSAL-1.0) has been replaced with two
+  files: `LICENSE-APACHE` (Apache License 2.0) and `LICENSE-MIT`
+  (MIT License). Recipients may choose either.
+- `Cargo.toml` `license-file = "LICENSE"` replaced by the SPDX
+  expression `license = "MIT OR Apache-2.0"`. This unblocks crates.io
+  listings, awesome-rust inclusion, and contributions from companies
+  whose CLAs prohibit non-OSS code.
+
+### Why this change
+
+Gitorii is the **core**, intended for the broadest possible audience.
+Commercial features and managed services live in **gitorii-cloud**
+(CI/CD unification via transpiler, hosted snapshots, enterprise
+verticals) and remain proprietary. Decoupling the core license from
+the commercial layer follows the open-core pattern of GitLab CE↔GitLab.com,
+Sentry OSS↔SaaS, and Grafana OSS↔Cloud.
+
+### Contributing
+
+Contributions are now accepted under the Developer Certificate of
+Origin 1.1. Please sign your commits with `git commit -s` (or
+`torii save -s`). By signing off, you assert that you have the right
+to contribute the change under the project's dual MIT/Apache license.
+
+### Trademarks
+
+The names **Torii** and **Gitorii** remain trademarks of the author.
+The new license covers source code only — forks may exist but must
+rename and may not imply official endorsement.
+
 ## [0.8.3] - 2026-05-31
 
 ### Added
