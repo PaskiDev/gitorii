@@ -2,7 +2,7 @@
 name = "gitorii"
 version = "0.9.1"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 authors = ["Paski <paski@paski.dev>"]
 description = "Human-first Git client. Simpler commands, a TUI, snapshots, multi-platform mirrors, secret scanning, OAuth, GPG, CI runners, self-hosted platform registry."
 license = "MIT OR Apache-2.0"
