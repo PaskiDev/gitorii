@@ -718,7 +718,22 @@ dep tree.
 
 ## License
 
-TSAL-1.0 — Free for personal and non-production use. Commercial use requires a license. Converts to Apache 2.0 after 10 years. See [LICENSE](LICENSE) for details.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+Contributions are accepted under the Developer Certificate of Origin 1.1 — sign your commits with `git commit -s` (or `torii save -s`).
+
+### Trademark
+
+The names **Torii** and **Gitorii** and associated logos are trademarks of Pasqual Peñalver. The license above covers the source code only; forks and derivative works must not use these names or confusingly similar names in a way that suggests official endorsement.
 
 ## Author
 
