@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-01
+
+### Changed
+
+- **Unpinned `russh` from `=0.60.2` to `0.61`.** The upstream crypto
+  chain has stabilised enough for the rustc 1.95 mono-item ICE to no
+  longer trigger. Several previously-RC crates (`ed25519`, `signature`,
+  `ml-kem`, `password-hash`, `pkcs5`, `pkcs8`, `spki`) reached stable
+  releases, and `ssh-key` left the internal russh fork.
+- **Removed `rust-toolchain.toml`.** Stable rustc now builds the dep
+  tree cleanly. Users no longer need `rustup install 1.94.0` to
+  `cargo install gitorii`.
+- README `Troubleshooting` section trimmed — the historical ICE note
+  is gone; only the generic `RUST_MIN_STACK` advice remains for deep
+  monomorphisation cases.
+- CI: GitHub release workflow switched from `dtolnay/rust-toolchain@1.94.0`
+  to `@stable`. GitLab CI comments updated.
+
+### Verified
+
+- Full debug + release builds pass on stable rustc 1.95.0 (Arch host).
+- `aws-lc-sys` remains at `0.40.0` (Windows cross-compile via mingw +
+  nasm still works; no regression to the 0.41 NASM-mandatory branch).
+
 ## [0.9.0] - 2026-06-01
 
 ### Changed

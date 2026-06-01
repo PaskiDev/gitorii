@@ -651,61 +651,28 @@ busybox)? Build with the `static` feature on the musl target:
 cargo build --release --target x86_64-unknown-linux-musl --features static
 ```
 
-## Troubleshooting: `rustc` ICE / SIGSEGV
+## Troubleshooting: `rustc SIGSEGV` during install
 
-`cargo install gitorii` can fail in two distinct ways depending on your
-toolchain. Both are upstream bugs triggered by the transitive crypto
-chain `russh` pulls in (`rsa 0.10-rc` → `crypto-bigint 0.7-rc` →
-`elliptic-curve 0.14-rc`). **Neither is a gitorii bug.**
-
-**1. `rustc 1.95.0` ICE in mono-item partitioning.**
-
-```
-thread 'rustc' panicked at compiler/rustc_span/src/symbol.rs:2760
-called `Option::unwrap()` on a `None` value
-```
-
-The crate ships `rust-toolchain.toml` pinning the build to `1.94.0`,
-which `rustup` honours automatically inside the unpacked crate. Usually
-all you need is:
-
-```bash
-rustup install 1.94.0
-cargo install gitorii --locked
-```
-
-If your shell or cargo config overrides the pin, force the toolchain
-explicitly:
-
-```bash
-cargo +1.94.0 install gitorii --locked
-```
-
-**2. `SIGSEGV` in LLVM codegen / stack overflow.**
+`cargo install gitorii` can fail with:
 
 ```
 error: rustc interrupted by SIGSEGV, printing backtrace
 ... LlvmCodegenBackend ... compile_codegen_unit ...
 ```
 
-Hits independent of rustc version when monomorphisation goes deep enough
-to overflow rustc's 8 MB default thread stack, or when too many parallel
-rustcs blow up system RAM. Fix: raise the stack, cap parallelism.
+This happens when monomorphisation through the transitive crypto chain
+that `russh` pulls in goes deep enough to overflow rustc's 8 MB default
+thread stack, or when too many parallel rustcs blow up system RAM. Fix:
+raise the stack, cap parallelism.
 
 ```bash
-RUST_MIN_STACK=67108864 \
-  cargo +1.94.0 install gitorii --locked -j 1
+RUST_MIN_STACK=67108864 cargo install gitorii --locked -j 1
 ```
 
 `-j 1` (single-thread) is the bulletproof setting. Slower but stable.
 
-**3. Last resort: skip the compiler.** Grab the prebuilt binary from the
+**Last resort: skip the compiler.** Grab the prebuilt binary from the
 [GitLab Generic Package Registry](https://gitlab.com/paskidev/gitorii/-/releases) — they're built by CI on every tag and don't expire.
-
-Upstream tracking: `rust-lang/rust` (compiler ICE), `warp-tech/russh`
-(crypto RC defaults). The `rust-toolchain.toml` pin and this section
-go away once a fixed stable rustc lands and is validated against the
-dep tree.
 
 ## Links
 
