@@ -1,27 +1,17 @@
-[package]
-name = "gitorii"
+[workspace]
+resolver = "2"
+members = ["crates/torii-core", "crates/torii"]
+
+[workspace.package]
 version = "0.9.2"
 edition = "2021"
 rust-version = "1.95"
 authors = ["Paski <paski@paski.dev>"]
-description = "Human-first Git client. Simpler commands, a TUI, snapshots, multi-platform mirrors, secret scanning, OAuth, GPG, CI runners, self-hosted platform registry."
 license = "MIT OR Apache-2.0"
-readme = "README.md"
 repository = "https://gitlab.com/paskidev/gitorii"
 homepage = "https://gitorii.com"
-documentation = "https://gitlab.com/paskidev/gitorii/-/blob/main/README.md"
-keywords = ["git", "tui", "vcs", "cli", "developer-tools"]
-categories = ["command-line-utilities", "development-tools"]
-publish = true
 
-[[bin]]
-name = "torii"
-path = "src/main.rs"
-
-[dependencies]
-# CLI argument parsing
-clap = { version = "=4.5", features = ["derive"] }
-
+[workspace.dependencies]
 # Git operations — transports disabled, we provide custom reqwest+russh transports
 git2 = { version = "0.19", default-features = false }
 
@@ -43,13 +33,6 @@ chrono = { version = "0.4", features = ["serde"] }
 # Platform-specific directories
 dirs = "5.0"
 
-# TUI
-ratatui = "0.29"
-crossterm = { version = "0.28", features = ["event-stream"] }
-
-# Update notifier
-update-informer = { version = "1.2", default-features = false, features = ["crates", "ureq"] }
-
 # SSH transport (pure Rust, no openssl/libssh2)
 russh = "0.61"
 tokio = { version = "1", features = ["rt", "io-util", "macros", "net", "sync"] }
@@ -57,8 +40,6 @@ tokio = { version = "1", features = ["rt", "io-util", "macros", "net", "sync"] }
 # Regex for custom secret patterns in .toriignore + commit-scan policies
 regex = "1.10"
 
-
-[dev-dependencies]
 tempfile = "3.12"
 
 # The profile that 'dist' will build with
