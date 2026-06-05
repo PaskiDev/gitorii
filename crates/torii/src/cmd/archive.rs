@@ -46,11 +46,15 @@ pub fn archive(repo_path: &Path, revision: &str, opts: &Opts) -> Result<()> {
         .args(&args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git archive: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git archive: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git archive exited with {status}"
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git archive exited with {status}"),
+        });
     }
     if let Some(out) = &opts.output {
         println!("✅ Written: {out}");

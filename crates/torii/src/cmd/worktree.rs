@@ -138,7 +138,10 @@ pub fn add(repo_path: &Path, spec: BranchSpec, opts: &AddOpts) -> Result<()> {
         println!("   {line}");
     }
 
-    println!("\n💡 Enter it with:  torii worktree open {}", target_path.display());
+    println!(
+        "\n💡 Enter it with:  torii worktree open {}",
+        target_path.display()
+    );
 
     Ok(())
 }
@@ -270,7 +273,9 @@ fn derive_worktree_name(path: &Path, branch: &str) -> String {
 /// currently inside.
 pub fn list(repo_path: &Path) -> Result<()> {
     let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
-    let here = repo_path.canonicalize().unwrap_or_else(|_| repo_path.to_path_buf());
+    let here = repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf());
 
     println!("🌳 Worktrees:\n");
 
@@ -293,35 +298,30 @@ pub fn list(repo_path: &Path) -> Result<()> {
             Ok(w) => w,
             Err(_) => continue,
         };
-        let wt_path = wt.path().canonicalize().unwrap_or_else(|_| wt.path().to_path_buf());
+        let wt_path = wt
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| wt.path().to_path_buf());
         print_worktree_row(&wt_path, name, &here, Some(&wt))?;
     }
 
     Ok(())
 }
 
-fn print_worktree_row(
-    path: &Path,
-    name: &str,
-    here: &Path,
-    wt: Option<&Worktree>,
-) -> Result<()> {
+fn print_worktree_row(path: &Path, name: &str, here: &Path, wt: Option<&Worktree>) -> Result<()> {
     let is_here = path == here;
     let marker = if is_here { "📍" } else { " " };
 
     // Branch + state — open the worktree as its own repo and peek inside.
-    let (branch, state) = describe_worktree(path).unwrap_or_else(|e| {
-        ("?".to_string(), format!("error: {}", e))
-    });
+    let (branch, state) =
+        describe_worktree(path).unwrap_or_else(|e| ("?".to_string(), format!("error: {}", e)));
 
-    let locked = wt
-        .and_then(|w| w.is_locked().ok())
-        .and_then(|s| match s {
-            git2::WorktreeLockStatus::Locked(reason) => {
-                Some(reason.unwrap_or_else(|| "(no reason)".to_string()))
-            }
-            git2::WorktreeLockStatus::Unlocked => None,
-        });
+    let locked = wt.and_then(|w| w.is_locked().ok()).and_then(|s| match s {
+        git2::WorktreeLockStatus::Locked(reason) => {
+            Some(reason.unwrap_or_else(|| "(no reason)".to_string()))
+        }
+        git2::WorktreeLockStatus::Unlocked => None,
+    });
 
     let suffix = match (is_here, locked) {
         (true, Some(r)) => format!("(this one, locked: {r:?})"),
@@ -446,7 +446,10 @@ pub fn remove(repo_path: &Path, target_path: &Path, opts: &RemoveOpts) -> Result
             so.include_untracked(true);
             wt_repo
                 .statuses(Some(&mut so))
-                .map(|s| s.iter().any(|x| !x.status().contains(git2::Status::IGNORED)))
+                .map(|s| {
+                    s.iter()
+                        .any(|x| !x.status().contains(git2::Status::IGNORED))
+                })
                 .unwrap_or(false)
         }
         Err(_) => false,
@@ -477,15 +480,18 @@ pub fn remove(repo_path: &Path, target_path: &Path, opts: &RemoveOpts) -> Result
     }
 
     // Remove the working tree directory + prune the metadata.
-    std::fs::remove_dir_all(&target).map_err(|e| {
-        ToriiError::Fs(format!("rm -rf {}: {}", target.display(), e))
-    })?;
+    std::fs::remove_dir_all(&target)
+        .map_err(|e| ToriiError::Fs(format!("rm -rf {}: {}", target.display(), e)))?;
 
     let mut prune_opts = WorktreePruneOptions::new();
     prune_opts.valid(true).working_tree(true);
     wt.prune(Some(&mut prune_opts)).map_err(ToriiError::Git)?;
 
-    println!("🗑  Worktree '{}' removed from {}", wt_name, target.display());
+    println!(
+        "🗑  Worktree '{}' removed from {}",
+        wt_name,
+        target.display()
+    );
     Ok(())
 }
 
@@ -542,9 +548,7 @@ pub fn lock(repo_path: &Path, target: &Path, reason: Option<&str>) -> Result<()>
         git2::WorktreeLockStatus::Unlocked => {}
     }
     wt.lock(reason).map_err(ToriiError::Git)?;
-    let suffix = reason
-        .map(|r| format!(" ({r})"))
-        .unwrap_or_default();
+    let suffix = reason.map(|r| format!(" ({r})")).unwrap_or_default();
     println!("🔒 Locked worktree '{name}'{suffix}");
     Ok(())
 }
@@ -590,9 +594,8 @@ pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
         )));
     }
     if let Some(parent) = new.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            ToriiError::Fs(format!("mkdir parent {}: {}", parent.display(), e))
-        })?;
+        std::fs::create_dir_all(parent)
+            .map_err(|e| ToriiError::Fs(format!("mkdir parent {}: {}", parent.display(), e)))?;
     }
 
     // 1. Move the directory.
@@ -618,9 +621,7 @@ pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
     // worktree admin file still gets updated. Better an unresolved path
     // pointing at the real new location than a moved dir with stale gitdir
     // metadata.
-    let new_canon = new
-        .canonicalize()
-        .unwrap_or_else(|_| new.to_path_buf());
+    let new_canon = new.canonicalize().unwrap_or_else(|_| new.to_path_buf());
 
     // 2. Patch the `<new>/.git` link to point at the (unchanged) gitdir.
     //    The gitdir itself doesn't move — only the worktree dir.
@@ -635,9 +636,8 @@ pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
     let admin = repo.path().join("worktrees").join(&name).join("gitdir");
     if admin.exists() {
         let new_git_file = new_canon.join(".git");
-        std::fs::write(&admin, format!("{}\n", new_git_file.display())).map_err(|e| {
-            ToriiError::Fs(format!("write {}: {}", admin.display(), e))
-        })?;
+        std::fs::write(&admin, format!("{}\n", new_git_file.display()))
+            .map_err(|e| ToriiError::Fs(format!("write {}: {}", admin.display(), e)))?;
     }
 
     println!(
@@ -658,18 +658,15 @@ fn libc_exdev() -> i32 {
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst).map_err(|e| {
-        ToriiError::Fs(format!("mkdir {}: {}", dst.display(), e))
-    })?;
-    for entry in std::fs::read_dir(src).map_err(|e| {
-        ToriiError::Fs(format!("read {}: {}", src.display(), e))
-    })? {
-        let entry = entry.map_err(|e| {
-            ToriiError::Fs(format!("read entry: {}", e))
-        })?;
-        let ty = entry.file_type().map_err(|e| {
-            ToriiError::Fs(format!("file_type: {}", e))
-        })?;
+    std::fs::create_dir_all(dst)
+        .map_err(|e| ToriiError::Fs(format!("mkdir {}: {}", dst.display(), e)))?;
+    for entry in std::fs::read_dir(src)
+        .map_err(|e| ToriiError::Fs(format!("read {}: {}", src.display(), e)))?
+    {
+        let entry = entry.map_err(|e| ToriiError::Fs(format!("read entry: {}", e)))?;
+        let ty = entry
+            .file_type()
+            .map_err(|e| ToriiError::Fs(format!("file_type: {}", e)))?;
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if ty.is_dir() {
@@ -685,9 +682,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
                 })?;
             }
         } else {
-            std::fs::copy(&src_path, &dst_path).map_err(|e| {
-                ToriiError::Fs(format!("copy {}: {}", src_path.display(), e))
-            })?;
+            std::fs::copy(&src_path, &dst_path)
+                .map_err(|e| ToriiError::Fs(format!("copy {}: {}", src_path.display(), e)))?;
         }
     }
     Ok(())
@@ -817,12 +813,16 @@ pub fn open(repo_path: &Path, target: &Path) -> Result<()> {
     let status = Command::new(&shell)
         .current_dir(&target_canon)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "shell".into(), message: format!("spawn {shell}: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "shell".into(),
+            message: format!("spawn {shell}: {e}"),
+        })?;
 
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "shell".into(), message: format!(
-            "shell exited with status {status}"
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "shell".into(),
+            message: format!("shell exited with status {status}"),
+        });
     }
     Ok(())
 }
@@ -846,8 +846,14 @@ mod tests {
         let home = dirs::home_dir().expect("HOME must be set in tests");
         assert_eq!(expand_tilde(Path::new("~/foo")), home.join("foo"));
         assert_eq!(expand_tilde(Path::new("~")), home);
-        assert_eq!(expand_tilde(Path::new("/abs/path")), PathBuf::from("/abs/path"));
-        assert_eq!(expand_tilde(Path::new("rel/path")), PathBuf::from("rel/path"));
+        assert_eq!(
+            expand_tilde(Path::new("/abs/path")),
+            PathBuf::from("/abs/path")
+        );
+        assert_eq!(
+            expand_tilde(Path::new("rel/path")),
+            PathBuf::from("rel/path")
+        );
     }
 
     #[test]

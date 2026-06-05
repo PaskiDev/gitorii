@@ -7,17 +7,17 @@
 //! Platform views.
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    Frame,
 };
 
+use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{
     App, BisectFocus, BisectState, RefEntry, RefKind, RefPickerOp, RefPickerTab,
 };
-use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED, C_YELLOW};
 
 pub fn refresh(app: &mut App) {
     let prev_focus = app.bisect_view.focus.clone();
@@ -80,11 +80,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     // Overlays — drawn last so they sit on top.
     match app.bisect_view.focus {
-        BisectFocus::OpsDropdown  => render_ops_dropdown(f, app, area),
-        BisectFocus::InputArgs    => render_input_overlay(f, app, area),
-        BisectFocus::RefPicker    => render_ref_picker(f, app, area),
+        BisectFocus::OpsDropdown => render_ops_dropdown(f, app, area),
+        BisectFocus::InputArgs => render_input_overlay(f, app, area),
+        BisectFocus::RefPicker => render_ref_picker(f, app, area),
         BisectFocus::ConfirmReset => render_confirm_reset(f, app, area),
-        BisectFocus::List         => {}
+        BisectFocus::List => {}
     }
 }
 
@@ -116,16 +116,16 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
         let is_sel = visible == sel;
         let prefix = if is_sel { "▶ " } else { "  " };
         let kind_label = match e.kind {
-            RefKind::Head   => "HEAD  ",
+            RefKind::Head => "HEAD  ",
             RefKind::Branch => "branch",
-            RefKind::Tag    => "tag   ",
+            RefKind::Tag => "tag   ",
             RefKind::Remote => "remote",
             RefKind::Commit => "commit",
         };
         let kind_color = match e.kind {
-            RefKind::Head   => C_GREEN,
+            RefKind::Head => C_GREEN,
             RefKind::Branch => bc,
-            RefKind::Tag    => C_WHITE,
+            RefKind::Tag => C_WHITE,
             RefKind::Remote => C_DIM,
             RefKind::Commit => C_DIM,
         };
@@ -139,16 +139,21 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
             Span::raw("  ")
         };
         let style = if is_sel {
-            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
+            Style::default()
+                .bg(app.selected_bg())
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(bc)),
-            marker,
-            Span::styled(format!("{}  ", kind_label), Style::default().fg(kind_color)),
-            Span::styled(e.display.clone(), Style::default().fg(C_WHITE)),
-        ])).style(style));
+        items.push(
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(bc)),
+                marker,
+                Span::styled(format!("{}  ", kind_label), Style::default().fg(kind_color)),
+                Span::styled(e.display.clone(), Style::default().fg(C_WHITE)),
+            ]))
+            .style(style),
+        );
     }
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
@@ -160,7 +165,10 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
     // Title shows the active op + (for Start) the current tab + the
     // current filter buffer.
     let mut title: Vec<Span> = Vec::new();
-    title.push(Span::styled(" ref picker ", Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)));
+    title.push(Span::styled(
+        " ref picker ",
+        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+    ));
     title.push(Span::styled("· ", Style::default().fg(C_DIM)));
     match picker.op {
         RefPickerOp::Start => {
@@ -178,18 +186,27 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
             title.push(Span::styled(" · ", Style::default().fg(C_DIM)));
             title.push(Span::styled("Good", good_style));
         }
-        RefPickerOp::MarkGood => title.push(Span::styled("mark good", Style::default().fg(C_GREEN))),
-        RefPickerOp::MarkBad  => title.push(Span::styled("mark bad",  Style::default().fg(C_RED))),
-        RefPickerOp::Skip     => title.push(Span::styled("skip",      Style::default().fg(C_YELLOW))),
+        RefPickerOp::MarkGood => {
+            title.push(Span::styled("mark good", Style::default().fg(C_GREEN)))
+        }
+        RefPickerOp::MarkBad => title.push(Span::styled("mark bad", Style::default().fg(C_RED))),
+        RefPickerOp::Skip => title.push(Span::styled("skip", Style::default().fg(C_YELLOW))),
     }
     if !picker.filter.is_empty() {
         title.push(Span::styled("  /", Style::default().fg(C_DIM)));
-        title.push(Span::styled(picker.filter.clone(), Style::default().fg(C_WHITE)));
+        title.push(Span::styled(
+            picker.filter.clone(),
+            Style::default().fg(C_WHITE),
+        ));
     }
     title.push(Span::raw(" "));
 
     let mut state = ListState::default();
-    state.select(if filtered_idx.is_empty() { None } else { Some(sel) });
+    state.select(if filtered_idx.is_empty() {
+        None
+    } else {
+        Some(sel)
+    });
 
     f.render_stateful_widget(
         List::new(items).block(
@@ -219,7 +236,10 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         if let Some(h) = &pv.current_hash {
             lines.push(Line::from(vec![
                 Span::styled("  testing   ", Style::default().fg(C_SUBTLE)),
-                Span::styled(h.clone(), Style::default().fg(bc).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    h.clone(),
+                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                ),
             ]));
         }
         lines.push(Line::from(vec![
@@ -232,10 +252,7 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
         ]));
         lines.push(Line::from(vec![
             Span::styled("  bad       ", Style::default().fg(C_SUBTLE)),
-            Span::styled(
-                format!("{}", pv.bad_refs.len()),
-                Style::default().fg(C_RED),
-            ),
+            Span::styled(format!("{}", pv.bad_refs.len()), Style::default().fg(C_RED)),
             Span::styled(" ref(s)", Style::default().fg(C_DIM)),
         ]));
         lines.push(Line::from(""));
@@ -268,7 +285,9 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     let block = Block::default()
         .title(Span::styled(
             " bisect ",
-            Style::default().fg(title_color).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(title_color)
+                .add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_type(app.border_type())
@@ -337,17 +356,20 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
 /// only sensible action (Start) when no session is active.
 pub fn ops_for(state: &BisectState) -> Vec<(&'static str, &'static str)> {
     if !state.in_progress {
-        return vec![("Start",                "begin a new bisect session")];
+        return vec![("Start", "begin a new bisect session")];
     }
     vec![
-        ("Mark HEAD good",                   "current commit is known-good"),
-        ("Mark HEAD bad",                    "current commit is known-bad"),
-        ("Mark good <ref>…",                 "pick a known-good ref/commit"),
-        ("Mark bad <ref>…",                  "pick a known-bad ref/commit"),
-        ("Skip HEAD",                        "untestable; pick another candidate"),
-        ("Skip <ref>…",                      "skip a specific commit"),
-        ("Run command",                      "auto-bisect via exit code (0=good, ≠0=bad, 125=skip)"),
-        ("Reset",                            "finish bisect + restore original HEAD ⚠"),
+        ("Mark HEAD good", "current commit is known-good"),
+        ("Mark HEAD bad", "current commit is known-bad"),
+        ("Mark good <ref>…", "pick a known-good ref/commit"),
+        ("Mark bad <ref>…", "pick a known-bad ref/commit"),
+        ("Skip HEAD", "untestable; pick another candidate"),
+        ("Skip <ref>…", "skip a specific commit"),
+        (
+            "Run command",
+            "auto-bisect via exit code (0=good, ≠0=bad, 125=skip)",
+        ),
+        ("Reset", "finish bisect + restore original HEAD ⚠"),
     ]
 }
 
@@ -357,7 +379,9 @@ pub fn ops_for(state: &BisectState) -> Vec<(&'static str, &'static str)> {
 /// log. Filtering is applied at render time against `display`.
 pub fn load_refs() -> Vec<RefEntry> {
     let mut out: Vec<RefEntry> = Vec::new();
-    let Ok(repo) = git2::Repository::open(".") else { return out };
+    let Ok(repo) = git2::Repository::open(".") else {
+        return out;
+    };
 
     // HEAD as a synthetic entry — most bisect starts include it.
     if let Ok(head) = repo.head() {
@@ -366,8 +390,8 @@ pub fn load_refs() -> Vec<RefEntry> {
             let label = head.shorthand().unwrap_or("HEAD").to_string();
             out.push(RefEntry {
                 display: format!("HEAD ({}, {})", label, short),
-                target:  "HEAD".to_string(),
-                kind:    RefKind::Head,
+                target: "HEAD".to_string(),
+                kind: RefKind::Head,
                 subject: None,
             });
         }
@@ -378,11 +402,13 @@ pub fn load_refs() -> Vec<RefEntry> {
         for b in iter.flatten() {
             let (br, _) = b;
             if let Some(name) = br.name().ok().flatten() {
-                if name == "HEAD" { continue; }
+                if name == "HEAD" {
+                    continue;
+                }
                 out.push(RefEntry {
                     display: name.to_string(),
-                    target:  name.to_string(),
-                    kind:    RefKind::Branch,
+                    target: name.to_string(),
+                    kind: RefKind::Branch,
                     subject: None,
                 });
             }
@@ -395,7 +421,10 @@ pub fn load_refs() -> Vec<RefEntry> {
     let _ = repo.tag_foreach(|oid, name| {
         let n = String::from_utf8_lossy(name).to_string();
         let n = n.strip_prefix("refs/tags/").unwrap_or(&n).to_string();
-        let t = repo.find_commit(oid).map(|c| c.time().seconds()).unwrap_or(0);
+        let t = repo
+            .find_commit(oid)
+            .map(|c| c.time().seconds())
+            .unwrap_or(0);
         tags.push((n, t));
         true
     });
@@ -403,8 +432,8 @@ pub fn load_refs() -> Vec<RefEntry> {
     for (n, _) in tags.into_iter().take(50) {
         out.push(RefEntry {
             display: n.clone(),
-            target:  n,
-            kind:    RefKind::Tag,
+            target: n,
+            kind: RefKind::Tag,
             subject: None,
         });
     }
@@ -414,11 +443,13 @@ pub fn load_refs() -> Vec<RefEntry> {
         for b in iter.flatten() {
             let (br, _) = b;
             if let Some(name) = br.name().ok().flatten() {
-                if name.ends_with("/HEAD") { continue; }
+                if name.ends_with("/HEAD") {
+                    continue;
+                }
                 out.push(RefEntry {
                     display: name.to_string(),
-                    target:  name.to_string(),
-                    kind:    RefKind::Remote,
+                    target: name.to_string(),
+                    kind: RefKind::Remote,
                     subject: None,
                 });
             }
@@ -434,8 +465,8 @@ pub fn load_refs() -> Vec<RefEntry> {
                 let subject = c.summary().unwrap_or("").to_string();
                 out.push(RefEntry {
                     display: format!("{}  {}", short, truncate_subject(&subject, 60)),
-                    target:  oid.to_string(),
-                    kind:    RefKind::Commit,
+                    target: oid.to_string(),
+                    kind: RefKind::Commit,
                     subject: Some(subject),
                 });
             }
@@ -446,7 +477,9 @@ pub fn load_refs() -> Vec<RefEntry> {
 }
 
 fn truncate_subject(s: &str, n: usize) -> String {
-    if s.chars().count() <= n { return s.to_string(); }
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
     let cut: String = s.chars().take(n.saturating_sub(1)).collect();
     format!("{}…", cut)
 }
@@ -462,14 +495,20 @@ pub fn filter_indexes(all: &[RefEntry], filter: &str) -> Vec<usize> {
     all.iter()
         .enumerate()
         .filter_map(|(i, r)| {
-            if r.display.to_lowercase().contains(&needle) { Some(i) } else { None }
+            if r.display.to_lowercase().contains(&needle) {
+                Some(i)
+            } else {
+                None
+            }
         })
         .collect()
 }
 
 fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     let ops = ops_for(&app.bisect_view);
-    if ops.is_empty() { return; }
+    if ops.is_empty() {
+        return;
+    }
     let bc = app.brand_color();
 
     let w: u16 = 50;
@@ -482,24 +521,35 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(Clear, popup);
 
-    let items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (label, desc))| {
-        let is_sel = i == app.bisect_view.dropdown_idx;
-        let danger = label.starts_with("Reset");
-        let label_color = if danger { C_RED }
-                          else if is_sel { C_WHITE }
-                          else { C_SUBTLE };
-        let style = if is_sel {
-            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
-        let prefix = if is_sel { "▶ " } else { "  " };
-        ListItem::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(bc)),
-            Span::styled(format!("{:<18}", label), Style::default().fg(label_color)),
-            Span::styled(*desc, Style::default().fg(C_DIM)),
-        ])).style(style)
-    }).collect();
+    let items: Vec<ListItem> = ops
+        .iter()
+        .enumerate()
+        .map(|(i, (label, desc))| {
+            let is_sel = i == app.bisect_view.dropdown_idx;
+            let danger = label.starts_with("Reset");
+            let label_color = if danger {
+                C_RED
+            } else if is_sel {
+                C_WHITE
+            } else {
+                C_SUBTLE
+            };
+            let style = if is_sel {
+                Style::default()
+                    .bg(app.selected_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let prefix = if is_sel { "▶ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(bc)),
+                Span::styled(format!("{:<18}", label), Style::default().fg(label_color)),
+                Span::styled(*desc, Style::default().fg(C_DIM)),
+            ]))
+            .style(style)
+        })
+        .collect();
 
     let mut state = ListState::default();
     state.select(Some(app.bisect_view.dropdown_idx));

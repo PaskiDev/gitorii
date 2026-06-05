@@ -36,7 +36,7 @@ pub fn describe(repo_path: &Path, opts: &Opts) -> Result<()> {
         d_opts.describe_tags();
     } else {
         d_opts.describe_tags(); // libgit2 default is annotated-tags only;
-                                 // we mirror that by passing through.
+                                // we mirror that by passing through.
     }
     if opts.candidates > 0 {
         d_opts.max_candidates_tags(opts.candidates);
@@ -67,7 +67,11 @@ pub fn describe(repo_path: &Path, opts: &Opts) -> Result<()> {
         let dirty = statuses
             .iter()
             .any(|s| !s.status().contains(git2::Status::IGNORED));
-        if dirty { "-dirty" } else { "" }
+        if dirty {
+            "-dirty"
+        } else {
+            ""
+        }
     } else {
         ""
     };

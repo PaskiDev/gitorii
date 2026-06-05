@@ -1,20 +1,20 @@
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
+    Frame,
 };
 
+use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE};
 use crate::tui::app::{App, DiffLine, DiffLineKind};
-use super::super::ui::{C_SUBTLE, C_DIM, C_GREEN, C_RED};
 
-const BG_ADDED:   Color = Color::Rgb(20,  50,  20);
-const BG_REMOVED: Color = Color::Rgb(50,  15,  15);
-const BG_ADDED_HL:   Color = Color::Rgb(30,  90,  30);
-const BG_REMOVED_HL: Color = Color::Rgb(90,  25,  25);
-const C_HUNK:  Color = Color::Rgb(100, 160, 220);
-const BG_HUNK: Color = Color::Rgb(15,  25,  40);
+const BG_ADDED: Color = Color::Rgb(20, 50, 20);
+const BG_REMOVED: Color = Color::Rgb(50, 15, 15);
+const BG_ADDED_HL: Color = Color::Rgb(30, 90, 30);
+const BG_REMOVED_HL: Color = Color::Rgb(90, 25, 25);
+const C_HUNK: Color = Color::Rgb(100, 160, 220);
+const BG_HUNK: Color = Color::Rgb(15, 25, 40);
 
 // ── LCS-based character diff ──────────────────────────────────────────────────
 
@@ -23,7 +23,11 @@ fn lcs(a: &[char], b: &[char]) -> Vec<Vec<usize>> {
     let mut dp = vec![vec![0usize; n + 1]; m + 1];
     for i in 1..=m {
         for j in 1..=n {
-            dp[i][j] = if a[i-1] == b[j-1] { dp[i-1][j-1] + 1 } else { dp[i-1][j].max(dp[i][j-1]) };
+            dp[i][j] = if a[i - 1] == b[j - 1] {
+                dp[i - 1][j - 1] + 1
+            } else {
+                dp[i - 1][j].max(dp[i][j - 1])
+            };
         }
     }
     dp
@@ -41,11 +45,12 @@ fn char_diff(removed: &str, added: &str) -> (Vec<bool>, Vec<bool>) {
     let mut i = a.len();
     let mut j = b.len();
     while i > 0 && j > 0 {
-        if a[i-1] == b[j-1] {
-            hl_a[i-1] = false;
-            hl_b[j-1] = false;
-            i -= 1; j -= 1;
-        } else if dp[i-1][j] >= dp[i][j-1] {
+        if a[i - 1] == b[j - 1] {
+            hl_a[i - 1] = false;
+            hl_b[j - 1] = false;
+            i -= 1;
+            j -= 1;
+        } else if dp[i - 1][j] >= dp[i][j - 1] {
             i -= 1;
         } else {
             j -= 1;
@@ -59,11 +64,16 @@ fn char_diff(removed: &str, added: &str) -> (Vec<bool>, Vec<bool>) {
 fn line_no_span(no: Option<u32>) -> Span<'static> {
     match no {
         Some(n) => Span::styled(format!("{:>4} ", n), Style::default().fg(C_DIM)),
-        None    => Span::styled("     ", Style::default().fg(C_DIM)),
+        None => Span::styled("     ", Style::default().fg(C_DIM)),
     }
 }
 
-fn render_plain_line(line: &DiffLine, fg: Color, bg: Color, prefix: &'static str) -> ListItem<'static> {
+fn render_plain_line(
+    line: &DiffLine,
+    fg: Color,
+    bg: Color,
+    prefix: &'static str,
+) -> ListItem<'static> {
     let content: String = line.content.clone();
     ListItem::new(Line::from(vec![
         line_no_span(line.line_no),
@@ -78,28 +88,50 @@ fn render_highlighted_pair(
 ) -> (ListItem<'static>, ListItem<'static>) {
     let (hl_rem, hl_add) = char_diff(&removed.content, &added.content);
 
-    let rem_spans = build_highlighted_spans(&removed.content, &hl_rem, C_RED, BG_REMOVED, BG_REMOVED_HL);
-    let add_spans = build_highlighted_spans(&added.content,   &hl_add, C_GREEN, BG_ADDED, BG_ADDED_HL);
+    let rem_spans =
+        build_highlighted_spans(&removed.content, &hl_rem, C_RED, BG_REMOVED, BG_REMOVED_HL);
+    let add_spans =
+        build_highlighted_spans(&added.content, &hl_add, C_GREEN, BG_ADDED, BG_ADDED_HL);
 
-    let mut rem_line = vec![line_no_span(removed.line_no), Span::styled("- ", Style::default().fg(C_RED).bg(BG_REMOVED))];
+    let mut rem_line = vec![
+        line_no_span(removed.line_no),
+        Span::styled("- ", Style::default().fg(C_RED).bg(BG_REMOVED)),
+    ];
     rem_line.extend(rem_spans);
 
-    let mut add_line = vec![line_no_span(added.line_no), Span::styled("+ ", Style::default().fg(C_GREEN).bg(BG_ADDED))];
+    let mut add_line = vec![
+        line_no_span(added.line_no),
+        Span::styled("+ ", Style::default().fg(C_GREEN).bg(BG_ADDED)),
+    ];
     add_line.extend(add_spans);
 
-    (ListItem::new(Line::from(rem_line)), ListItem::new(Line::from(add_line)))
+    (
+        ListItem::new(Line::from(rem_line)),
+        ListItem::new(Line::from(add_line)),
+    )
 }
 
-fn build_highlighted_spans(text: &str, highlights: &[bool], fg: Color, bg: Color, bg_hl: Color) -> Vec<Span<'static>> {
+fn build_highlighted_spans(
+    text: &str,
+    highlights: &[bool],
+    fg: Color,
+    bg: Color,
+    bg_hl: Color,
+) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
     let mut spans = vec![];
     let mut i = 0;
     while i < chars.len() {
         let hl = highlights[i];
         let mut j = i + 1;
-        while j < chars.len() && highlights[j] == hl { j += 1; }
+        while j < chars.len() && highlights[j] == hl {
+            j += 1;
+        }
         let chunk: String = chars[i..j].iter().collect();
-        spans.push(Span::styled(chunk, Style::default().fg(fg).bg(if hl { bg_hl } else { bg })));
+        spans.push(Span::styled(
+            chunk,
+            Style::default().fg(fg).bg(if hl { bg_hl } else { bg }),
+        ));
         i = j;
     }
     spans
@@ -128,15 +160,20 @@ pub fn render(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
-            Span::styled(title_str, Style::default().fg(bc).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                title_str,
+                Style::default().fg(bc).add_modifier(Modifier::BOLD),
+            ),
             Span::raw(" ".repeat(pad)),
             Span::styled(file_str, Style::default().fg(C_SUBTLE)),
             Span::raw(" "),
         ]))
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.border_type())
-            .border_style(Style::default().fg(bc))),
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(bc)),
+        ),
         chunks[0],
     );
 
@@ -151,16 +188,28 @@ pub fn render(f: &mut Frame, app: &App) {
                 // File header — bold brand color
                 items.push(ListItem::new(Line::from(vec![
                     Span::styled("     ", Style::default()),
-                    Span::styled(line.content.clone(), Style::default().fg(bc).add_modifier(Modifier::BOLD)),
+                    Span::styled(
+                        line.content.clone(),
+                        Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                    ),
                 ])));
                 i += 1;
             }
             DiffLineKind::HunkHeader => {
                 // Hunk separator bar
-                items.push(ListItem::new(Line::from(vec![
-                    Span::styled("     ", Style::default().bg(BG_HUNK)),
-                    Span::styled(line.content.clone(), Style::default().fg(C_HUNK).bg(BG_HUNK).add_modifier(Modifier::BOLD)),
-                ])).style(Style::default().bg(BG_HUNK)));
+                items.push(
+                    ListItem::new(Line::from(vec![
+                        Span::styled("     ", Style::default().bg(BG_HUNK)),
+                        Span::styled(
+                            line.content.clone(),
+                            Style::default()
+                                .fg(C_HUNK)
+                                .bg(BG_HUNK)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ]))
+                    .style(Style::default().bg(BG_HUNK)),
+                );
                 i += 1;
             }
             DiffLineKind::Removed => {
@@ -194,17 +243,22 @@ pub fn render(f: &mut Frame, app: &App) {
     let visible: Vec<ListItem> = items.into_iter().skip(app.diff.scroll).collect();
 
     f.render_widget(
-        List::new(visible)
-            .block(Block::default()
+        List::new(visible).block(
+            Block::default()
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(bc))),
+                .border_style(Style::default().fg(bc)),
+        ),
         chunks[1],
     );
 
     // Footer
     let total = app.diff.lines.len();
-    let pct = if total == 0 { 0 } else { (app.diff.scroll * 100) / total.max(1) };
+    let pct = if total == 0 {
+        0
+    } else {
+        (app.diff.scroll * 100) / total.max(1)
+    };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
@@ -214,7 +268,10 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled(" page  ", Style::default().fg(C_SUBTLE)),
             Span::styled("[Esc]", Style::default().fg(bc)),
             Span::styled(" back  ", Style::default().fg(C_SUBTLE)),
-            Span::styled(format!("{}%  {}/{} lines", pct, app.diff.scroll, total), Style::default().fg(C_DIM)),
+            Span::styled(
+                format!("{}%  {}/{} lines", pct, app.diff.scroll, total),
+                Style::default().fg(C_DIM),
+            ),
         ])),
         chunks[2],
     );

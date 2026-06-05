@@ -1,17 +1,17 @@
 pub mod app;
 pub mod events;
+pub mod picker;
 pub mod ui;
 pub mod views;
-pub mod picker;
 
-use std::io;
 use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
+use std::io;
 
-use app::{App, View, SyncOp, SyncStatus, EventKind};
+use app::{App, EventKind, SyncOp, SyncStatus, View};
 use events::{Action, EventHandler};
 
 /// Path to the currently-running torii binary. The TUI shells out to
@@ -28,7 +28,8 @@ pub(crate) fn torii_exe() -> std::ffi::OsString {
         std::env::current_exe()
             .map(|p| p.into_os_string())
             .unwrap_or_else(|_| "torii".into())
-    }).clone()
+    })
+    .clone()
 }
 
 fn ssh_to_https(url: &str) -> String {
@@ -107,12 +108,14 @@ fn run_loop(
             if let Ok(result) = rx.try_recv() {
                 app.sync_view.status = match result {
                     Ok(msg) => SyncStatus::Done(msg.clone()),
-                    Err(e)  => SyncStatus::Error(e.to_string().lines().next().unwrap_or("error").to_string()),
+                    Err(e) => SyncStatus::Error(
+                        e.to_string().lines().next().unwrap_or("error").to_string(),
+                    ),
                 };
                 let (msg, kind) = match &app.sync_view.status {
-                    SyncStatus::Done(m)  => (m.clone(), EventKind::Success),
+                    SyncStatus::Done(m) => (m.clone(), EventKind::Success),
                     SyncStatus::Error(e) => (e.clone(), EventKind::Error),
-                    _                    => ("sync completed".to_string(), EventKind::Info),
+                    _ => ("sync completed".to_string(), EventKind::Info),
                 };
                 app.log_event(msg, kind);
                 app.sync_rx = None;
@@ -307,18 +310,12 @@ fn run_loop(
             }
             match status {
                 crate::tui::app::OauthStatus::Done(masked) => {
-                    app.log_event(
-                        &format!("auth oauth ok: {}", masked),
-                        EventKind::Success,
-                    );
+                    app.log_event(&format!("auth oauth ok: {}", masked), EventKind::Success);
                     crate::tui::views::auth::refresh(app);
                     app.auth_oauth_rx = None;
                 }
                 crate::tui::app::OauthStatus::Error(msg) => {
-                    app.log_event(
-                        &format!("auth oauth error: {}", msg),
-                        EventKind::Error,
-                    );
+                    app.log_event(&format!("auth oauth error: {}", msg), EventKind::Error);
                     app.auth_oauth_rx = None;
                 }
                 _ => {}
@@ -330,7 +327,7 @@ fn run_loop(
                 app.platform_action_rx = None;
                 app.platform_view.action_in_flight = false;
                 let (msg, ok) = match result {
-                    Ok(m)  => (m, true),
+                    Ok(m) => (m, true),
                     Err(e) => (e, false),
                 };
                 let headline = if let Some(idx) = msg.find("|token=") {
@@ -344,7 +341,11 @@ fn run_loop(
                 } else {
                     msg.clone()
                 };
-                let kind = if ok { EventKind::Success } else { EventKind::Error };
+                let kind = if ok {
+                    EventKind::Success
+                } else {
+                    EventKind::Error
+                };
                 app.log_event(&headline, kind);
                 app.set_status(headline);
                 app.load_platform_active_sub_tab();
@@ -380,7 +381,8 @@ fn run_loop(
         if let Some(interval_secs) = app.snapshot_view.auto_interval.secs() {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default().as_secs();
+                .unwrap_or_default()
+                .as_secs();
             if now.saturating_sub(app.snapshot_view.last_auto_snapshot) >= interval_secs {
                 app.snapshot_view.last_auto_snapshot = now;
                 let _ = create_snapshot_with_name(app, "auto");
@@ -394,8 +396,12 @@ fn run_loop(
             match action {
                 Action::Quit => break,
 
-                Action::SidebarUp => { app.sidebar_up(); }
-                Action::SidebarDown => { app.sidebar_down(); }
+                Action::SidebarUp => {
+                    app.sidebar_up();
+                }
+                Action::SidebarDown => {
+                    app.sidebar_down();
+                }
                 Action::SidebarEnter => {
                     app.sidebar_focused = false;
                     app.sidebar_enter();
@@ -428,8 +434,19 @@ fn run_loop(
                                 .output();
                             let is_ok = matches!(&output, Ok(o) if o.status.success());
                             let short = truncate_msg(&msg, 40);
-                            let log_msg = if is_ok { format!("amend: {}", short) } else { "amend failed".to_string() };
-                            app.log_event(&log_msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                            let log_msg = if is_ok {
+                                format!("amend: {}", short)
+                            } else {
+                                "amend failed".to_string()
+                            };
+                            app.log_event(
+                                &log_msg,
+                                if is_ok {
+                                    EventKind::Success
+                                } else {
+                                    EventKind::Error
+                                },
+                            );
                             if is_ok {
                                 app.commit_view.message.clear();
                                 app.commit_view.cursor = 0;
@@ -456,19 +473,28 @@ fn run_loop(
                         let is_remote = b.is_remote;
                         let repo = crate::core::GitRepo::open(&app.repo_path);
                         let result = match repo {
-                            Ok(r) => if is_remote {
-                                r.checkout_remote_branch(&name)
-                            } else {
-                                r.switch_branch(&name)
-                            },
+                            Ok(r) => {
+                                if is_remote {
+                                    r.checkout_remote_branch(&name)
+                                } else {
+                                    r.switch_branch(&name)
+                                }
+                            }
                             Err(e) => Err(e),
                         };
                         let msg = match result {
-                            Ok(_)  => format!("checkout: {}", name),
+                            Ok(_) => format!("checkout: {}", name),
                             Err(e) => format!("checkout failed: {}", e),
                         };
                         let is_ok = msg.starts_with("checkout:");
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.branch_view.status = if is_ok { None } else { Some(msg) };
                         app.go_to(View::Branch);
                         app.refresh()?;
@@ -481,10 +507,14 @@ fn run_loop(
                         let result = crate::core::GitRepo::open(&app.repo_path)
                             .and_then(|r| r.delete_branch(&name));
                         let msg = match result {
-                            Ok(_)  => format!("deleted: {}", name),
+                            Ok(_) => format!("deleted: {}", name),
                             Err(e) => format!("delete failed: {}", e),
                         };
-                        let kind = if msg.starts_with("deleted") { EventKind::Success } else { EventKind::Error };
+                        let kind = if msg.starts_with("deleted") {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        };
                         app.log_event(&msg, kind);
                         app.branch_view.status = None;
                         app.go_to(View::Branch);
@@ -494,14 +524,22 @@ fn run_loop(
                 Action::BranchCreate => {
                     let name = app.branch_view.new_name.trim().to_string();
                     if !name.is_empty() {
-                        let result = crate::core::GitRepo::open(&app.repo_path)
-                            .and_then(|r| r.create_branch(&name).and_then(|_| r.switch_branch(&name)));
+                        let result = crate::core::GitRepo::open(&app.repo_path).and_then(|r| {
+                            r.create_branch(&name).and_then(|_| r.switch_branch(&name))
+                        });
                         let msg = match result {
-                            Ok(_)  => format!("created: {}", name),
+                            Ok(_) => format!("created: {}", name),
                             Err(e) => format!("create failed: {}", e),
                         };
                         let is_ok = msg.starts_with("created");
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.branch_view.new_name.clear();
                         app.branch_view.status = if is_ok { None } else { Some(msg) };
                         app.go_to(View::Branch);
@@ -510,14 +548,21 @@ fn run_loop(
                 }
 
                 Action::BranchPush => {
-                    let result = crate::core::GitRepo::open(&app.repo_path)
-                        .and_then(|r| r.push(false));
+                    let result =
+                        crate::core::GitRepo::open(&app.repo_path).and_then(|r| r.push(false));
                     let msg = match result {
-                        Ok(_)  => format!("pushed: {}", app.branch),
+                        Ok(_) => format!("pushed: {}", app.branch),
                         Err(e) => format!("push failed: {}", e),
                     };
                     let is_ok = msg.starts_with("pushed");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.branch_view.status = if is_ok { None } else { Some(msg) };
                     app.refresh()?;
                 }
@@ -559,7 +604,11 @@ fn run_loop(
                         } else {
                             "clipboard not available".to_string()
                         };
-                        let kind = if copied { EventKind::Success } else { EventKind::Error };
+                        let kind = if copied {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        };
                         app.log_event(&msg, kind);
                         app.set_status(msg);
                     }
@@ -582,8 +631,19 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = result.map(|s| s.success()).unwrap_or(false);
-                        let msg = if is_ok { format!("created tag: {}", name) } else { format!("failed to create tag: {}", name) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("created tag: {}", name)
+                        } else {
+                            format!("failed to create tag: {}", name)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -598,8 +658,19 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = result.map(|s| s.success()).unwrap_or(false);
-                        let msg = if is_ok { format!("pushed tag: {}", name) } else { format!("failed to push tag: {}", name) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("pushed tag: {}", name)
+                        } else {
+                            format!("failed to push tag: {}", name)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                     }
                 }
 
@@ -613,8 +684,19 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = result.map(|s| s.success()).unwrap_or(false);
-                        let msg = if is_ok { format!("deleted tag: {}", name) } else { format!("failed to delete tag: {}", name) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("deleted tag: {}", name)
+                        } else {
+                            format!("failed to delete tag: {}", name)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -627,9 +709,22 @@ fn run_loop(
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
-                            .status().map(|s| s.success()).unwrap_or(false);
-                        let msg = if ok { format!("cherry-picked: {}", hash) } else { format!("cherry-pick failed: {}", hash) };
-                        app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        let msg = if ok {
+                            format!("cherry-picked: {}", hash)
+                        } else {
+                            format!("cherry-pick failed: {}", hash)
+                        };
+                        app.log_event(
+                            &msg,
+                            if ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -643,9 +738,22 @@ fn run_loop(
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
-                            .status().map(|s| s.success()).unwrap_or(false);
-                        let msg = if ok { format!("rebased onto: {}", target) } else { format!("rebase failed onto: {}", target) };
-                        app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        let msg = if ok {
+                            format!("rebased onto: {}", target)
+                        } else {
+                            format!("rebase failed onto: {}", target)
+                        };
+                        app.log_event(
+                            &msg,
+                            if ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -653,13 +761,28 @@ fn run_loop(
                 Action::HistoryScan => {
                     let full = app.history_view.scan_full;
                     let mut cmd = std::process::Command::new(torii_exe());
-                    cmd.args(if full { vec!["scan", "--history"] } else { vec!["scan"] })
-                        .current_dir(&app.repo_path)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null());
+                    cmd.args(if full {
+                        vec!["scan", "--history"]
+                    } else {
+                        vec!["scan"]
+                    })
+                    .current_dir(&app.repo_path)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
                     let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
-                    let msg = if ok { "scan complete — no secrets found".to_string() } else { "scan found issues — check event log".to_string() };
-                    app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if ok {
+                        "scan complete — no secrets found".to_string()
+                    } else {
+                        "scan found issues — check event log".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                 }
 
                 Action::HistoryClean => {
@@ -668,9 +791,22 @@ fn run_loop(
                         .current_dir(&app.repo_path)
                         .stdout(std::process::Stdio::null())
                         .stderr(std::process::Stdio::null())
-                        .status().map(|s| s.success()).unwrap_or(false);
-                    let msg = if ok { "history cleaned".to_string() } else { "clean failed".to_string() };
-                    app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                        .status()
+                        .map(|s| s.success())
+                        .unwrap_or(false);
+                    let msg = if ok {
+                        "history cleaned".to_string()
+                    } else {
+                        "clean failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.refresh()?;
                 }
 
@@ -683,9 +819,22 @@ fn run_loop(
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
-                            .status().map(|s| s.success()).unwrap_or(false);
-                        let msg = if ok { format!("removed file from history: {}", path) } else { format!("remove-file failed: {}", path) };
-                        app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        let msg = if ok {
+                            format!("removed file from history: {}", path)
+                        } else {
+                            format!("remove-file failed: {}", path)
+                        };
+                        app.log_event(
+                            &msg,
+                            if ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -701,9 +850,22 @@ fn run_loop(
                             .current_dir(&app.repo_path)
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
-                            .status().map(|s| s.success()).unwrap_or(false);
-                        let msg = if ok { format!("rewrote dates: {} → {}", start, end) } else { "rewrite failed".to_string() };
-                        app.log_event(&msg, if ok { EventKind::Success } else { EventKind::Error });
+                            .status()
+                            .map(|s| s.success())
+                            .unwrap_or(false);
+                        let msg = if ok {
+                            format!("rewrote dates: {} → {}", start, end)
+                        } else {
+                            "rewrite failed".to_string()
+                        };
+                        app.log_event(
+                            &msg,
+                            if ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.refresh()?;
                     }
                 }
@@ -722,7 +884,9 @@ fn run_loop(
                                 app.history_view.input = text;
                                 app.log_event(&format!("blame: {}", file), EventKind::Info);
                             }
-                            _ => { app.log_event(&format!("blame failed: {}", file), EventKind::Error); }
+                            _ => {
+                                app.log_event(&format!("blame failed: {}", file), EventKind::Error);
+                            }
                         }
                     }
                 }
@@ -741,77 +905,158 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(output, Ok(s) if s.success());
-                    let msg = if is_ok { "fetched from remote".to_string() }
-                              else { "fetch failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if is_ok {
+                        "fetched from remote".to_string()
+                    } else {
+                        "fetch failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.remote_view.status = if is_ok { None } else { Some(msg) };
                 }
 
                 Action::RemoteAdd => {
                     let name = app.remote_view.new_name.clone();
-                    let url  = app.remote_view.new_url.clone();
+                    let url = app.remote_view.new_url.clone();
                     app.remote_view.new_name.clear();
                     app.remote_view.new_url.clear();
                     app.remote_view.confirm = app::RemoteConfirm::None;
-                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else { break; };
+                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else {
+                        break;
+                    };
                     let msg = match repo.remote(&name, &url) {
-                        Ok(_)  => { format!("added remote: {}", name) }
-                        Err(e) => { format!("add remote failed: {}", e.message()) }
+                        Ok(_) => {
+                            format!("added remote: {}", name)
+                        }
+                        Err(e) => {
+                            format!("add remote failed: {}", e.message())
+                        }
                     };
                     let is_ok = msg.starts_with("added");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::RemoteRename => {
-                    let old_name = app.remote_view.remotes.get(app.remote_view.idx)
+                    let old_name = app
+                        .remote_view
+                        .remotes
+                        .get(app.remote_view.idx)
                         .map(|r| r.git_name.clone())
                         .unwrap_or_default();
                     let new_name = app.remote_view.new_name.clone();
                     app.remote_view.new_name.clear();
                     app.remote_view.confirm = app::RemoteConfirm::None;
-                    if old_name.is_empty() || new_name.is_empty() { break; }
-                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else { break; };
+                    if old_name.is_empty() || new_name.is_empty() {
+                        break;
+                    }
+                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else {
+                        break;
+                    };
                     let msg = match repo.remote_rename(&old_name, &new_name) {
-                        Ok(_)  => format!("renamed: {} → {}", old_name, new_name),
+                        Ok(_) => format!("renamed: {} → {}", old_name, new_name),
                         Err(e) => format!("rename failed: {}", e.message()),
                     };
                     let is_ok = msg.starts_with("renamed");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::RemoteEditUrl => {
-                    let name = app.remote_view.remotes.get(app.remote_view.idx)
+                    let name = app
+                        .remote_view
+                        .remotes
+                        .get(app.remote_view.idx)
                         .map(|r| r.git_name.clone())
                         .unwrap_or_default();
                     let new_url = app.remote_view.new_url.clone();
                     app.remote_view.new_url.clear();
                     app.remote_view.confirm = app::RemoteConfirm::None;
-                    if name.is_empty() || new_url.is_empty() { break; }
-                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else { break; };
+                    if name.is_empty() || new_url.is_empty() {
+                        break;
+                    }
+                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else {
+                        break;
+                    };
                     let msg = match repo.remote_set_url(&name, &new_url) {
-                        Ok(_)  => format!("url updated: {}", new_url),
+                        Ok(_) => format!("url updated: {}", new_url),
                         Err(e) => format!("edit url failed: {}", e.message()),
                     };
                     let is_ok = msg.starts_with("url updated");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::RemoteRemove => {
-                    let name = app.remote_view.remotes.get(app.remote_view.idx)
+                    let name = app
+                        .remote_view
+                        .remotes
+                        .get(app.remote_view.idx)
                         .map(|r| r.git_name.clone())
                         .unwrap_or_default();
-                    if name.is_empty() { break; }
-                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else { break; };
+                    if name.is_empty() {
+                        break;
+                    }
+                    let Ok(repo) = git2::Repository::discover(&app.repo_path) else {
+                        break;
+                    };
                     let msg = match repo.remote_delete(&name) {
-                        Ok(_)  => format!("removed remote: {}", name),
+                        Ok(_) => format!("removed remote: {}", name),
                         Err(e) => format!("remove failed: {}", e.message()),
                     };
                     let is_ok = msg.starts_with("removed");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::RemoteOpenBrowser => {
@@ -839,8 +1084,19 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(status, Ok(s) if s.success());
-                    let msg = if is_ok { "synced all mirrors".to_string() } else { "sync failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if is_ok {
+                        "synced all mirrors".to_string()
+                    } else {
+                        "sync failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.mirror_view.status = Some(msg);
                 }
 
@@ -852,13 +1108,28 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(status, Ok(s) if s.success());
-                    let msg = if is_ok { "force synced all mirrors".to_string() } else { "force sync failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if is_ok {
+                        "force synced all mirrors".to_string()
+                    } else {
+                        "force sync failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.mirror_view.status = Some(msg);
                 }
 
                 Action::MirrorRemove => {
-                    if let Some(m) = app.remote_view.selected_mirror().map(|m| (m.platform.to_lowercase(), m.account.clone())) {
+                    if let Some(m) = app
+                        .remote_view
+                        .selected_mirror()
+                        .map(|m| (m.platform.to_lowercase(), m.account.clone()))
+                    {
                         let (platform, account) = m;
                         let status = std::process::Command::new(torii_exe())
                             .args(["mirror", "remove", &platform, &account])
@@ -867,9 +1138,19 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = matches!(status, Ok(s) if s.success());
-                        let msg = if is_ok { format!("removed mirror: {}", platform) }
-                                  else { "remove failed".to_string() };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("removed mirror: {}", platform)
+                        } else {
+                            "remove failed".to_string()
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         if is_ok {
                             app.reload_remotes();
                         } else {
@@ -882,36 +1163,59 @@ fn run_loop(
                     let new_name = app.remote_view.new_name.clone();
                     app.remote_view.new_name.clear();
                     app.remote_view.confirm = app::RemoteConfirm::None;
-                    if new_name.is_empty() { break; }
-                    let mirrors_path = std::path::PathBuf::from(&app.repo_path).join(".torii/mirrors.json");
+                    if new_name.is_empty() {
+                        break;
+                    }
+                    let mirrors_path =
+                        std::path::PathBuf::from(&app.repo_path).join(".torii/mirrors.json");
                     let msg = (|| -> Result<String, String> {
-                        let content = std::fs::read_to_string(&mirrors_path).map_err(|e| e.to_string())?;
-                        let mut json: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+                        let content =
+                            std::fs::read_to_string(&mirrors_path).map_err(|e| e.to_string())?;
+                        let mut json: serde_json::Value =
+                            serde_json::from_str(&content).map_err(|e| e.to_string())?;
                         let mirrors = json["mirrors"].as_array_mut().ok_or("no mirrors array")?;
-                        let mirror_idx = app.remote_view.idx.saturating_sub(app.remote_view.remotes.len());
+                        let mirror_idx = app
+                            .remote_view
+                            .idx
+                            .saturating_sub(app.remote_view.remotes.len());
                         let m = mirrors.get_mut(mirror_idx).ok_or("mirror not found")?;
                         let old_name = m["name"].as_str().unwrap_or("?").to_string();
                         m["name"] = serde_json::Value::String(new_name.clone());
                         let out = serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?;
                         std::fs::write(&mirrors_path, out).map_err(|e| e.to_string())?;
                         Ok(format!("renamed: {} → {}", old_name, new_name))
-                    })().unwrap_or_else(|e| format!("rename failed: {}", e));
+                    })()
+                    .unwrap_or_else(|e| format!("rename failed: {}", e));
                     let is_ok = msg.starts_with("renamed");
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::MirrorAdd => {
-                    let platform   = app.remote_view.new_mirror_platform.clone();
-                    let account    = app.remote_view.new_mirror_account.clone();
-                    let repo       = app.remote_view.new_mirror_repo.clone();
+                    let platform = app.remote_view.new_mirror_platform.clone();
+                    let account = app.remote_view.new_mirror_account.clone();
+                    let repo = app.remote_view.new_mirror_repo.clone();
                     let is_primary = app.remote_view.new_mirror_type == 1;
                     app.remote_view.new_mirror_platform.clear();
                     app.remote_view.new_mirror_account.clear();
                     app.remote_view.new_mirror_repo.clear();
                     app.remote_view.new_mirror_type = 0;
-                    let mut args: Vec<&str> = vec!["mirror", "add", &platform, "user", &account, &repo];
-                    if is_primary { args.push("--primary"); }
+                    let mut args: Vec<&str> =
+                        vec!["mirror", "add", &platform, "user", &account, &repo];
+                    if is_primary {
+                        args.push("--primary");
+                    }
                     let status = std::process::Command::new(torii_exe())
                         .args(&args)
                         .current_dir(&app.repo_path)
@@ -919,14 +1223,30 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(status, Ok(s) if s.success());
-                    let msg = if is_ok { format!("added mirror: {}/{}", platform, repo) }
-                              else { "add mirror failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                    if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                    let msg = if is_ok {
+                        format!("added mirror: {}/{}", platform, repo)
+                    } else {
+                        "add mirror failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
+                    if is_ok {
+                        app.reload_remotes();
+                    } else {
+                        app.remote_view.status = Some(msg);
+                    }
                 }
 
                 Action::MirrorSetPrimary => {
-                    if let Some((platform, account)) = app.remote_view.selected_mirror()
+                    if let Some((platform, account)) = app
+                        .remote_view
+                        .selected_mirror()
                         .map(|m| (m.platform.to_lowercase(), m.account.clone()))
                     {
                         let status = std::process::Command::new(torii_exe())
@@ -936,10 +1256,24 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = matches!(status, Ok(s) if s.success());
-                        let msg = if is_ok { format!("promoted to primary: {}/{}", platform, account) }
-                                  else { "promote failed".to_string() };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                        if is_ok { app.reload_remotes(); } else { app.remote_view.status = Some(msg); }
+                        let msg = if is_ok {
+                            format!("promoted to primary: {}/{}", platform, account)
+                        } else {
+                            "promote failed".to_string()
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
+                        if is_ok {
+                            app.reload_remotes();
+                        } else {
+                            app.remote_view.status = Some(msg);
+                        }
                     }
                 }
 
@@ -964,7 +1298,10 @@ fn run_loop(
                             Ok(o) if o.status.success() => format!("saved: {} = {}", key, val),
                             Ok(o) => {
                                 let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
-                                app.log_event(&format!("config save error: {}", err), EventKind::Error);
+                                app.log_event(
+                                    &format!("config save error: {}", err),
+                                    EventKind::Error,
+                                );
                                 format!("failed: {}", err.lines().next().unwrap_or("unknown error"))
                             }
                             Err(e) => format!("failed: {}", e),
@@ -987,29 +1324,30 @@ fn run_loop(
                     let idx = app.settings_view.idx;
                     match idx {
                         0 => {
-                            app.settings.border_style = if app.settings.border_style == app::BorderStyle::Rounded {
-                                app::BorderStyle::Sharp
-                            } else {
-                                app::BorderStyle::Rounded
-                            };
+                            app.settings.border_style =
+                                if app.settings.border_style == app::BorderStyle::Rounded {
+                                    app::BorderStyle::Sharp
+                                } else {
+                                    app::BorderStyle::Rounded
+                                };
                         }
                         3 => {
                             // Cycle: Curves → Heavy → Bubbles → BubblesX → Ascii → Curves
                             app.settings.graph_style = match app.settings.graph_style {
-                                GraphStyle::Curves   => GraphStyle::Heavy,
-                                GraphStyle::Heavy    => GraphStyle::Bubbles,
-                                GraphStyle::Bubbles  => GraphStyle::BubblesX,
+                                GraphStyle::Curves => GraphStyle::Heavy,
+                                GraphStyle::Heavy => GraphStyle::Bubbles,
+                                GraphStyle::Bubbles => GraphStyle::BubblesX,
                                 GraphStyle::BubblesX => GraphStyle::Ascii,
-                                GraphStyle::Ascii    => GraphStyle::Curves,
+                                GraphStyle::Ascii => GraphStyle::Curves,
                             };
                             // Always-on graph in Log view → re-render now.
                             app.recompute_graph_rows();
                         }
-                        4 => app.settings.show_history_view   = !app.settings.show_history_view,
-                        5 => app.settings.show_remote_view    = !app.settings.show_remote_view,
-                        6 => app.settings.show_mirror_view    = !app.settings.show_mirror_view,
+                        4 => app.settings.show_history_view = !app.settings.show_history_view,
+                        5 => app.settings.show_remote_view = !app.settings.show_remote_view,
+                        6 => app.settings.show_mirror_view = !app.settings.show_mirror_view,
                         7 => app.settings.show_workspace_view = !app.settings.show_workspace_view,
-                        8 => app.settings.show_help_view      = !app.settings.show_help_view,
+                        8 => app.settings.show_help_view = !app.settings.show_help_view,
                         _ => {}
                     }
                 }
@@ -1018,7 +1356,6 @@ fn run_loop(
                     app.settings.save();
                     app.settings_view.status = Some("settings saved".to_string());
                 }
-
 
                 Action::WorkspaceSync => {
                     if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
@@ -1032,7 +1369,11 @@ fn run_loop(
                             Ok(s) if s.success() => format!("synced workspace: {}", name),
                             _ => format!("sync failed for: {}", name),
                         };
-                        let kind = if msg.starts_with("synced") { EventKind::Success } else { EventKind::Error };
+                        let kind = if msg.starts_with("synced") {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        };
                         app.log_event(&msg, kind);
                         app.workspace_view.status = Some(msg);
                         app.go_to(View::Workspace);
@@ -1040,7 +1381,9 @@ fn run_loop(
                 }
 
                 Action::WorkspaceSyncOne => {
-                    let repo_path = app.workspace_view.workspaces
+                    let repo_path = app
+                        .workspace_view
+                        .workspaces
                         .get(app.workspace_view.ws_idx)
                         .and_then(|ws| ws.repos.get(app.workspace_view.repo_idx))
                         .map(|r| r.path.clone());
@@ -1055,7 +1398,11 @@ fn run_loop(
                             Ok(s) if s.success() => format!("synced: {}", path),
                             _ => format!("sync failed: {}", path),
                         };
-                        let kind = if msg.starts_with("synced") { EventKind::Success } else { EventKind::Error };
+                        let kind = if msg.starts_with("synced") {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        };
                         app.log_event(&msg, kind);
                         app.workspace_view.status = Some(msg);
                         app.refresh().ok();
@@ -1063,10 +1410,13 @@ fn run_loop(
                 }
 
                 Action::WorkspaceOpenRepo => {
-                    let result = app.workspace_view.workspaces
+                    let result = app
+                        .workspace_view
+                        .workspaces
                         .get(app.workspace_view.ws_idx)
                         .and_then(|ws| {
-                            ws.repos.get(app.workspace_view.repo_idx)
+                            ws.repos
+                                .get(app.workspace_view.repo_idx)
                                 .map(|r| (ws.name.clone(), r.path.clone()))
                         });
                     if let Some((ws_name, path)) = result {
@@ -1087,18 +1437,32 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = matches!(status, Ok(s) if s.success());
-                        let msg = if is_ok { format!("deleted workspace: {}", name) }
-                                  else { format!("delete failed: {}", name) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("deleted workspace: {}", name)
+                        } else {
+                            format!("delete failed: {}", name)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.workspace_view.status = Some(msg);
                         app.go_to(View::Workspace);
                     }
                 }
 
                 Action::WorkspaceSave => {
-                    let (name, msg_text) = if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
+                    let (name, msg_text) = if let Some(ws) =
+                        app.workspace_view.workspaces.get(app.workspace_view.ws_idx)
+                    {
                         (ws.name.clone(), app.workspace_view.input.clone())
-                    } else { continue; };
+                    } else {
+                        continue;
+                    };
                     app.workspace_view.input.clear();
                     let status = std::process::Command::new(torii_exe())
                         .args(["workspace", "save", &name, "-m", &msg_text])
@@ -1106,17 +1470,31 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(status, Ok(s) if s.success());
-                    let msg = if is_ok { format!("saved workspace: {}", name) }
-                              else { format!("save failed: {}", name) };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if is_ok {
+                        format!("saved workspace: {}", name)
+                    } else {
+                        format!("save failed: {}", name)
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.workspace_view.status = Some(msg);
                     app.go_to(View::Workspace);
                 }
 
                 Action::WorkspaceAddRepo => {
-                    let (name, path) = if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
+                    let (name, path) = if let Some(ws) =
+                        app.workspace_view.workspaces.get(app.workspace_view.ws_idx)
+                    {
                         (ws.name.clone(), app.workspace_view.input.clone())
-                    } else { continue; };
+                    } else {
+                        continue;
+                    };
                     app.workspace_view.input.clear();
                     let status = std::process::Command::new(torii_exe())
                         .args(["workspace", "add", &name, &path])
@@ -1124,34 +1502,64 @@ fn run_loop(
                         .stderr(std::process::Stdio::null())
                         .status();
                     let is_ok = matches!(status, Ok(s) if s.success());
-                    let msg = if is_ok { format!("added repo to {}", name) }
-                              else { "add repo failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    let msg = if is_ok {
+                        format!("added repo to {}", name)
+                    } else {
+                        "add repo failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     app.workspace_view.status = Some(msg);
                     app.go_to(View::Workspace);
                 }
 
                 Action::WorkspaceRename => {
-                    let (old_name, new_name) = if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
+                    let (old_name, new_name) = if let Some(ws) =
+                        app.workspace_view.workspaces.get(app.workspace_view.ws_idx)
+                    {
                         (ws.name.clone(), app.workspace_view.input.trim().to_string())
-                    } else { continue; };
+                    } else {
+                        continue;
+                    };
                     app.workspace_view.input.clear();
                     let ws_path = crate::tui::app::workspaces_toml_path().unwrap_or_default();
                     let result = std::fs::read_to_string(&ws_path).ok().map(|content| {
-                        content.lines().map(|line| {
-                            if line.trim() == format!("[{}]", old_name) {
-                                format!("[{}]", new_name)
-                            } else {
-                                line.to_string()
-                            }
-                        }).collect::<Vec<_>>().join("\n")
+                        content
+                            .lines()
+                            .map(|line| {
+                                if line.trim() == format!("[{}]", old_name) {
+                                    format!("[{}]", new_name)
+                                } else {
+                                    line.to_string()
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
                     });
                     let is_ok = if let Some(new_content) = result {
                         std::fs::write(&ws_path, new_content).is_ok()
-                    } else { false };
-                    let msg = if is_ok { format!("renamed: {} → {}", old_name, new_name) }
-                              else { "rename failed".to_string() };
-                    app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                    } else {
+                        false
+                    };
+                    let msg = if is_ok {
+                        format!("renamed: {} → {}", old_name, new_name)
+                    } else {
+                        "rename failed".to_string()
+                    };
+                    app.log_event(
+                        &msg,
+                        if is_ok {
+                            EventKind::Success
+                        } else {
+                            EventKind::Error
+                        },
+                    );
                     if is_ok {
                         if app.active_workspace.as_deref() == Some(&old_name) {
                             app.active_workspace = Some(new_name);
@@ -1163,10 +1571,17 @@ fn run_loop(
                 }
 
                 Action::WorkspaceRemoveRepo => {
-                    let (name, path) = if let Some(ws) = app.workspace_view.workspaces.get(app.workspace_view.ws_idx) {
-                        let path = ws.repos.get(app.workspace_view.repo_idx).map(|r| r.path.clone());
+                    let (name, path) = if let Some(ws) =
+                        app.workspace_view.workspaces.get(app.workspace_view.ws_idx)
+                    {
+                        let path = ws
+                            .repos
+                            .get(app.workspace_view.repo_idx)
+                            .map(|r| r.path.clone());
                         (ws.name.clone(), path)
-                    } else { continue; };
+                    } else {
+                        continue;
+                    };
                     if let Some(path) = path {
                         let status = std::process::Command::new(torii_exe())
                             .args(["workspace", "remove", &name, &path])
@@ -1174,9 +1589,19 @@ fn run_loop(
                             .stderr(std::process::Stdio::null())
                             .status();
                         let is_ok = matches!(status, Ok(s) if s.success());
-                        let msg = if is_ok { format!("removed repo from {}", name) }
-                                  else { "remove repo failed".to_string() };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
+                        let msg = if is_ok {
+                            format!("removed repo from {}", name)
+                        } else {
+                            "remove repo failed".to_string()
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
                         app.workspace_view.status = Some(msg);
                         app.go_to(View::Workspace);
                     }
@@ -1184,23 +1609,26 @@ fn run_loop(
 
                 Action::PrCreate => {
                     let title = app.pr_view.create_title.clone();
-                    let base  = app.pr_view.create_base.clone();
-                    let desc  = app.pr_view.create_desc.clone();
+                    let base = app.pr_view.create_base.clone();
+                    let desc = app.pr_view.create_desc.clone();
                     let draft = app.pr_view.create_draft;
                     if title.is_empty() {
                         app.log_event("create failed: title required", EventKind::Error);
                     } else {
                         let mut args = vec!["pr", "create", "-t", &title, "-b", &base];
-                        if !desc.is_empty() { args.extend(["-d", &desc]); }
-                        if draft { args.push("--draft"); }
-                        let output = std::process::Command::new(torii_exe())
-                            .args(&args)
-                            .output();
+                        if !desc.is_empty() {
+                            args.extend(["-d", &desc]);
+                        }
+                        if draft {
+                            args.push("--draft");
+                        }
+                        let output = std::process::Command::new(torii_exe()).args(&args).output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
                         let msg = if is_ok {
                             format!("created PR: {}", title)
                         } else {
-                            let stderr = output.ok()
+                            let stderr = output
+                                .ok()
                                 .and_then(|o| String::from_utf8(o.stderr).ok())
                                 .unwrap_or_default();
                             let hint = if stderr.contains("token") || stderr.contains("TOKEN") {
@@ -1210,31 +1638,48 @@ fn run_loop(
                                 } else {
                                     " — set auth.github_token in torii config".to_string()
                                 }
-                            } else { String::new() };
+                            } else {
+                                String::new()
+                            };
                             format!("create failed{}", hint)
                         };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                        if is_ok { app.load_prs(); }
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
+                        if is_ok {
+                            app.load_prs();
+                        }
                     }
                 }
 
                 Action::PrCreateMulti => {
-                    let title  = app.pr_view.create_title.clone();
-                    let base   = app.pr_view.create_base.clone();
-                    let desc   = app.pr_view.create_desc.clone();
-                    let draft  = app.pr_view.create_draft;
-                    let head   = app.pr_view.create_head.clone();
+                    let title = app.pr_view.create_title.clone();
+                    let base = app.pr_view.create_base.clone();
+                    let desc = app.pr_view.create_desc.clone();
+                    let draft = app.pr_view.create_draft;
+                    let head = app.pr_view.create_head.clone();
                     if title.is_empty() {
                         app.log_event("create failed: title required", EventKind::Error);
                         break;
                     }
-                    let platforms: Vec<_> = app.pr_view.available_platforms.iter()
+                    let platforms: Vec<_> = app
+                        .pr_view
+                        .available_platforms
+                        .iter()
                         .zip(app.pr_view.create_platform_selected.iter())
                         .filter(|(_, &sel)| sel)
                         .map(|(p, _)| p.clone())
                         .collect();
                     if platforms.is_empty() {
-                        app.log_event("create failed: select at least one platform", EventKind::Error);
+                        app.log_event(
+                            "create failed: select at least one platform",
+                            EventKind::Error,
+                        );
                         break;
                     }
                     use crate::pr::{get_pr_client, CreatePrOptions};
@@ -1242,23 +1687,47 @@ fn run_loop(
                     for entry in &platforms {
                         let opts = CreatePrOptions {
                             title: title.clone(),
-                            body:  if desc.is_empty() { None } else { Some(desc.clone()) },
-                            head:  head.clone(),
-                            base:  base.clone(),
+                            body: if desc.is_empty() {
+                                None
+                            } else {
+                                Some(desc.clone())
+                            },
+                            head: head.clone(),
+                            base: base.clone(),
                             draft,
                         };
-                        match get_pr_client(&entry.platform).and_then(|c| c.create(&entry.owner, &entry.repo, opts)) {
+                        match get_pr_client(&entry.platform)
+                            .and_then(|c| c.create(&entry.owner, &entry.repo, opts))
+                        {
                             Ok(pr) => {
-                                app.log_event(&format!("created {} #{} on {}: {}", if entry.platform == "gitlab" { "MR" } else { "PR" }, pr.number, entry.platform, title), EventKind::Success);
+                                app.log_event(
+                                    &format!(
+                                        "created {} #{} on {}: {}",
+                                        if entry.platform == "gitlab" {
+                                            "MR"
+                                        } else {
+                                            "PR"
+                                        },
+                                        pr.number,
+                                        entry.platform,
+                                        title
+                                    ),
+                                    EventKind::Success,
+                                );
                                 any_ok = true;
                             }
-                            Err(e) => app.log_event(&format!("create failed on {}: {}", entry.platform, e), EventKind::Error),
+                            Err(e) => app.log_event(
+                                &format!("create failed on {}: {}", entry.platform, e),
+                                EventKind::Error,
+                            ),
                         }
                     }
                     app.pr_view.create_title.clear();
                     app.pr_view.create_desc.clear();
                     app.pr_view.create_input.clear();
-                    if any_ok { app.load_prs(); }
+                    if any_ok {
+                        app.load_prs();
+                    }
                 }
 
                 Action::PrMerge => {
@@ -1276,7 +1745,9 @@ fn run_loop(
                         let repo_name = app.pr_view.repo_name.clone();
                         let repo_path = app.repo_path.clone();
                         use crate::pr::{get_pr_client, MergeMethod};
-                        match get_pr_client(&platform).and_then(|c| c.merge(&owner, &repo_name, number, method)) {
+                        match get_pr_client(&platform)
+                            .and_then(|c| c.merge(&owner, &repo_name, number, method))
+                        {
                             Ok(_) => {
                                 // 1. checkout base branch
                                 let _ = std::process::Command::new(torii_exe())
@@ -1302,13 +1773,21 @@ fn run_loop(
                                 let del_msg = if remote_ok {
                                     format!("branch '{}' deleted on all remotes", head_branch)
                                 } else {
-                                    format!("branch '{}' — remote delete failed (may not exist)", head_branch)
+                                    format!(
+                                        "branch '{}' — remote delete failed (may not exist)",
+                                        head_branch
+                                    )
                                 };
-                                app.log_event(&format!("merged #{} → {} — {}", number, base_branch, del_msg), EventKind::Success);
+                                app.log_event(
+                                    &format!("merged #{} → {} — {}", number, base_branch, del_msg),
+                                    EventKind::Success,
+                                );
                                 app.refresh().ok();
                                 app.load_prs();
                             }
-                            Err(e) => app.log_event(&format!("merge failed: {}", e), EventKind::Error),
+                            Err(e) => {
+                                app.log_event(&format!("merge failed: {}", e), EventKind::Error)
+                            }
                         }
                     }
                 }
@@ -1320,10 +1799,22 @@ fn run_loop(
                             .args(["pr", "close", &number])
                             .output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
-                        let msg = if is_ok { format!("closed PR #{}", number) }
-                                  else { format!("close failed: PR #{}", number) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                        if is_ok { app.load_prs(); }
+                        let msg = if is_ok {
+                            format!("closed PR #{}", number)
+                        } else {
+                            format!("close failed: PR #{}", number)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
+                        if is_ok {
+                            app.load_prs();
+                        }
                     }
                 }
 
@@ -1334,10 +1825,22 @@ fn run_loop(
                             .args(["pr", "checkout", &number])
                             .output();
                         let is_ok = matches!(&output, Ok(o) if o.status.success());
-                        let msg = if is_ok { format!("checked out PR #{}", number) }
-                                  else { format!("checkout failed: PR #{}", number) };
-                        app.log_event(&msg, if is_ok { EventKind::Success } else { EventKind::Error });
-                        if is_ok { app.refresh()?; }
+                        let msg = if is_ok {
+                            format!("checked out PR #{}", number)
+                        } else {
+                            format!("checkout failed: PR #{}", number)
+                        };
+                        app.log_event(
+                            &msg,
+                            if is_ok {
+                                EventKind::Success
+                            } else {
+                                EventKind::Error
+                            },
+                        );
+                        if is_ok {
+                            app.refresh()?;
+                        }
                     }
                 }
 
@@ -1365,24 +1868,43 @@ fn run_loop(
                         app.pr_view.edit_desc.clear();
                         use crate::pr::{get_pr_client, UpdatePrOptions};
                         let opts = UpdatePrOptions {
-                            title: if new_title.is_empty() { None } else { Some(new_title) },
-                            body:  if new_desc.is_empty()  { None } else { Some(new_desc) },
-                            base:  new_base,
+                            title: if new_title.is_empty() {
+                                None
+                            } else {
+                                Some(new_title)
+                            },
+                            body: if new_desc.is_empty() {
+                                None
+                            } else {
+                                Some(new_desc)
+                            },
+                            base: new_base,
                         };
-                        match get_pr_client(&platform).and_then(|c| c.update(&owner, &repo_name, number, opts)) {
+                        match get_pr_client(&platform)
+                            .and_then(|c| c.update(&owner, &repo_name, number, opts))
+                        {
                             Ok(_) => {
-                                app.log_event(&format!("updated PR #{}", number), EventKind::Success);
+                                app.log_event(
+                                    &format!("updated PR #{}", number),
+                                    EventKind::Success,
+                                );
                                 app.load_prs();
                             }
-                            Err(e) => app.log_event(&format!("update failed: {}", e), EventKind::Error),
+                            Err(e) => {
+                                app.log_event(&format!("update failed: {}", e), EventKind::Error)
+                            }
                         }
                     }
                 }
 
                 Action::PrSwitchPlatform => {
-                    if let Some(entry) = app.pr_view.available_platforms.get(app.pr_view.platform_idx) {
-                        app.pr_view.platform  = entry.platform.clone();
-                        app.pr_view.owner     = entry.owner.clone();
+                    if let Some(entry) = app
+                        .pr_view
+                        .available_platforms
+                        .get(app.pr_view.platform_idx)
+                    {
+                        app.pr_view.platform = entry.platform.clone();
+                        app.pr_view.owner = entry.owner.clone();
                         app.pr_view.repo_name = entry.repo.clone();
                     }
                     app.pr_view.confirm = app::PrConfirm::None;
@@ -1395,13 +1917,17 @@ fn run_loop(
 
                 Action::IssueClose => {
                     let iv = &app.issue_view;
-                    let Some(issue) = iv.issues.get(iv.idx) else { break; };
+                    let Some(issue) = iv.issues.get(iv.idx) else {
+                        break;
+                    };
                     let number = issue.number;
                     let platform = iv.platform.clone();
                     let owner = iv.owner.clone();
                     let repo_name = iv.repo_name.clone();
                     use crate::issue::get_issue_client;
-                    match get_issue_client(&platform).and_then(|c| c.close(&owner, &repo_name, number)) {
+                    match get_issue_client(&platform)
+                        .and_then(|c| c.close(&owner, &repo_name, number))
+                    {
                         Ok(_) => {
                             app.log_event(&format!("closed issue #{}", number), EventKind::Success);
                             app.load_issues();
@@ -1417,16 +1943,23 @@ fn run_loop(
                     let platform = iv.platform.clone();
                     let owner = iv.owner.clone();
                     let repo_name = iv.repo_name.clone();
-                    if title.is_empty() { break; }
+                    if title.is_empty() {
+                        break;
+                    }
                     app.issue_view.confirm = app::IssueConfirm::None;
                     use crate::issue::{get_issue_client, CreateIssueOptions};
                     let opts = CreateIssueOptions {
                         title: title.clone(),
                         body: if desc.is_empty() { None } else { Some(desc) },
                     };
-                    match get_issue_client(&platform).and_then(|c| c.create(&owner, &repo_name, opts)) {
+                    match get_issue_client(&platform)
+                        .and_then(|c| c.create(&owner, &repo_name, opts))
+                    {
                         Ok(i) => {
-                            app.log_event(&format!("created issue #{}: {}", i.number, title), EventKind::Success);
+                            app.log_event(
+                                &format!("created issue #{}: {}", i.number, title),
+                                EventKind::Success,
+                            );
                             app.issue_view.create_title.clear();
                             app.issue_view.create_desc.clear();
                             app.load_issues();
@@ -1437,19 +1970,30 @@ fn run_loop(
 
                 Action::IssueComment => {
                     let iv = &app.issue_view;
-                    let Some(issue) = iv.issues.get(iv.idx) else { break; };
+                    let Some(issue) = iv.issues.get(iv.idx) else {
+                        break;
+                    };
                     let number = issue.number;
                     let body = iv.comment_input.trim().to_string();
                     let platform = iv.platform.clone();
                     let owner = iv.owner.clone();
                     let repo_name = iv.repo_name.clone();
-                    if body.is_empty() { break; }
+                    if body.is_empty() {
+                        break;
+                    }
                     app.issue_view.confirm = app::IssueConfirm::None;
                     app.issue_view.comment_input.clear();
                     use crate::issue::get_issue_client;
-                    match get_issue_client(&platform).and_then(|c| c.comment(&owner, &repo_name, number, &body)) {
-                        Ok(_) => app.log_event(&format!("comment added to #{}", number), EventKind::Success),
-                        Err(e) => app.log_event(&format!("comment failed: {}", e), EventKind::Error),
+                    match get_issue_client(&platform)
+                        .and_then(|c| c.comment(&owner, &repo_name, number, &body))
+                    {
+                        Ok(_) => app.log_event(
+                            &format!("comment added to #{}", number),
+                            EventKind::Success,
+                        ),
+                        Err(e) => {
+                            app.log_event(&format!("comment failed: {}", e), EventKind::Error)
+                        }
                     }
                 }
 
@@ -1472,8 +2016,6 @@ fn run_loop(
                 Action::OpenJobLogInPager => {
                     open_job_log_in_pager(terminal, app);
                 }
-
-
             }
         }
 
@@ -1536,8 +2078,8 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
 
     match status {
         Ok(s) if s.success() => app.set_status("✓ pager exited"),
-        Ok(s)                => app.set_status(format!("✗ pager exit {}", s)),
-        Err(e)               => app.set_status(format!("✗ pager `{}`: {}", pager, e)),
+        Ok(s) => app.set_status(format!("✗ pager exit {}", s)),
+        Err(e) => app.set_status(format!("✗ pager `{}`: {}", pager, e)),
     }
 
     // The tempfile lives until the OS cleans /tmp — leaving it lets the
@@ -1547,20 +2089,28 @@ fn open_job_log_in_pager<B: ratatui::backend::Backend + std::io::Write>(
 // ── Git operations ────────────────────────────────────────────────────────────
 
 fn stage_selected(app: &mut App) -> crate::error::Result<()> {
-    use git2::Repository;
     use app::Panel;
+    use git2::Repository;
 
     let repo = Repository::discover(&app.repo_path).map_err(crate::error::ToriiError::Git)?;
     let mut index = repo.index().map_err(crate::error::ToriiError::Git)?;
 
     let path = match app.dashboard.selected_panel {
-        Panel::Unstaged  => app.unstaged.get(app.dashboard.unstaged_idx).map(|e| e.path.clone()),
-        Panel::Untracked => app.untracked.get(app.dashboard.untracked_idx).map(|e| e.path.clone()),
+        Panel::Unstaged => app
+            .unstaged
+            .get(app.dashboard.unstaged_idx)
+            .map(|e| e.path.clone()),
+        Panel::Untracked => app
+            .untracked
+            .get(app.dashboard.untracked_idx)
+            .map(|e| e.path.clone()),
         _ => None,
     };
 
     if let Some(p) = path {
-        index.add_path(std::path::Path::new(&p)).map_err(crate::error::ToriiError::Git)?;
+        index
+            .add_path(std::path::Path::new(&p))
+            .map_err(crate::error::ToriiError::Git)?;
         index.write().map_err(crate::error::ToriiError::Git)?;
         app.set_status(format!("staged: {}", p));
     }
@@ -1571,7 +2121,10 @@ fn unstage_selected(app: &mut App) -> crate::error::Result<()> {
     use git2::Repository;
 
     let repo = Repository::discover(&app.repo_path).map_err(crate::error::ToriiError::Git)?;
-    let path = app.staged.get(app.dashboard.staged_idx).map(|e| e.path.clone());
+    let path = app
+        .staged
+        .get(app.dashboard.staged_idx)
+        .map(|e| e.path.clone());
 
     if let Some(p) = path {
         let head = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
@@ -1582,7 +2135,9 @@ fn unstage_selected(app: &mut App) -> crate::error::Result<()> {
         } else {
             // No commits yet — remove from index directly
             let mut index = repo.index().map_err(crate::error::ToriiError::Git)?;
-            index.remove_path(std::path::Path::new(&p)).map_err(crate::error::ToriiError::Git)?;
+            index
+                .remove_path(std::path::Path::new(&p))
+                .map_err(crate::error::ToriiError::Git)?;
             index.write().map_err(crate::error::ToriiError::Git)?;
         }
         app.set_status(format!("unstaged: {}", p));
@@ -1596,7 +2151,9 @@ fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
     let repo = Repository::discover(&app.repo_path).map_err(crate::error::ToriiError::Git)?;
     let mut index = repo.index().map_err(crate::error::ToriiError::Git)?;
     let tree_oid = index.write_tree().map_err(crate::error::ToriiError::Git)?;
-    let tree = repo.find_tree(tree_oid).map_err(crate::error::ToriiError::Git)?;
+    let tree = repo
+        .find_tree(tree_oid)
+        .map_err(crate::error::ToriiError::Git)?;
 
     let author = crate::core::resolve_signature(&repo)?;
 
@@ -1609,7 +2166,6 @@ fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
 
     Ok(())
 }
-
 
 fn snapshot_dir(app: &App) -> std::path::PathBuf {
     std::path::Path::new(&app.repo_path).join(".git/torii-snapshots")
@@ -1624,8 +2180,8 @@ fn save_auto_interval(app: &App) {
     let dir = torii_dir(app);
     let _ = std::fs::create_dir_all(&dir);
     let val = match app.snapshot_view.auto_interval {
-        AutoSnapshotInterval::Off   => "off",
-        AutoSnapshotInterval::Min5  => "5min",
+        AutoSnapshotInterval::Off => "off",
+        AutoSnapshotInterval::Min5 => "5min",
         AutoSnapshotInterval::Min15 => "15min",
         AutoSnapshotInterval::Min30 => "30min",
         AutoSnapshotInterval::Hour1 => "1h",
@@ -1638,14 +2194,15 @@ fn load_auto_interval(app: &mut App) {
     let path = torii_dir(app).join("auto-interval");
     let val = std::fs::read_to_string(path).unwrap_or_default();
     app.snapshot_view.auto_interval = match val.trim() {
-        "5min"  => AutoSnapshotInterval::Min5,
+        "5min" => AutoSnapshotInterval::Min5,
         "15min" => AutoSnapshotInterval::Min15,
         "30min" => AutoSnapshotInterval::Min30,
-        "1h"    => AutoSnapshotInterval::Hour1,
-        _       => AutoSnapshotInterval::Off,
+        "1h" => AutoSnapshotInterval::Hour1,
+        _ => AutoSnapshotInterval::Off,
     };
     app.snapshot_view.auto_interval_idx = AutoSnapshotInterval::all()
-        .iter().position(|i| i == &app.snapshot_view.auto_interval)
+        .iter()
+        .position(|i| i == &app.snapshot_view.auto_interval)
         .unwrap_or(0);
 }
 
@@ -1653,7 +2210,11 @@ fn create_snapshot_with_name(app: &mut App, name: &str) -> crate::error::Result<
     use std::time::{SystemTime, UNIX_EPOCH};
     let dir = snapshot_dir(app);
     std::fs::create_dir_all(&dir)?;
-    let id = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs().to_string();
+    let id = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
     std::fs::write(dir.join(format!("{}.meta", id)), name)?;
     app.load_snapshots();
     Ok(())
@@ -1702,19 +2263,19 @@ fn spawn_sync(app: &mut App) {
 
     std::thread::spawn(move || {
         let result = match op {
-            SyncOp::PullPush  => GitRepo::open(&repo_path)
+            SyncOp::PullPush => GitRepo::open(&repo_path)
                 .and_then(|r| r.pull().and_then(|_| r.push(false)))
                 .map(|_| "synced with remote".to_string()),
-            SyncOp::PullOnly  => GitRepo::open(&repo_path)
+            SyncOp::PullOnly => GitRepo::open(&repo_path)
                 .and_then(|r| r.pull())
                 .map(|_| "pulled from remote".to_string()),
-            SyncOp::PushOnly  => GitRepo::open(&repo_path)
+            SyncOp::PushOnly => GitRepo::open(&repo_path)
                 .and_then(|r| r.push(false))
                 .map(|_| "pushed to remote".to_string()),
             SyncOp::ForcePush => GitRepo::open(&repo_path)
                 .and_then(|r| r.push(true))
                 .map(|_| "force pushed to remote".to_string()),
-            SyncOp::Fetch     => GitRepo::open(&repo_path)
+            SyncOp::Fetch => GitRepo::open(&repo_path)
                 .and_then(|r| r.fetch())
                 .map(|_| "fetched remote refs".to_string()),
         };
@@ -1751,19 +2312,31 @@ fn copy_to_clipboard(text: &str) -> bool {
 
     // Wayland
     if std::env::var("WAYLAND_DISPLAY").is_ok() {
-        if Command::new("wl-copy").arg(text).status().map(|s| s.success()).unwrap_or(false) {
+        if Command::new("wl-copy")
+            .arg(text)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
             return true;
         }
     }
 
     // X11
-    if pipe_cmd("xclip", &["-selection", "clipboard"]) { return true; }
-    if pipe_cmd("xsel", &["--clipboard", "--input"])    { return true; }
+    if pipe_cmd("xclip", &["-selection", "clipboard"]) {
+        return true;
+    }
+    if pipe_cmd("xsel", &["--clipboard", "--input"]) {
+        return true;
+    }
 
     false
 }
 
 fn truncate_msg(s: &str, max: usize) -> String {
-    if s.len() <= max { s.to_string() }
-    else { format!("{}…", &s[..max.saturating_sub(1)]) }
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max.saturating_sub(1)])
+    }
 }
