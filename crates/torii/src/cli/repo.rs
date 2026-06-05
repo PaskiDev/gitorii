@@ -56,6 +56,7 @@ pub(crate) fn save(
     skip_hooks: &bool,
     sign: &bool,
     no_sign: &bool,
+    yes: &bool,
 ) -> Result<()> {
     let repo = GitRepo::open(".")?;
 
@@ -134,14 +135,28 @@ pub(crate) fn save(
                 println!("   {}\n", f.preview);
             }
             println!("💡 Tip: use .env.example for placeholder values — those files are always safe to commit.");
-            print!("   Continue anyway? [y/N] ");
-            use std::io::Write;
-            std::io::stdout().flush()?;
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
-            if !input.trim().eq_ignore_ascii_case("y") {
-                println!("❌ Commit cancelled.");
-                return Ok(());
+            if *yes {
+                println!("   --yes: continuing despite findings.");
+            } else {
+                use std::io::IsTerminal;
+                // A prompt nobody can answer is a hang, not a safeguard:
+                // without a TTY (CI, pipes) fail fast and point at --yes.
+                if !std::io::stdin().is_terminal() {
+                    anyhow::bail!(
+                        "sensitive data detected and stdin is not a TTY — cannot prompt.\n\
+                         Re-run with --yes to commit anyway, or silence the finding via\n\
+                         `torii ignore secret '<pattern>'` / .toriignore [secrets]."
+                    );
+                }
+                print!("   Continue anyway? [y/N] ");
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                if !input.trim().eq_ignore_ascii_case("y") {
+                    println!("❌ Commit cancelled.");
+                    return Ok(());
+                }
             }
         }
 
@@ -283,8 +298,8 @@ fn print_status(st: &crate::core::RepoStatus) {
     println!("Branch: {}", st.branch);
 
     if let Some(head) = &st.head {
-        let timestamp = chrono::DateTime::from_timestamp(head.seconds_since_epoch, 0)
-            .unwrap_or_default();
+        let timestamp =
+            chrono::DateTime::from_timestamp(head.seconds_since_epoch, 0).unwrap_or_default();
         let duration = chrono::Utc::now().signed_duration_since(timestamp);
         let time_ago = if duration.num_days() > 0 {
             format!("{} days ago", duration.num_days())
@@ -295,7 +310,10 @@ fn print_status(st: &crate::core::RepoStatus) {
         } else {
             "just now".to_string()
         };
-        println!("Commit: {} - \"{}\" ({})", head.short_id, head.summary, time_ago);
+        println!(
+            "Commit: {} - \"{}\" ({})",
+            head.short_id, head.summary, time_ago
+        );
     }
 
     if let Some(remote) = &st.remote {

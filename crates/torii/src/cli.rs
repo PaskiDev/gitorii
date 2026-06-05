@@ -166,6 +166,13 @@ enum Commands {
         /// `--sign`.
         #[arg(long = "no-sign", conflicts_with = "sign")]
         no_sign: bool,
+
+        /// Auto-confirm the secret-scanner prompt. Required to commit
+        /// past findings when stdin is not a TTY (CI, pipes) — without
+        /// it, a non-interactive save with findings fails instead of
+        /// hanging on a prompt nobody can answer.
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Sync with remote (pull+push) or integrate a branch
@@ -1187,9 +1194,10 @@ impl Cli {
                 skip_hooks,
                 sign,
                 no_sign,
+                yes,
             } => repo::save(
                 message, all, files, amend, revert, reset, reset_mode, unstage, skip_hooks, sign,
-                no_sign,
+                no_sign, yes,
             ),
             Commands::Sync {
                 branch,
