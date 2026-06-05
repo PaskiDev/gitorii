@@ -30,13 +30,13 @@ impl WorkspaceConfig {
             return Ok(Self::default());
         }
         let s = fs::read_to_string(&path)?;
-        toml::from_str(&s).map_err(|e| ToriiError::InvalidConfig(format!("Failed to parse workspaces.toml: {}", e)))
+        toml::from_str(&s).map_err(|e| ToriiError::Workspace(format!("Failed to parse workspaces.toml: {}", e)))
     }
 
     pub fn save(&self) -> Result<()> {
         let path = Self::path()?;
         let s = toml::to_string_pretty(self)
-            .map_err(|e| ToriiError::InvalidConfig(format!("Failed to serialize workspaces: {}", e)))?;
+            .map_err(|e| ToriiError::Workspace(format!("Failed to serialize workspaces: {}", e)))?;
         fs::write(&path, s)?;
         Ok(())
     }
@@ -77,9 +77,10 @@ fn expand_path(path: &str) -> Result<PathBuf> {
 
 pub struct WorkspaceManager;
 
-#[derive(Debug)]
-pub struct RepoStatus {
-    #[allow(dead_code)]
+/// Per-repo status inside a workspace sweep. When the repo couldn't be
+/// inspected, `error` is set and the numeric fields are zeroed.
+#[derive(Debug, Serialize)]
+pub struct WorkspaceRepoStatus {
     pub path: String,
     pub name: String,
     pub branch: String,
@@ -88,181 +89,190 @@ pub struct RepoStatus {
     pub staged: usize,
     pub unstaged: usize,
     pub untracked: usize,
-    #[allow(dead_code)]
     pub error: Option<String>,
 }
 
+/// Outcome of saving one repo in a workspace sweep.
+#[derive(Debug, Serialize)]
+pub enum SaveOutcome {
+    Saved,
+    NoChanges,
+    Failed(String),
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceSaveResult {
+    pub name: String,
+    pub outcome: SaveOutcome,
+}
+
+/// Outcome of syncing one repo in a workspace sweep — `error` is `None`
+/// on success.
+#[derive(Debug, Serialize)]
+pub struct WorkspaceSyncResult {
+    pub name: String,
+    pub error: Option<String>,
+}
+
+/// One workspace with the existence state of each member repo.
+#[derive(Debug, Serialize)]
+pub struct WorkspaceListEntry {
+    pub name: String,
+    pub repos: Vec<WorkspaceRepoEntry>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceRepoEntry {
+    pub path: String,
+    pub exists: bool,
+}
+
+fn repo_display_name(repo_path: &str) -> String {
+    Path::new(repo_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| repo_path.to_string())
+}
+
 impl WorkspaceManager {
-    pub fn status(workspace_name: &str) -> Result<()> {
+    /// Status of every repo in the workspace. Per-repo failures land in
+    /// the entry's `error` field instead of aborting the sweep.
+    pub fn status(workspace_name: &str) -> Result<Vec<WorkspaceRepoStatus>> {
         let cfg = WorkspaceConfig::load()?;
         let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::InvalidConfig(format!("Workspace '{}' not found", workspace_name)))?;
+            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
 
-        println!("📦 {}", workspace_name);
-        println!();
-
-        for repo_path in &entry.repos {
-            let status = Self::repo_status(repo_path);
-            match status {
-                Ok(s) => {
-                    let changes = s.staged + s.unstaged + s.untracked;
-                    if changes == 0 {
-                        println!("  {:<20} ✅ clean        ({})", s.name, s.branch);
-                    } else {
-                        let mut parts = vec![];
-                        if s.staged > 0 { parts.push(format!("{} staged", s.staged)); }
-                        if s.unstaged > 0 { parts.push(format!("{} modified", s.unstaged)); }
-                        if s.untracked > 0 { parts.push(format!("{} untracked", s.untracked)); }
-                        println!("  {:<20} 📝 {}  ({})", s.name, parts.join(", "), s.branch);
-                    }
-                    if s.ahead > 0 || s.behind > 0 {
-                        println!("  {:<20}    ↑{} ahead, ↓{} behind", "", s.ahead, s.behind);
-                    }
-                }
-                Err(e) => {
-                    let name = Path::new(repo_path).file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_else(|| repo_path.clone());
-                    println!("  {:<20} ❌ {}", name, e);
-                }
-            }
-        }
-
-        println!();
-        Ok(())
+        Ok(entry
+            .repos
+            .iter()
+            .map(|repo_path| match Self::repo_status(repo_path) {
+                Ok(s) => s,
+                Err(e) => WorkspaceRepoStatus {
+                    path: repo_path.clone(),
+                    name: repo_display_name(repo_path),
+                    branch: String::new(),
+                    ahead: 0,
+                    behind: 0,
+                    staged: 0,
+                    unstaged: 0,
+                    untracked: 0,
+                    error: Some(e.to_string()),
+                },
+            })
+            .collect())
     }
 
-    pub fn save(workspace_name: &str, message: &str, all: bool) -> Result<()> {
+    /// Commit pending changes in every repo of the workspace. `on_repo`
+    /// fires as each repo finishes so callers can stream progress (CLI
+    /// prints a line, the IDE emits an event).
+    pub fn save(
+        workspace_name: &str,
+        message: &str,
+        all: bool,
+        mut on_repo: impl FnMut(&WorkspaceSaveResult),
+    ) -> Result<Vec<WorkspaceSaveResult>> {
         let cfg = WorkspaceConfig::load()?;
         let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::InvalidConfig(format!("Workspace '{}' not found", workspace_name)))?;
+            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
 
-        let mut committed = 0;
-        let mut skipped = 0;
-
-        println!("📦 {} — saving", workspace_name);
-        println!();
-
-        for repo_path in &entry.repos {
-            let name = Path::new(repo_path).file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| repo_path.clone());
-
-            match Self::repo_save(repo_path, message, all) {
-                Ok(true) => {
-                    println!("  {} ✅ saved", name);
-                    committed += 1;
-                }
-                Ok(false) => {
-                    println!("  {} — no changes", name);
-                    skipped += 1;
-                }
-                Err(e) => {
-                    println!("  {} ❌ {}", name, e);
-                }
-            }
-        }
-
-        println!();
-        println!("{} committed, {} skipped", committed, skipped);
-        Ok(())
+        Ok(entry
+            .repos
+            .iter()
+            .map(|repo_path| {
+                let result = WorkspaceSaveResult {
+                    name: repo_display_name(repo_path),
+                    outcome: match Self::repo_save(repo_path, message, all) {
+                        Ok(true) => SaveOutcome::Saved,
+                        Ok(false) => SaveOutcome::NoChanges,
+                        Err(e) => SaveOutcome::Failed(e.to_string()),
+                    },
+                };
+                on_repo(&result);
+                result
+            })
+            .collect())
     }
 
-    pub fn sync(workspace_name: &str, force: bool) -> Result<()> {
+    /// Pull + push every repo of the workspace. `on_repo` fires as each
+    /// repo finishes so callers can stream progress.
+    pub fn sync(
+        workspace_name: &str,
+        force: bool,
+        mut on_repo: impl FnMut(&WorkspaceSyncResult),
+    ) -> Result<Vec<WorkspaceSyncResult>> {
         let cfg = WorkspaceConfig::load()?;
         let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::InvalidConfig(format!("Workspace '{}' not found", workspace_name)))?;
+            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
 
-        println!("📦 {} — syncing", workspace_name);
-        println!();
-
-        let mut ok = 0;
-        let mut failed = 0;
-
-        for repo_path in &entry.repos {
-            let name = Path::new(repo_path).file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| repo_path.clone());
-
-            match Self::repo_sync(repo_path, force) {
-                Ok(()) => {
-                    println!("  {} ✅ synced", name);
-                    ok += 1;
-                }
-                Err(e) => {
-                    println!("  {} ❌ {}", name, e);
-                    failed += 1;
-                }
-            }
-        }
-
-        println!();
-        println!("{} synced, {} failed", ok, failed);
-        Ok(())
+        Ok(entry
+            .repos
+            .iter()
+            .map(|repo_path| {
+                let result = WorkspaceSyncResult {
+                    name: repo_display_name(repo_path),
+                    error: Self::repo_sync(repo_path, force).err().map(|e| e.to_string()),
+                };
+                on_repo(&result);
+                result
+            })
+            .collect())
     }
 
-    pub fn list() -> Result<()> {
+    /// Every configured workspace with the on-disk existence of its repos.
+    pub fn list() -> Result<Vec<WorkspaceListEntry>> {
         let cfg = WorkspaceConfig::load()?;
-
-        if cfg.workspace.is_empty() {
-            println!("No workspaces configured.");
-            println!("Add one: torii workspace add <name> <path>");
-            return Ok(());
-        }
-
-        for (name, entry) in &cfg.workspace {
-            println!("📦 {}", name);
-            for repo in &entry.repos {
-                let exists = Path::new(repo).exists();
-                let icon = if exists { "  ✓" } else { "  ✗" };
-                println!("{} {}", icon, repo);
-            }
-            println!();
-        }
-
-        Ok(())
+        Ok(cfg
+            .workspace
+            .iter()
+            .map(|(name, entry)| WorkspaceListEntry {
+                name: name.clone(),
+                repos: entry
+                    .repos
+                    .iter()
+                    .map(|repo| WorkspaceRepoEntry {
+                        path: repo.clone(),
+                        exists: Path::new(repo).exists(),
+                    })
+                    .collect(),
+            })
+            .collect())
     }
 
-    pub fn add(workspace: &str, repo_path: &str) -> Result<()> {
+    /// Register a repo in a workspace. Returns the expanded path.
+    pub fn add(workspace: &str, repo_path: &str) -> Result<PathBuf> {
         let mut cfg = WorkspaceConfig::load()?;
         let expanded = expand_path(repo_path)?;
 
         if !expanded.exists() {
-            return Err(ToriiError::InvalidConfig(format!("Path does not exist: {}", expanded.display())).into());
+            return Err(ToriiError::Usage(format!("Path does not exist: {}", expanded.display())));
         }
 
         cfg.add_repo(workspace, repo_path)?;
         cfg.save()?;
-
-        println!("✅ Added {} to workspace '{}'", expanded.display(), workspace);
-        Ok(())
+        Ok(expanded)
     }
 
     pub fn remove(workspace: &str, repo_path: &str) -> Result<()> {
         let mut cfg = WorkspaceConfig::load()?;
         cfg.remove_repo(workspace, repo_path)?;
         cfg.save()?;
-        println!("✅ Removed {} from workspace '{}'", repo_path, workspace);
         Ok(())
     }
 
     pub fn delete(workspace: &str) -> Result<()> {
         let mut cfg = WorkspaceConfig::load()?;
         if cfg.workspace.remove(workspace).is_none() {
-            return Err(ToriiError::InvalidConfig(format!("Workspace '{}' not found", workspace)).into());
+            return Err(ToriiError::Workspace(format!("Workspace '{}' not found", workspace)));
         }
         cfg.save()?;
-        println!("✅ Deleted workspace '{}'", workspace);
         Ok(())
     }
 
-    fn repo_status(repo_path: &str) -> Result<RepoStatus> {
-        let name = Path::new(repo_path).file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| repo_path.to_string());
+    fn repo_status(repo_path: &str) -> Result<WorkspaceRepoStatus> {
+        let name = repo_display_name(repo_path);
 
         let repo = git2::Repository::discover(repo_path)
-            .map_err(|_| ToriiError::InvalidConfig(format!("Not a git repo: {}", repo_path)))?;
+            .map_err(|_| ToriiError::Usage(format!("Not a git repo: {}", repo_path)))?;
 
         let branch = repo.head().ok()
             .and_then(|h| h.shorthand().map(|s| s.to_string()))
@@ -292,7 +302,7 @@ impl WorkspaceManager {
         // Ahead/behind vs origin
         let (ahead, behind) = Self::ahead_behind(&repo, &branch).unwrap_or((0, 0));
 
-        Ok(RepoStatus { path: repo_path.to_string(), name, branch, ahead, behind, staged, unstaged, untracked, error: None })
+        Ok(WorkspaceRepoStatus { path: repo_path.to_string(), name, branch, ahead, behind, staged, unstaged, untracked, error: None })
     }
 
     fn ahead_behind(repo: &git2::Repository, branch: &str) -> Option<(usize, usize)> {
