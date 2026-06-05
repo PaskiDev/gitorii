@@ -422,7 +422,7 @@ impl MirrorManager {
         // what the mirror already has. Pre-0.7.8 this re-pushed every
         // local tag on every replica sync, which made GitLab retrigger
         // its workflow:rules for every historical tag (see the matching
-        // comment in `core.rs::push_all_tags_via_git2`). One extra
+        // comment in `core.rs::push_all_tags`). One extra
         // ls-remote round-trip per replica saves N stale pipelines.
         let tags = repo.repository().tag_names(None)?;
         if !tags.is_empty() {

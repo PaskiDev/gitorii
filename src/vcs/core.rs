@@ -207,7 +207,7 @@ impl GitRepo {
     
     /// Build auth callbacks for SSH and HTTPS token auth.
     /// Pass the remote URL so the correct token is selected per host.
-    pub fn auth_callbacks_for<'a>(url: &str) -> git2::RemoteCallbacks<'a> {
+    pub(crate) fn auth_callbacks_for<'a>(url: &str) -> git2::RemoteCallbacks<'a> {
         // Token lookups inside the credentials callback now go through
         // crate::auth::resolve_token; no global config load needed here.
         let url_owned = url.to_string();
@@ -253,7 +253,7 @@ impl GitRepo {
     ///   - sideband_progress: server messages like "Counting objects: …"
     /// Reused by clone / fetch / pull so every long-running op gives the
     /// same visual feedback. Throttled to ~10 fps.
-    pub fn attach_fetch_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
+    pub(crate) fn attach_fetch_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
         use std::cell::RefCell;
         use std::io::Write;
         use std::time::Instant;
@@ -306,7 +306,7 @@ impl GitRepo {
     ///   - push_transfer_progress: pack upload
     ///   - sideband_progress: server messages
     /// Throttled to ~10 fps.
-    pub fn attach_push_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
+    pub(crate) fn attach_push_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
         use std::cell::RefCell;
         use std::io::Write;
         use std::time::Instant;
@@ -454,7 +454,7 @@ impl GitRepo {
         }
 
         // Push tags via git2 — enumerate local tags and push each one
-        self.push_all_tags_via_git2("origin", force)?;
+        self.push_all_tags("origin", force)?;
 
         Ok(())
     }
@@ -478,7 +478,7 @@ impl GitRepo {
     /// pipelines per release. With `force=true` the comparison still
     /// holds but the refspec gets a `+` prefix so rewritten tag OIDs
     /// (e.g. after `torii history reauthor --since ...`) still go through.
-    pub fn push_all_tags_via_git2(&self, remote_name: &str, force: bool) -> Result<()> {
+    pub fn push_all_tags(&self, remote_name: &str, force: bool) -> Result<()> {
         let local_tags = self.repo.tag_names(None)?;
         if local_tags.is_empty() {
             return Ok(());
@@ -551,9 +551,16 @@ impl GitRepo {
         Ok(branch_name.to_string())
     }
 
-    /// Get the repository reference
-    pub fn repository(&self) -> &Repository {
+    /// Get the underlying libgit2 repository handle. Crate-internal on
+    /// purpose: the public API must not leak `git2` types (the future
+    /// `VcsEngine` trait depends on that boundary).
+    pub(crate) fn repository(&self) -> &Repository {
         &self.repo
+    }
+
+    /// Absolute path of the work tree, when the repository isn't bare.
+    pub fn workdir(&self) -> Option<&Path> {
+        self.repo.workdir()
     }
 
     /// Collect repository status — branch, HEAD summary, remote tracking

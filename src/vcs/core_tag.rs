@@ -45,7 +45,7 @@ impl GitRepo {
     /// with `+` so the remote tag is replaced even if it already points at
     /// a different commit — same semantics as `git push --force-with-lease`
     /// /`--force` for tags, and matches the behaviour of `--force` on the
-    /// `push_all_tags_via_git2` path.
+    /// `push_all_tags` path.
     pub fn push_tags(&self, name: Option<&str>, force: bool) -> Result<()> {
         if let Some(tag) = name {
             // Push a specific tag. Force-push uses `+oldref:newref` to
@@ -59,8 +59,8 @@ impl GitRepo {
             push_options.remote_callbacks(callbacks);
             remote.push(&[refspec.as_str()], Some(&mut push_options))?;
         } else {
-            // Push all tags — push_all_tags_via_git2 already supports force.
-            self.push_all_tags_via_git2("origin", force)?;
+            // Push all tags — push_all_tags already supports force.
+            self.push_all_tags("origin", force)?;
         }
         Ok(())
     }
