@@ -1,0 +1,47 @@
+[package]
+name = "gitorii"
+description = "Human-first Git client. Simpler commands, a TUI, snapshots, multi-platform mirrors, secret scanning, OAuth, GPG, CI runners, self-hosted platform registry."
+readme = "../../README.md"
+documentation = "https://gitlab.com/paskidev/gitorii/-/blob/main/README.md"
+keywords = ["git", "tui", "vcs", "cli", "developer-tools"]
+categories = ["command-line-utilities", "development-tools"]
+publish = true
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[[bin]]
+name = "torii"
+path = "src/main.rs"
+
+[dependencies]
+torii-core = { path = "../torii-core" }
+
+# CLI argument parsing
+clap = { version = "=4.5", features = ["derive"] }
+
+# TUI
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+git2.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+toml.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+regex.workspace = true
+
+# SIGPIPE reset — `torii log | head` must die quietly like git, not panic
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+httpmock = "0.8.3"
+tempfile.workspace = true

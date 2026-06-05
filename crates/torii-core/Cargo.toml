@@ -1,0 +1,36 @@
+[package]
+name = "torii-core"
+description = "Domain library for the torii (Gitorii) ecosystem — VCS operations, platform clients (GitHub/GitLab/Gitea/…), workspaces, config and auth. No CLI/TUI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+# `torii-core` is taken on crates.io by an unrelated project — decide a
+# publishable name (e.g. gitorii-core) before flipping this on.
+publish = false
+
+[dependencies]
+git2.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+reqwest.workspace = true
+toml.workspace = true
+base64.workspace = true
+sha2.workspace = true
+chrono.workspace = true
+dirs.workspace = true
+russh.workspace = true
+tokio.workspace = true
+regex.workspace = true
+
+# Update notifier (util/updater)
+update-informer = { version = "1.2", default-features = false, features = ["crates", "ureq"] }
+
+[dev-dependencies]
+httpmock = "0.8.3"
+tempfile.workspace = true
