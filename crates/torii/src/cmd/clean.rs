@@ -67,7 +67,11 @@ pub fn clean(repo_path: &Path, opts: &Opts) -> Result<()> {
         return Ok(());
     }
 
-    let action = if opts.force { "Removing" } else { "Would remove" };
+    let action = if opts.force {
+        "Removing"
+    } else {
+        "Would remove"
+    };
     println!("🧹 {action}:");
     for (path, ignored) in &targets {
         let tag = if *ignored { " (ignored)" } else { "" };
@@ -98,24 +102,26 @@ pub fn clean(repo_path: &Path, opts: &Opts) -> Result<()> {
                     Err(e) => errors.push((abs, e)),
                 }
             }
-            Some(_) => {
-                match std::fs::remove_file(&abs) {
-                    Ok(_) => removed += 1,
-                    Err(e) => errors.push((abs, e)),
-                }
-            }
+            Some(_) => match std::fs::remove_file(&abs) {
+                Ok(_) => removed += 1,
+                Err(e) => errors.push((abs, e)),
+            },
             None => {}
         }
     }
-    println!("\n✅ Cleaned {} entr{}.", removed,
-        if removed == 1 { "y" } else { "ies" });
+    println!(
+        "\n✅ Cleaned {} entr{}.",
+        removed,
+        if removed == 1 { "y" } else { "ies" }
+    );
     if !errors.is_empty() {
         eprintln!("\n⚠️  {} path(s) failed to remove:", errors.len());
         for (p, e) in &errors {
             eprintln!("   {} — {}", p.display(), e);
         }
         return Err(ToriiError::Fs(format!(
-            "clean: {} path(s) failed (see above)", errors.len()
+            "clean: {} path(s) failed (see above)",
+            errors.len()
         )));
     }
     Ok(())

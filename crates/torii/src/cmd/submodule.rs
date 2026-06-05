@@ -59,7 +59,8 @@ pub struct AddOpts {
 pub fn add(repo_path: &Path, url: &str, path: &Path, opts: &AddOpts) -> Result<()> {
     let mut repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
 
-    let abs_target = repo.workdir()
+    let abs_target = repo
+        .workdir()
         .ok_or_else(|| ToriiError::RepoState("repo has no working directory (bare)".into()))?
         .join(path);
     if abs_target.exists() {
@@ -79,9 +80,7 @@ pub fn add(repo_path: &Path, url: &str, path: &Path, opts: &AddOpts) -> Result<(
     //    scope so it's dropped before we go back to mutating `repo` for
     //    set_branch — libgit2's Submodule borrows the parent immutably.
     let workdir_oid = {
-        let mut sm = repo
-            .submodule(url, path, true)
-            .map_err(ToriiError::Git)?;
+        let mut sm = repo.submodule(url, path, true).map_err(ToriiError::Git)?;
 
         // 2. Actually clone the contents. Default options fetch the
         //    remote and check out the ref recorded in the gitlink.
@@ -125,7 +124,10 @@ pub fn add(repo_path: &Path, url: &str, path: &Path, opts: &AddOpts) -> Result<(
         recurse_update(&nested_root, true)?;
     }
 
-    println!("\n💡 Don't forget to commit:  torii save -am \"add submodule {}\"", path.display());
+    println!(
+        "\n💡 Don't forget to commit:  torii save -am \"add submodule {}\"",
+        path.display()
+    );
 
     Ok(())
 }
@@ -295,8 +297,11 @@ pub fn update(repo_path: &Path, opts: &UpdateOpts) -> Result<()> {
             }
         }
     }
-    println!("\n✅ Updated {} submodule(s){}.", subs.len(),
-        if opts.recursive { " (recursive)" } else { "" });
+    println!(
+        "\n✅ Updated {} submodule(s){}.",
+        subs.len(),
+        if opts.recursive { " (recursive)" } else { "" }
+    );
     Ok(())
 }
 
@@ -356,11 +361,15 @@ pub fn foreach(repo_path: &Path, cmd: &str) -> Result<()> {
             .env("TORII_SUBMODULE_NAME", &name)
             .env("TORII_SUBMODULE_PATH", path.to_string_lossy().as_ref())
             .status()
-            .map_err(|e| ToriiError::Subprocess { tool: "shell".into(), message: format!("spawn shell: {e}") })?;
+            .map_err(|e| ToriiError::Subprocess {
+                tool: "shell".into(),
+                message: format!("spawn shell: {e}"),
+            })?;
         if !status.success() {
-            return Err(ToriiError::Subprocess { tool: "sh".into(), message: format!(
-                "foreach stopped: '{cmd}' exited {status} in {name}"
-            ) });
+            return Err(ToriiError::Subprocess {
+                tool: "sh".into(),
+                message: format!("foreach stopped: '{cmd}' exited {status} in {name}"),
+            });
         }
     }
     Ok(())
@@ -389,15 +398,12 @@ pub fn remove(repo_path: &Path, path: &Path) -> Result<()> {
 
     // Find the submodule whose `path()` matches.
     let subs = repo.submodules().map_err(ToriiError::Git)?;
-    let target = subs
-        .iter()
-        .find(|s| s.path() == path)
-        .ok_or_else(|| {
-            ToriiError::Usage(format!(
-                "{} is not a known submodule. Run 'torii submodule status' to list.",
-                path.display()
-            ))
-        })?;
+    let target = subs.iter().find(|s| s.path() == path).ok_or_else(|| {
+        ToriiError::Usage(format!(
+            "{} is not a known submodule. Run 'torii submodule status' to list.",
+            path.display()
+        ))
+    })?;
     let name = target.name().unwrap_or("?").to_string();
     let path = target.path().to_path_buf();
 
@@ -470,9 +476,8 @@ fn strip_section_from_ini(file: &Path, section: &str) -> Result<()> {
     if !file.exists() {
         return Ok(());
     }
-    let content = std::fs::read_to_string(file).map_err(|e| {
-        ToriiError::Fs(format!("read {}: {}", file.display(), e))
-    })?;
+    let content = std::fs::read_to_string(file)
+        .map_err(|e| ToriiError::Fs(format!("read {}: {}", file.display(), e)))?;
     let target_header = format!("[{section}]");
     let mut out = String::with_capacity(content.len());
     let mut skipping = false;
@@ -493,9 +498,8 @@ fn strip_section_from_ini(file: &Path, section: &str) -> Result<()> {
         out.push_str(line);
         out.push('\n');
     }
-    std::fs::write(file, out).map_err(|e| {
-        ToriiError::Fs(format!("write {}: {}", file.display(), e))
-    })?;
+    std::fs::write(file, out)
+        .map_err(|e| ToriiError::Fs(format!("write {}: {}", file.display(), e)))?;
     Ok(())
 }
 

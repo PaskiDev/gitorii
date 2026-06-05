@@ -52,15 +52,24 @@ fn ensure_git_subtree() -> Result<()> {
         .status();
     match probe {
         Ok(s) if s.success() => Ok(()),
-        Ok(_) | Err(_) => Err(ToriiError::Subprocess { tool: "git".into(), message: "`git subtree` is not available. On Debian/Ubuntu: install `git-subtree`. \
+        Ok(_) | Err(_) => Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: "`git subtree` is not available. On Debian/Ubuntu: install `git-subtree`. \
              On Arch: `pacman -S git` (it's in the main package). \
              On Fedora: `dnf install git-subtree`."
-                .to_string() }),
+                .to_string(),
+        }),
     }
 }
 
 /// Initial import — `git subtree add --prefix=<dir> <url> <ref>`.
-pub fn add(repo_path: &Path, prefix: &str, url: &str, refname: &str, opts: &CommonOpts) -> Result<()> {
+pub fn add(
+    repo_path: &Path,
+    prefix: &str,
+    url: &str,
+    refname: &str,
+    opts: &CommonOpts,
+) -> Result<()> {
     ensure_git_subtree()?;
     println!("🌿 subtree add  prefix={prefix}  url={url}  ref={refname}");
     let mut args = vec!["subtree".to_string(), "add".to_string()];
@@ -74,7 +83,13 @@ pub fn add(repo_path: &Path, prefix: &str, url: &str, refname: &str, opts: &Comm
 }
 
 /// Fetch + merge upstream — `git subtree pull --prefix=<dir> <url> <ref>`.
-pub fn pull(repo_path: &Path, prefix: &str, url: &str, refname: &str, opts: &CommonOpts) -> Result<()> {
+pub fn pull(
+    repo_path: &Path,
+    prefix: &str,
+    url: &str,
+    refname: &str,
+    opts: &CommonOpts,
+) -> Result<()> {
     ensure_git_subtree()?;
     println!("⬇  subtree pull  prefix={prefix}  url={url}  ref={refname}");
     let mut args = vec!["subtree".to_string(), "pull".to_string()];
@@ -152,13 +167,15 @@ fn run_git(repo_path: &Path, args: &[String]) -> Result<()> {
         .args(args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git {} exited with {}",
-            args.join(" "),
-            status
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git {} exited with {}", args.join(" "), status),
+        });
     }
     Ok(())
 }

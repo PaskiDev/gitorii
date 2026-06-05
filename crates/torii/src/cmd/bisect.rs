@@ -72,7 +72,9 @@ pub fn log(repo_path: &Path) -> Result<()> {
 /// non-zero (or skip if exit 125, matching git's contract).
 pub fn run(repo_path: &Path, cmd: &[String]) -> Result<()> {
     if cmd.is_empty() {
-        return Err(ToriiError::Usage("bisect run needs a command to execute".into()));
+        return Err(ToriiError::Usage(
+            "bisect run needs a command to execute".into(),
+        ));
     }
     let mut args = vec!["bisect".to_string(), "run".to_string()];
     args.extend(cmd.iter().cloned());
@@ -84,13 +86,15 @@ fn run_git(repo_path: &Path, args: &[String]) -> Result<()> {
         .args(args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git bisect: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git bisect: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git {} exited with {}",
-            args.join(" "),
-            status
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git {} exited with {}", args.join(" "), status),
+        });
     }
     Ok(())
 }

@@ -68,7 +68,11 @@ pub fn copy(repo_path: &Path, from: &str, to: &str, force: bool) -> Result<()> {
 pub fn remove(repo_path: &Path, commit: &str) -> Result<()> {
     run_git(
         repo_path,
-        &["notes".to_string(), "remove".to_string(), commit.to_string()],
+        &[
+            "notes".to_string(),
+            "remove".to_string(),
+            commit.to_string(),
+        ],
     )
 }
 
@@ -81,13 +85,15 @@ fn run_git(repo_path: &Path, args: &[String]) -> Result<()> {
         .args(args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git notes: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git notes: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git {} exited with {}",
-            args.join(" "),
-            status
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git {} exited with {}", args.join(" "), status),
+        });
     }
     Ok(())
 }

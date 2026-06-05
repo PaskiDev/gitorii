@@ -57,7 +57,11 @@ pub(crate) fn run(action: &WorkspaceCommands) -> Result<()> {
     match action {
         WorkspaceCommands::Add { workspace, path } => {
             let expanded = WorkspaceManager::add(workspace, path)?;
-            println!("✅ Added {} to workspace '{}'", expanded.display(), workspace);
+            println!(
+                "✅ Added {} to workspace '{}'",
+                expanded.display(),
+                workspace
+            );
         }
         WorkspaceCommands::Remove { workspace, path } => {
             WorkspaceManager::remove(workspace, path)?;
@@ -120,12 +124,10 @@ pub(crate) fn run(action: &WorkspaceCommands) -> Result<()> {
         } => {
             println!("📦 {} — saving", workspace);
             println!();
-            let results = WorkspaceManager::save(workspace, message, *all, |r| {
-                match &r.outcome {
-                    SaveOutcome::Saved => println!("  {} ✅ saved", r.name),
-                    SaveOutcome::NoChanges => println!("  {} — no changes", r.name),
-                    SaveOutcome::Failed(e) => println!("  {} ❌ {}", r.name, e),
-                }
+            let results = WorkspaceManager::save(workspace, message, *all, |r| match &r.outcome {
+                SaveOutcome::Saved => println!("  {} ✅ saved", r.name),
+                SaveOutcome::NoChanges => println!("  {} — no changes", r.name),
+                SaveOutcome::Failed(e) => println!("  {} ❌ {}", r.name, e),
             })?;
             let committed = results
                 .iter()

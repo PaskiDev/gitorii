@@ -3,15 +3,15 @@
 //! each. Mirrors `torii auth list` / `torii auth doctor` from the CLI.
 
 use ratatui::{
-    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    Frame,
 };
 
+use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, AuthEntry, AuthFocus, AuthState, OauthStatus};
-use super::super::ui::{C_WHITE, C_SUBTLE, C_DIM, C_GREEN, C_RED, C_YELLOW};
 
 pub fn refresh(app: &mut App) {
     app.auth_view.items.clear();
@@ -94,10 +94,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         vec![
             Line::from(vec![
                 Span::styled("  — ", Style::default().fg(C_DIM)),
-                Span::styled(
-                    "gitorii.com API key not set",
-                    Style::default().fg(C_WHITE),
-                ),
+                Span::styled("gitorii.com API key not set", Style::default().fg(C_WHITE)),
             ]),
             Line::from(vec![]),
             Line::from(vec![Span::styled(
@@ -165,11 +162,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     // Overlays — drawn after the body so they stack on top.
     match app.auth_view.focus {
-        AuthFocus::OpsDropdown   => render_ops_dropdown(f, app, area),
-        AuthFocus::InputToken    => render_input_overlay(f, app, area),
+        AuthFocus::OpsDropdown => render_ops_dropdown(f, app, area),
+        AuthFocus::InputToken => render_input_overlay(f, app, area),
         AuthFocus::ConfirmRemove => render_confirm_remove(f, app, area),
-        AuthFocus::OauthFlow     => render_oauth_flow(f, app, area),
-        AuthFocus::List          => {}
+        AuthFocus::OauthFlow => render_oauth_flow(f, app, area),
+        AuthFocus::List => {}
     }
 }
 
@@ -184,18 +181,24 @@ pub fn ops_for(state: &AuthState) -> Vec<(&'static str, &'static str)> {
     let has_token = entry.masked.is_some();
     let mut ops: Vec<(&'static str, &'static str)> = Vec::new();
 
-    let device_supported  = crate::oauth::device_flow_supported(provider);
-    let code_supported    = crate::oauth::auth_code_flow_supported(provider);
-    let oauth_supported   = device_supported || code_supported;
+    let device_supported = crate::oauth::device_flow_supported(provider);
+    let code_supported = crate::oauth::auth_code_flow_supported(provider);
+    let oauth_supported = device_supported || code_supported;
 
     if oauth_supported {
-        ops.push(("OAuth re-auth", "run device / auth-code flow and save token"));
+        ops.push((
+            "OAuth re-auth",
+            "run device / auth-code flow and save token",
+        ));
     }
     if has_token && oauth_supported {
         ops.push(("Rotate (OAuth)", "re-auth, replace, best-effort revoke old"));
     }
     if has_token && provider == "gitlab" {
-        ops.push(("Rotate as PAT (GitLab)", "POST /personal_access_tokens/self/rotate"));
+        ops.push((
+            "Rotate as PAT (GitLab)",
+            "POST /personal_access_tokens/self/rotate",
+        ));
     }
     ops.push(("Set token (paste)", "type / paste the token manually"));
     if has_token {
@@ -206,7 +209,9 @@ pub fn ops_for(state: &AuthState) -> Vec<(&'static str, &'static str)> {
 
 fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     let ops = ops_for(&app.auth_view);
-    if ops.is_empty() { return; }
+    if ops.is_empty() {
+        return;
+    }
     let bc = app.brand_color();
 
     let w: u16 = 44;
@@ -219,30 +224,49 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     };
     f.render_widget(Clear, popup);
 
-    let items: Vec<ListItem> = ops.iter().enumerate().map(|(i, (label, desc))| {
-        let is_sel = i == app.auth_view.dropdown_idx;
-        let danger = label.starts_with("Remove");
-        let label_color = if danger { C_RED }
-                          else if is_sel { C_WHITE }
-                          else { C_SUBTLE };
-        let style = if is_sel {
-            Style::default().bg(app.selected_bg()).add_modifier(Modifier::BOLD)
-        } else { Style::default() };
-        let prefix = if is_sel { "▶ " } else { "  " };
-        ListItem::new(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(bc)),
-            Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
-            Span::styled(*desc, Style::default().fg(C_DIM)),
-        ])).style(style)
-    }).collect();
+    let items: Vec<ListItem> = ops
+        .iter()
+        .enumerate()
+        .map(|(i, (label, desc))| {
+            let is_sel = i == app.auth_view.dropdown_idx;
+            let danger = label.starts_with("Remove");
+            let label_color = if danger {
+                C_RED
+            } else if is_sel {
+                C_WHITE
+            } else {
+                C_SUBTLE
+            };
+            let style = if is_sel {
+                Style::default()
+                    .bg(app.selected_bg())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            let prefix = if is_sel { "▶ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(bc)),
+                Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
+                Span::styled(*desc, Style::default().fg(C_DIM)),
+            ]))
+            .style(style)
+        })
+        .collect();
 
     let mut state = ListState::default();
     state.select(Some(app.auth_view.dropdown_idx));
-    let title = format!(" ops · {} — Enter run · Esc close ", app.auth_view.pending_provider);
+    let title = format!(
+        " ops · {} — Enter run · Esc close ",
+        app.auth_view.pending_provider
+    );
     f.render_stateful_widget(
         List::new(items).block(
             Block::default()
-                .title(Span::styled(title, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)))
+                .title(Span::styled(
+                    title,
+                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
                 .border_style(Style::default().fg(C_WHITE)),
@@ -299,7 +323,9 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
 /// the worker thread polls in the background; switches to a success /
 /// error message when the worker signals completion.
 fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
-    let Some(state) = app.auth_view.oauth_flow.as_ref() else { return };
+    let Some(state) = app.auth_view.oauth_flow.as_ref() else {
+        return;
+    };
     let bc = app.brand_color();
 
     let w: u16 = 72.min(area.width.saturating_sub(4));
@@ -315,7 +341,10 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
     let mut body: Vec<Line> = vec![
         Line::from(vec![
             Span::styled("  provider  ", Style::default().fg(C_SUBTLE)),
-            Span::styled(&state.provider, Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &state.provider,
+                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+            ),
             Span::raw("   "),
             Span::styled(
                 if state.rotate { "rotate" } else { "re-auth" },
@@ -332,7 +361,10 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(C_YELLOW),
             )));
         }
-        OauthStatus::Waiting { display_uri, user_code } => {
+        OauthStatus::Waiting {
+            display_uri,
+            user_code,
+        } => {
             body.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
@@ -342,26 +374,32 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
             ]));
             body.push(Line::from(vec![
                 Span::raw("     "),
-                Span::styled(display_uri.clone(), Style::default().fg(bc).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    display_uri.clone(),
+                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                ),
             ]));
             body.push(Line::from(""));
             body.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(
-                    "2. Confirm the user code:",
-                    Style::default().fg(C_WHITE),
-                ),
+                Span::styled("2. Confirm the user code:", Style::default().fg(C_WHITE)),
             ]));
             body.push(Line::from(vec![
                 Span::raw("     "),
-                Span::styled(user_code.clone(), Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    user_code.clone(),
+                    Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
+                ),
             ]));
             body.push(Line::from(""));
             let bar = progress_bar(app.tick / 2);
             body.push(Line::from(vec![
                 Span::raw("  "),
                 Span::styled(bar, Style::default().fg(C_YELLOW)),
-                Span::styled("  waiting for authorisation…", Style::default().fg(C_YELLOW)),
+                Span::styled(
+                    "  waiting for authorisation…",
+                    Style::default().fg(C_YELLOW),
+                ),
             ]));
         }
         OauthStatus::Saving => {
@@ -378,7 +416,10 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
             body.push(Line::from(""));
             body.push(Line::from(vec![
                 Span::styled("  ✓ ", Style::default().fg(C_GREEN)),
-                Span::styled(format!("token saved: {}", masked), Style::default().fg(C_WHITE)),
+                Span::styled(
+                    format!("token saved: {}", masked),
+                    Style::default().fg(C_WHITE),
+                ),
             ]));
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
@@ -432,7 +473,9 @@ fn progress_bar(tick: usize) -> String {
     const CYCLE: usize = (TOTAL - 1) * 2;
     let pos = tick % CYCLE;
     let ball = if pos < TOTAL { pos } else { CYCLE - pos };
-    (0..TOTAL).map(|i| if i == ball { '▰' } else { '▱' }).collect()
+    (0..TOTAL)
+        .map(|i| if i == ball { '▰' } else { '▱' })
+        .collect()
 }
 
 fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {
@@ -447,7 +490,10 @@ fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, popup);
     let body = vec![
         Line::from(Span::styled(
-            format!("  Remove `{}` token from auth.toml?", app.auth_view.pending_provider),
+            format!(
+                "  Remove `{}` token from auth.toml?",
+                app.auth_view.pending_provider
+            ),
             Style::default().fg(C_WHITE),
         )),
         Line::from(""),

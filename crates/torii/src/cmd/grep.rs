@@ -54,15 +54,22 @@ pub fn grep(repo_path: &Path, pattern: &str, paths: &[String], opts: &Opts) -> R
         .args(&args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git grep: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git grep: {e}"),
+        })?;
 
     // git grep exits 1 when nothing matched — not an error from torii's
     // perspective, just zero results. Only propagate >1 as a real failure.
     match status.code() {
         Some(0) | Some(1) => Ok(()),
-        Some(code) => Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git grep exited with status {code}"
-        ) }),
-        None => Err(ToriiError::Subprocess { tool: "git".into(), message: "git grep terminated by signal".into() }),
+        Some(code) => Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git grep exited with status {code}"),
+        }),
+        None => Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: "git grep terminated by signal".into(),
+        }),
     }
 }
