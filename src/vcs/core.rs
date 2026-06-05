@@ -41,9 +41,7 @@ impl GitRepo {
     pub fn sync_toriignore(&self) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::InvalidConfig(
-                "git directory has no parent (bare repo?)".to_string()
-            ))?
+            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
             .to_path_buf();
         let public_path = repo_path.join(".toriignore");
         let local_path = repo_path.join(".toriignore.local");
@@ -70,9 +68,7 @@ impl GitRepo {
         }
 
         std::fs::write(&exclude_path, buf)
-            .map_err(|e| ToriiError::InvalidConfig(
-                format!("write {}: {}", exclude_path.display(), e)
-            ))?;
+            .map_err(|e| ToriiError::Fs(format!("write {}: {}", exclude_path.display(), e)))?;
         Ok(())
     }
 
@@ -187,7 +183,7 @@ impl GitRepo {
         // after operations like history rewrite.
         let head_ref = self.repo.head()?;
         let head_oid = head_ref.target()
-            .ok_or_else(|| ToriiError::InvalidConfig("HEAD has no target".to_string()))?;
+            .ok_or_else(|| ToriiError::RepoState("HEAD has no target".to_string()))?;
         let head_commit = self.repo.find_commit(head_oid)?;
 
         let parents: Vec<_> = head_commit.parents().collect();
@@ -376,7 +372,7 @@ impl GitRepo {
             return Ok(());
         }
 
-        Err(ToriiError::InvalidConfig(format!(
+        Err(ToriiError::RepoState(format!(
             "Pull not fast-forward on '{}'. Local and remote diverged. Use 'torii sync {} --merge' or 'torii sync {} --rebase' to integrate.",
             branch, branch, branch
         )))
@@ -560,84 +556,39 @@ impl GitRepo {
         &self.repo
     }
 
-    /// Show repository status with context and suggestions
-    pub fn status(&self) -> Result<()> {
+    /// Collect repository status — branch, HEAD summary, remote tracking
+    /// and per-file changes. Pure data: rendering lives with the callers
+    /// (CLI, TUI, IDE).
+    pub fn status(&self) -> Result<RepoStatus> {
         let mut opts = StatusOptions::new();
         opts.include_untracked(true);
         let statuses = self.repo.statuses(Some(&mut opts))?;
 
-        // Header
-        println!("📊 Repository Status\n");
-        
-        // Branch and commit info
         let branch = self.get_current_branch()?;
-        println!("Branch: {}", branch);
-        
-        // Get latest commit info
-        if let Ok(head) = self.repo.head() {
-            if let Ok(commit) = head.peel_to_commit() {
-                let msg = commit.message().unwrap_or("").lines().next().unwrap_or("");
-                let time = commit.time();
-                let timestamp = chrono::DateTime::from_timestamp(time.seconds(), 0)
-                    .unwrap_or_default();
-                let now = chrono::Utc::now();
-                let duration = now.signed_duration_since(timestamp);
-                
-                let time_ago = if duration.num_days() > 0 {
-                    format!("{} days ago", duration.num_days())
-                } else if duration.num_hours() > 0 {
-                    format!("{} hours ago", duration.num_hours())
-                } else if duration.num_minutes() > 0 {
-                    format!("{} minutes ago", duration.num_minutes())
-                } else {
-                    "just now".to_string()
-                };
-                
-                let short_id = format!("{:.7}", commit.id());
-                println!("Commit: {} - \"{}\" ({})", short_id, msg, time_ago);
-            }
-        }
-        
-        // Remote status
-        if let Ok(remote) = self.repo.find_remote("origin") {
-            if let Some(url) = remote.url() {
-                let remote_name = url.split('/').last().unwrap_or("origin");
-                print!("Remote: {}", remote_name.trim_end_matches(".git"));
-                
-                // Check if ahead/behind
-                if let Ok(head) = self.repo.head() {
-                    if let Ok(local_oid) = head.target().ok_or("No target") {
-                        let remote_branch = format!("refs/remotes/origin/{}", branch);
-                        if let Ok(remote_ref) = self.repo.find_reference(&remote_branch) {
-                            if let Ok(remote_oid) = remote_ref.target().ok_or("No target") {
-                                if let Ok((ahead, behind)) = self.repo.graph_ahead_behind(local_oid, remote_oid) {
-                                    if ahead > 0 || behind > 0 {
-                                        print!(" (");
-                                        if ahead > 0 {
-                                            print!("{} ahead", ahead);
-                                        }
-                                        if ahead > 0 && behind > 0 {
-                                            print!(", ");
-                                        }
-                                        if behind > 0 {
-                                            print!("{} behind", behind);
-                                        }
-                                        print!(")");
-                                    } else {
-                                        print!(" (up to date)");
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                println!();
-            }
-        }
-        
-        println!();
 
-        // Categorize changes
+        let head = self.repo.head().ok()
+            .and_then(|h| h.peel_to_commit().ok())
+            .map(|commit| HeadCommitInfo {
+                short_id: format!("{:.7}", commit.id()),
+                summary: commit.message().unwrap_or("").lines().next().unwrap_or("").to_string(),
+                seconds_since_epoch: commit.time().seconds(),
+            });
+
+        let remote = self.repo.find_remote("origin").ok().and_then(|remote| {
+            let url = remote.url()?;
+            let name = url.split('/').last().unwrap_or("origin")
+                .trim_end_matches(".git").to_string();
+            let ahead_behind = self.repo.head().ok()
+                .and_then(|h| h.target())
+                .and_then(|local_oid| {
+                    let remote_ref = self.repo
+                        .find_reference(&format!("refs/remotes/origin/{}", branch)).ok()?;
+                    let remote_oid = remote_ref.target()?;
+                    self.repo.graph_ahead_behind(local_oid, remote_oid).ok()
+                });
+            Some(RemoteStatusInfo { name, ahead_behind })
+        });
+
         let mut staged = Vec::new();
         let mut unstaged = Vec::new();
         let mut untracked = Vec::new();
@@ -647,84 +598,88 @@ impl GitRepo {
             let path = entry.path().unwrap_or("unknown").to_string();
 
             if status.is_index_new() || status.is_index_modified() || status.is_index_deleted() {
-                let prefix = if status.is_index_new() {
-                    "A "
+                let kind = if status.is_index_new() {
+                    ChangeKind::Added
                 } else if status.is_index_modified() {
-                    "M "
+                    ChangeKind::Modified
                 } else {
-                    "D "
+                    ChangeKind::Deleted
                 };
-                staged.push(format!("{} {}", prefix, path));
+                staged.push(StatusEntry { kind, path: path.clone() });
             }
-            
+
             if status.is_wt_modified() || status.is_wt_deleted() {
-                let prefix = if status.is_wt_modified() {
-                    "M "
+                let kind = if status.is_wt_modified() {
+                    ChangeKind::Modified
                 } else {
-                    "D "
+                    ChangeKind::Deleted
                 };
-                unstaged.push(format!("{} {}", prefix, path));
+                unstaged.push(StatusEntry { kind, path: path.clone() });
             }
-            
+
             if status.is_wt_new() {
-                untracked.push(format!("?? {}", path));
+                untracked.push(path);
             }
         }
 
-        // Show status
-        let is_clean = staged.is_empty() && unstaged.is_empty() && untracked.is_empty();
-
-        if is_clean {
-            println!("✨ Working tree clean");
-        } else {
-            if !staged.is_empty() {
-                println!("✅ Changes staged for commit:");
-                for file in &staged {
-                    println!("  {}", file);
-                }
-                println!();
-            }
-
-            if !unstaged.is_empty() {
-                println!("📝 Changes not staged:");
-                for file in &unstaged {
-                    println!("  {}", file);
-                }
-                println!();
-            }
-
-            if !untracked.is_empty() {
-                println!("📦 Untracked files:");
-                for file in &untracked {
-                    println!("  {}", file);
-                }
-                println!();
-            }
-        }
-
-        // Next steps suggestions
-        println!("💡 Next steps:");
-        if is_clean {
-            println!("  • Start new work: torii branch feature-name -c");
-            println!("  • Update from remote: torii sync");
-            println!("  • Create snapshot: torii snapshot create");
-        } else if !staged.is_empty() && unstaged.is_empty() && untracked.is_empty() {
-            println!("  • Commit staged changes: torii save -m \"message\"");
-            println!("  • See staged changes: torii diff --staged");
-        } else if !unstaged.is_empty() || !untracked.is_empty() {
-            println!("  • Save all changes: torii save -am \"message\"");
-            println!("  • See changes: torii diff");
-            if !staged.is_empty() {
-                println!("  • Commit only staged: torii save -m \"message\"");
-            }
-        }
-
-        Ok(())
+        Ok(RepoStatus { branch, head, remote, staged, unstaged, untracked })
     }
 
     /// Get git signature using the unified resolver.
     fn get_signature(&self) -> Result<Signature<'static>> {
         resolve_signature(&self.repo)
+    }
+}
+
+/// What kind of change a status entry represents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// A single staged or unstaged path in the status report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StatusEntry {
+    pub kind: ChangeKind,
+    pub path: String,
+}
+
+/// HEAD commit summary for the status report.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HeadCommitInfo {
+    pub short_id: String,
+    /// First line of the commit message.
+    pub summary: String,
+    /// Commit time as seconds since the Unix epoch.
+    pub seconds_since_epoch: i64,
+}
+
+/// Tracking state against `origin/<branch>`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RemoteStatusInfo {
+    /// Remote repo name derived from the URL (without `.git`).
+    pub name: String,
+    /// `(ahead, behind)` vs the upstream branch, when it exists.
+    pub ahead_behind: Option<(usize, usize)>,
+}
+
+/// Repository state decoupled from presentation — built by
+/// [`GitRepo::status`], rendered by the CLI / TUI / IDE layers.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RepoStatus {
+    pub branch: String,
+    pub head: Option<HeadCommitInfo>,
+    pub remote: Option<RemoteStatusInfo>,
+    pub staged: Vec<StatusEntry>,
+    pub unstaged: Vec<StatusEntry>,
+    pub untracked: Vec<String>,
+}
+
+impl RepoStatus {
+    pub fn is_clean(&self) -> bool {
+        self.staged.is_empty() && self.unstaged.is_empty() && self.untracked.is_empty()
     }
 }
 
@@ -883,7 +838,7 @@ pub(crate) fn commit_inner_split(
     // commit object out.
     let buffer = repo.commit_create_buffer(author, committer, message, tree, parents)?;
     let buffer_str = std::str::from_utf8(&buffer)
-        .map_err(|e| ToriiError::InvalidConfig(format!(
+        .map_err(|e| ToriiError::RepoState(format!(
             "commit buffer not valid UTF-8 (cannot GPG-sign): {}", e
         )))?;
     // 0.7.35 — honour `git.gpg_program` so users on systems where gpg
