@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Dual path+version: local builds use the path, `cargo publish` the version.
-torii-lib = { version = "0.9.2", path = "../torii-core" }
+torii-lib = { version = "0.10.0", path = "../torii-core" }
 
 # CLI argument parsing
 clap = { version = "=4.5", features = ["derive"] }
