@@ -7,6 +7,7 @@
 pub mod core;
 pub mod core_extensions;
 pub mod core_tag;
+pub mod sign;
 pub mod tag;
 pub mod snapshot;
 pub mod patch;

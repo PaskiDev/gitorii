@@ -50,6 +50,7 @@ pub use platforms::registry as platforms_registry;
 pub use vcs::core;
 pub use vcs::core_extensions;
 pub use vcs::core_tag;
+pub use vcs::sign;
 pub use vcs::tag;
 pub use vcs::snapshot;
 pub use vcs::patch;
@@ -95,7 +96,24 @@ use anyhow::Result;
 use cli::Cli;
 use clap::Parser;
 
+/// Restore the default SIGPIPE disposition (terminate). The Rust runtime
+/// sets SIGPIPE to ignore before `main()`, which turns writes to a closed
+/// pipe into `Err(EPIPE)` — and `println!` panics on that. With SIG_DFL,
+/// `torii log | head` dies quietly mid-pipe, exactly like git does.
+#[cfg(unix)]
+fn reset_sigpipe() {
+    // SAFETY: trivial signal-disposition change before any other code
+    // runs; no handlers or signal-unsafe state involved.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(not(unix))]
+fn reset_sigpipe() {}
+
 fn main() -> Result<()> {
+    reset_sigpipe();
     transport::register_all();
     let cli = Cli::parse();
     let result = cli.execute();
