@@ -1,4 +1,4 @@
-//! torii-core — domain library for the torii (Gitorii) ecosystem.
+//! torii-lib — domain library for the torii (Gitorii) ecosystem.
 //!
 //! Everything the CLI, the TUI and the IDE share lives here: VCS
 //! operations over the object database, platform clients
