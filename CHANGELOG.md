@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-06-05
+
+### Added
+
+- **`torii-lib` published as a standalone crate** — the domain layer
+  (VCS operations, platform clients, workspaces, config/auth) split
+  out of the binary. `gitorii` now depends on it like any consumer;
+  the upcoming `torii-cloud` plugin links against the same API.
+- `torii save --yes` (`-y`) — auto-confirm the secret-scanner prompt.
+  Required to commit past findings when stdin is not a TTY.
+- GitHub clients accept a configurable API base URL (groundwork for
+  GitHub Enterprise; previously hardcoded to `api.github.com`).
+- Test suite grew from 97 to 282 tests: per-platform parser fixtures,
+  `httpmock`-backed client tests (auth headers, status mapping,
+  error variants), TUI state tests, CLI dispatch tests, and
+  process-level regression tests for SIGPIPE and the no-TTY save.
+
+### Fixed
+
+- **`torii log | head` no longer panics** with "failed printing to
+  stdout: Broken pipe" — SIGPIPE is restored to its default
+  disposition at startup, so mid-pipe exits behave like git's.
+- **`torii rename` works on directories** — previously the move
+  happened on disk but indexing failed (`Index::add_path` only
+  accepts files). Tracked entries under the old prefix are now
+  re-recorded recursively; untracked files stay untracked.
+- **`torii save` no longer hangs without a TTY** when the secret
+  scanner finds something — it fails fast pointing at `--yes`
+  instead of waiting forever on a `[y/N]` prompt nobody can answer.
+- **TUI commit editor no longer panics on multibyte input** (ñ, á,
+  emoji) — cursor char-indices were used as byte offsets.
+
+### Changed
+
+- **Workspace split**: `crates/torii-lib` (library, import name
+  `torii_lib`) + `crates/torii` (CLI/TUI binary, package `gitorii`).
+- Modularised the three largest files: `cli.rs` (6.6k lines → clap
+  surface + 24 domain modules), `tui/app.rs` and `tui/events.rs`
+  (per-view modules), and `platforms/` reorganised by platform
+  (github/, gitlab/, gitea/, sourcehut/, radicle/, bitbucket/,
+  azure/) with shared traits/types/factories per feature.
+- **Error precision migration completed**: ~415 catch-all
+  `InvalidConfig` sites moved to precise variants — `Network`,
+  `PlatformApi` (with real HTTP status), `Auth`, plus new
+  `MalformedResponse`, `Subprocess`, `Fs`, `RepoState`, `Workspace`,
+  `Unsupported` and `Usage`. The remaining `InvalidConfig` uses are
+  genuine configuration errors.
+- Removed a stale TSAL license header from `main.rs` (the project
+  relicensed to `MIT OR Apache-2.0` in 0.9.0).
+
 ## [0.9.2] - 2026-06-01
 
 ### Changed
