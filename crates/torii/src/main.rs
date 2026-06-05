@@ -13,23 +13,23 @@ mod tui;
 // (cli/, cmd/, tui/) predates the split and references `crate::core::`,
 // `crate::error::`, etc. — re-exposing the library modules at this crate's
 // root keeps every one of those call-sites compiling. New code should
-// prefer `torii_core::…` paths directly.
-pub use torii_core::{cloud, error, platforms, transport, util, vcs, versioning, workspace};
+// prefer `torii_lib::…` paths directly.
+pub use torii_lib::{cloud, error, platforms, transport, util, vcs, versioning, workspace};
 
 // platforms/
-pub use torii_core::{issue, package, pipeline, platforms_registry, pr, release, runner};
+pub use torii_lib::{issue, package, pipeline, platforms_registry, pr, release, runner};
 
 // vcs/
-pub use torii_core::{
+pub use torii_lib::{
     commit_scan, core, core_extensions, core_tag, history_reauthor, patch, scanner, sign, snapshot,
     tag,
 };
 
 // workspace/
-pub use torii_core::{mirror, remote};
+pub use torii_lib::{mirror, remote};
 
 // util/
-pub use torii_core::{
+pub use torii_lib::{
     auth, config, duration, gpg, graph, hooks, http, oauth, radicle, ssh, toriignore, updater, url,
 };
 

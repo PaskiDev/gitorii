@@ -1,6 +1,6 @@
 [package]
-name = "torii-core"
-description = "Domain library for the torii (Gitorii) ecosystem — VCS operations, platform clients (GitHub/GitLab/Gitea/…), workspaces, config and auth. No CLI/TUI."
+name = "torii-lib"
+description = "Domain library of the torii git client — VCS operations, platform clients (GitHub/GitLab/Gitea/…), workspaces, config and auth. No CLI/TUI. Part of the Gitorii ecosystem (gitorii.com · torii.sh)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,9 +8,11 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 homepage.workspace = true
-# `torii-core` is taken on crates.io by an unrelated project — decide a
-# publishable name (e.g. gitorii-core) before flipping this on.
-publish = false
+publish = true
+
+[lib]
+# Import name stays `torii_lib` regardless of registry label.
+name = "torii_lib"
 
 [dependencies]
 git2.workspace = true
