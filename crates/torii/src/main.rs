@@ -1,8 +1,3 @@
-// Copyright (c) 2026 Torii Project. All Rights Reserved.
-// Licensed under the Torii Source-Available License (Non-Commercial Fork-Friendly) v1.0.
-// See LICENSE file in the project root for full license information.
-// Commercial use is prohibited without explicit written permission from the copyright holder.
-
 // ── Binary-side modules ──────────────────────────────────────────────────────
 //
 //   - cli/ : clap parser + per-command handlers (presentation layer)
@@ -26,8 +21,8 @@ pub use torii_core::{issue, package, pipeline, platforms_registry, pr, release, 
 
 // vcs/
 pub use torii_core::{
-    commit_scan, core, core_extensions, core_tag, history_reauthor, patch, scanner, sign,
-    snapshot, tag,
+    commit_scan, core, core_extensions, core_tag, history_reauthor, patch, scanner, sign, snapshot,
+    tag,
 };
 
 // workspace/
@@ -35,8 +30,7 @@ pub use torii_core::{mirror, remote};
 
 // util/
 pub use torii_core::{
-    auth, config, duration, gpg, graph, hooks, http, oauth, radicle, ssh, toriignore, updater,
-    url,
+    auth, config, duration, gpg, graph, hooks, http, oauth, radicle, ssh, toriignore, updater, url,
 };
 
 // cmd/ (binary-local)
