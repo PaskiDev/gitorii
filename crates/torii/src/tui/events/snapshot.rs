@@ -11,15 +11,13 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
     if app.snapshot_view.focus == SnapshotFocus::List && app.snapshot_view.ops_mode {
         const OPS_LEN: usize = 3;
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.snapshot_view.ops_idx > 0 {
-                    app.snapshot_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.snapshot_view.ops_idx > 0 => {
+                app.snapshot_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.snapshot_view.ops_idx < OPS_LEN - 1 {
-                    app.snapshot_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.snapshot_view.ops_idx < OPS_LEN - 1 =>
+            {
+                app.snapshot_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.snapshot_view.ops_idx;
@@ -120,15 +118,15 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
         SnapshotFocus::AutoConfig => {
             let n = AutoSnapshotInterval::all().len();
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.snapshot_view.auto_interval_idx > 0 {
-                        app.snapshot_view.auto_interval_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k'))
+                    if app.snapshot_view.auto_interval_idx > 0 =>
+                {
+                    app.snapshot_view.auto_interval_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.snapshot_view.auto_interval_idx < n - 1 {
-                        app.snapshot_view.auto_interval_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.snapshot_view.auto_interval_idx < n - 1 =>
+                {
+                    app.snapshot_view.auto_interval_idx += 1;
                 }
                 (_, KeyCode::Enter) => {
                     app.snapshot_view.auto_interval =

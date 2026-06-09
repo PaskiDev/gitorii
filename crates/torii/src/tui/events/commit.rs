@@ -31,15 +31,13 @@ pub(super) fn handle_commit(key: event::KeyEvent, app: &mut App) -> Option<Actio
         }
         CommitFocus::TypeSelector => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.commit_view.type_idx > 0 {
-                        app.commit_view.type_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.commit_view.type_idx > 0 => {
+                    app.commit_view.type_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.commit_view.type_idx < N_TYPES - 1 {
-                        app.commit_view.type_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.commit_view.type_idx < N_TYPES - 1 =>
+                {
+                    app.commit_view.type_idx += 1;
                 }
                 (_, KeyCode::Enter) => {
                     let prefix = COMMIT_TYPES[app.commit_view.type_idx].0;

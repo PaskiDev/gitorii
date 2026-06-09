@@ -339,6 +339,7 @@ impl App {
     ///   - broadcast:      pr/mr, issues, platform
     ///   - multi-platform: remote, workspace, worktrees, submodules
     ///   - admin:          bisect, auth, config
+    ///
     /// Must stay in sync with TABS in src/tui/ui.rs and the sidebar_idx
     /// assignments in `go_to` / `go_back`.
     fn view_for_idx(idx: usize) -> View {
@@ -806,10 +807,8 @@ fn read_file_diff(repo_path: &str, file_path: &str, staged: bool) -> Vec<DiffLin
         let tree = head.as_ref().and_then(|c| c.tree().ok());
         let index = repo.index().ok();
         match (tree, index) {
-            (Some(t), Some(mut i)) => {
-                repo.diff_tree_to_index(Some(&t), Some(&mut i), Some(&mut opts))
-            }
-            (None, Some(mut i)) => repo.diff_tree_to_index(None, Some(&mut i), Some(&mut opts)),
+            (Some(t), Some(i)) => repo.diff_tree_to_index(Some(&t), Some(&i), Some(&mut opts)),
+            (None, Some(i)) => repo.diff_tree_to_index(None, Some(&i), Some(&mut opts)),
             _ => return vec![],
         }
     } else {

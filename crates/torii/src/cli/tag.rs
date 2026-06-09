@@ -78,9 +78,7 @@ pub(crate) fn run(action: &TagCommands) -> Result<()> {
                         "patch" => VersionBump::Patch,
                         _ => anyhow::bail!("Invalid bump: use major, minor or patch"),
                     };
-                    let base = current
-                        .clone()
-                        .unwrap_or_else(crate::versioning::semver::Version::initial);
+                    let base = current.unwrap_or_else(crate::versioning::semver::Version::initial);
                     base.bump(b)
                 } else {
                     tagger.calculate_next_version_from_log()?.ok_or_else(|| {

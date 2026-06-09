@@ -36,7 +36,6 @@ pub enum ToriiError {
     // (config keys/values, missing user.name/email, config dirs,
     // policy files). New code should never add InvalidConfig for
     // network/API/auth/subprocess/fs/repo-state failures.
-
     /// Networking / HTTP transport failure (DNS, connect, timeout,
     /// unexpected I/O — *not* a non-2xx response, see PlatformApi).
     #[error("Network error ({provider}): {message}")]
@@ -47,7 +46,11 @@ pub enum ToriiError {
     /// status with a structured body.
     #[error("{provider} API {status}: {message}")]
     #[allow(dead_code)]
-    PlatformApi { provider: String, status: u16, message: String },
+    PlatformApi {
+        provider: String,
+        status: u16,
+        message: String,
+    },
 
     /// Credential / authorisation problem (missing token, expired
     /// PAT, 401, scope mismatch). Surfaces separately from

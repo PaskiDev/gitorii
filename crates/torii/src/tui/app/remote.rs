@@ -93,24 +93,13 @@ pub struct MirrorEntry {
     pub repo: String,
 }
 
+#[derive(Default)]
 pub struct MirrorState {
     pub mirrors: Vec<MirrorEntry>,
     pub idx: usize,
     pub status: Option<String>,
     pub ops_mode: bool,
     pub ops_idx: usize,
-}
-
-impl Default for MirrorState {
-    fn default() -> Self {
-        Self {
-            mirrors: vec![],
-            idx: 0,
-            status: None,
-            ops_mode: false,
-            ops_idx: 0,
-        }
-    }
 }
 
 // ── PR state ──────────────────────────────────────────────────────────────────

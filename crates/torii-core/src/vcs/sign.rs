@@ -48,7 +48,7 @@ impl GitRepo {
         Ok(CommitSignature {
             oid: oid.to_string(),
             armor,
-            payload: (&*payload_buf).to_vec(),
+            payload: payload_buf.to_vec(),
         })
     }
 

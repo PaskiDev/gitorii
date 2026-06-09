@@ -26,14 +26,14 @@
 //   - cloud/     : gitorii.com cloud (api key, sync)
 //   - transport/ : libgit2 transport plumbing
 //   - versioning/: SemVer + conventional commits helpers
+pub mod cloud;
 pub mod error;
 pub mod platforms;
-pub mod vcs;
-pub mod workspace;
-pub mod util;
-pub mod cloud;
 pub mod transport;
+pub mod util;
+pub mod vcs;
 pub mod versioning;
+pub mod workspace;
 
 // ── Backwards-compatible re-exports ─────────────────────────────────────────
 //
@@ -44,25 +44,25 @@ pub mod versioning;
 // should prefer the canonical `crate::platforms::pr` etc. paths.
 
 // platforms/
-pub use platforms::pr;
 pub use platforms::issue;
-pub use platforms::pipeline;
 pub use platforms::package;
+pub use platforms::pipeline;
+pub use platforms::pr;
+pub use platforms::registry as platforms_registry;
 pub use platforms::release;
 pub use platforms::runner;
-pub use platforms::registry as platforms_registry;
 
 // vcs/
+pub use vcs::commit_scan;
 pub use vcs::core;
 pub use vcs::core_extensions;
 pub use vcs::core_tag;
-pub use vcs::sign;
-pub use vcs::tag;
-pub use vcs::snapshot;
-pub use vcs::patch;
 pub use vcs::history_reauthor;
-pub use vcs::commit_scan;
+pub use vcs::patch;
 pub use vcs::scanner;
+pub use vcs::sign;
+pub use vcs::snapshot;
+pub use vcs::tag;
 
 // workspace/
 pub use workspace::mirror;
@@ -75,13 +75,13 @@ pub use workspace::remote;
 pub use util::auth;
 pub use util::config;
 pub use util::duration;
-pub use util::url;
-pub use util::toriignore;
+pub use util::gpg;
+pub use util::graph;
 pub use util::hooks;
-pub use util::updater;
 pub use util::http;
 pub use util::oauth;
-pub use util::ssh;
-pub use util::graph;
-pub use util::gpg;
 pub use util::radicle;
+pub use util::ssh;
+pub use util::toriignore;
+pub use util::updater;
+pub use util::url;

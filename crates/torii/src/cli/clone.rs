@@ -145,7 +145,7 @@ pub(crate) fn run(
 
     let dir_name = target_dir.unwrap_or_else(|| {
         url.split('/')
-            .last()
+            .next_back()
             .unwrap_or("repo")
             .trim_end_matches(".git")
     });

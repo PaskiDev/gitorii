@@ -61,8 +61,8 @@ pub(crate) fn run(action: &PackageCommands, remote: &String) -> Result<()> {
                 println!("No packages found.");
             } else {
                 println!(
-                    "{:<8} {:<20} {:<16} {:<10} {}",
-                    "ID", "NAME", "VERSION", "TYPE", "CREATED"
+                    "{:<8} {:<20} {:<16} {:<10} CREATED",
+                    "ID", "NAME", "VERSION", "TYPE"
                 );
                 for p in &packages {
                     let created = p.created_at.get(..10).unwrap_or(&p.created_at);
@@ -78,7 +78,7 @@ pub(crate) fn run(action: &PackageCommands, remote: &String) -> Result<()> {
             if files.is_empty() {
                 println!("No files in package {}.", id);
             } else {
-                println!("{:<10} {:<40} {}", "FILE-ID", "NAME", "SIZE");
+                println!("{:<10} {:<40} SIZE", "FILE-ID", "NAME");
                 for f in &files {
                     let size_mb = f.size_bytes as f64 / 1_048_576.0;
                     println!("{:<10} {:<40} {:.2} MB", f.id, f.file_name, size_mb);

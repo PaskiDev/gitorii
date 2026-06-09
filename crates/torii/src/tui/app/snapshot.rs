@@ -128,7 +128,7 @@ impl App {
         }
         self.snapshot_view
             .snapshots
-            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            .sort_by_key(|s| std::cmp::Reverse(s.timestamp));
         self.snapshot_view.idx = 0;
     }
 

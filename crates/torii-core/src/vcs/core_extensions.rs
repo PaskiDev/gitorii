@@ -1,11 +1,12 @@
 // Extended Git operations for Torii
-use git2::BranchType;
-use crate::error::Result;
 use crate::core::GitRepo;
+use crate::error::Result;
 use chrono::NaiveDateTime;
+use git2::BranchType;
 
 impl GitRepo {
     /// Show commit history
+    #[allow(clippy::too_many_arguments)]
     pub fn log(
         &self,
         count: Option<usize>,
@@ -63,10 +64,14 @@ impl GitRepo {
 
             // Date filters
             if let Some(s) = since_ts {
-                if ts < s { continue; }
+                if ts < s {
+                    continue;
+                }
             }
             if let Some(u) = until_ts {
-                if ts > u { continue; }
+                if ts > u {
+                    continue;
+                }
             }
 
             // Grep filter
@@ -90,7 +95,12 @@ impl GitRepo {
 
             if oneline {
                 let short_id = &oid.to_string()[..7];
-                let message = commit.message().unwrap_or("<no message>").lines().next().unwrap_or("");
+                let message = commit
+                    .message()
+                    .unwrap_or("<no message>")
+                    .lines()
+                    .next()
+                    .unwrap_or("");
                 if let Some(l) = sig_letter {
                     println!("  {} {} {}", l, short_id, message);
                 } else {
@@ -105,9 +115,12 @@ impl GitRepo {
                 if let Some(author_name) = commit.author().name() {
                     println!("  Author: {}", author_name);
                 }
-                println!("  Date:   {}", chrono::DateTime::from_timestamp(ts, 0)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                    .unwrap_or_else(|| "<unknown>".to_string()));
+                println!(
+                    "  Date:   {}",
+                    chrono::DateTime::from_timestamp(ts, 0)
+                        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "<unknown>".to_string())
+                );
                 println!();
                 if let Some(msg) = commit.message() {
                     for line in msg.lines() {
@@ -122,10 +135,13 @@ impl GitRepo {
                         let old_tree = parent.tree().ok();
                         let new_tree = commit.tree().ok();
                         if let (Some(old), Some(new)) = (old_tree, new_tree) {
-                            let diff = self.repository().diff_tree_to_tree(Some(&old), Some(&new), None);
+                            let diff =
+                                self.repository()
+                                    .diff_tree_to_tree(Some(&old), Some(&new), None);
                             if let Ok(diff) = diff {
                                 let stats = diff.stats()?;
-                                println!("  {} files changed, {} insertions(+), {} deletions(-)",
+                                println!(
+                                    "  {} files changed, {} insertions(+), {} deletions(-)",
                                     stats.files_changed(),
                                     stats.insertions(),
                                     stats.deletions()
@@ -149,10 +165,10 @@ impl GitRepo {
     fn log_graph(&self, limit: usize, include_all: bool) -> Result<()> {
         let style = std::env::var("TORII_GRAPH_STYLE")
             .ok()
-            .map(|s| crate::graph::GraphStyle::from_str(&s))
+            .and_then(|s| s.parse::<crate::graph::GraphStyle>().ok())
             .unwrap_or_default();
         let rendered = crate::graph::render_repo_with(self.repository(), limit, include_all, style)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+            .map_err(crate::error::ToriiError::Git)?;
         let extra_pad = style.expanded_extra_lines();
         println!("📜 Commit Graph:");
         println!();
@@ -182,7 +198,9 @@ impl GitRepo {
                 // row indents the message under the lanes.
                 println!(
                     "  {} {} {}",
-                    row.commit_line, commit.short_id, refs_str.trim_end()
+                    row.commit_line,
+                    commit.short_id,
+                    refs_str.trim_end()
                 );
                 let pad_row = crate::graph::padding_row(&row.commit_line, style);
                 println!("  {} {}", pad_row, summary);
@@ -201,8 +219,10 @@ impl GitRepo {
 
     /// Show reflog (HEAD movement history)
     pub fn show_reflog(&self, count: usize) -> Result<()> {
-        let reflog = self.repo.reflog("HEAD")
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let reflog = self
+            .repo
+            .reflog("HEAD")
+            .map_err(crate::error::ToriiError::Git)?;
 
         println!("📋 Reflog (HEAD movements):");
         println!();
@@ -230,15 +250,24 @@ impl GitRepo {
     pub fn rebase_with_todo(&self, base: &str, todo_file: &std::path::Path) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         // Surface a clear error rather than panicking if libgit2 ever surprises us.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         let todo_abs = todo_file.canonicalize().map_err(|_| {
-            crate::error::ToriiError::Usage(
-                format!("Todo file not found: {}", todo_file.display())
-            )
+            crate::error::ToriiError::Usage(format!("Todo file not found: {}", todo_file.display()))
         })?;
-        println!("🔄 Rebasing from {} using todo file: {}", base, todo_abs.display());
+        println!(
+            "🔄 Rebasing from {} using todo file: {}",
+            base,
+            todo_abs.display()
+        );
         let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
         let editor = format!("cp {}", todo_for_git.display());
         let mut cmd = std::process::Command::new("git");
@@ -261,8 +290,15 @@ impl GitRepo {
     pub fn rebase_interactive(&self, base: &str) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         // Surface a clear error rather than panicking if libgit2 ever surprises us.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         println!("🔄 Starting interactive rebase onto {}...", base);
         let status = std::process::Command::new("git")
@@ -275,7 +311,10 @@ impl GitRepo {
 
     #[cfg(not(unix))]
     pub fn rebase_interactive(&self, _base: &str) -> Result<()> {
-        Err(crate::error::ToriiError::RepoState("Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()))
+        Err(crate::error::ToriiError::RepoState(
+            "Interactive rebase requires a Unix terminal. Not supported on this platform."
+                .to_string(),
+        ))
     }
 
     /// Interactive rebase from the root commit (`git rebase -i --root`)
@@ -283,8 +322,15 @@ impl GitRepo {
     pub fn rebase_root_interactive(&self) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         // Surface a clear error rather than panicking if libgit2 ever surprises us.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         println!("🔄 Starting interactive rebase from root...");
         let status = std::process::Command::new("git")
@@ -297,7 +343,10 @@ impl GitRepo {
 
     #[cfg(not(unix))]
     pub fn rebase_root_interactive(&self) -> Result<()> {
-        Err(crate::error::ToriiError::RepoState("Interactive rebase requires a Unix terminal. Not supported on this platform.".to_string()))
+        Err(crate::error::ToriiError::RepoState(
+            "Interactive rebase requires a Unix terminal. Not supported on this platform."
+                .to_string(),
+        ))
     }
 
     /// Rebase from the root commit using a pre-written todo file
@@ -305,15 +354,23 @@ impl GitRepo {
     pub fn rebase_root_with_todo(&self, todo_file: &std::path::Path) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         // Surface a clear error rather than panicking if libgit2 ever surprises us.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         let todo_abs = todo_file.canonicalize().map_err(|_| {
-            crate::error::ToriiError::Usage(
-                format!("Todo file not found: {}", todo_file.display())
-            )
+            crate::error::ToriiError::Usage(format!("Todo file not found: {}", todo_file.display()))
         })?;
-        println!("🔄 Rebasing from root using todo file: {}", todo_abs.display());
+        println!(
+            "🔄 Rebasing from root using todo file: {}",
+            todo_abs.display()
+        );
         let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
         let editor = format!("cp {}", todo_for_git.display());
         let mut cmd = std::process::Command::new("git");
@@ -340,24 +397,28 @@ impl GitRepo {
         if self.has_cli_rebase_in_progress() {
             return self.delegate_rebase_subcommand("--continue", "continued");
         }
-        let mut rebase = self.repo.open_rebase(None)
-            .map_err(|_| crate::error::ToriiError::RepoState("No rebase in progress".to_string()))?;
+        let mut rebase = self.repo.open_rebase(None).map_err(|_| {
+            crate::error::ToriiError::RepoState("No rebase in progress".to_string())
+        })?;
 
         let sig = crate::core::resolve_signature(&self.repo)?;
 
         // Commit the currently resolved step
-        rebase.commit(None, &sig, None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase
+            .commit(None, &sig, None)
+            .map_err(crate::error::ToriiError::Git)?;
 
         // Apply remaining steps
         while let Some(op) = rebase.next() {
-            let _op = op.map_err(|e| crate::error::ToriiError::Git(e))?;
-            rebase.commit(None, &sig, None)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let _op = op.map_err(crate::error::ToriiError::Git)?;
+            rebase
+                .commit(None, &sig, None)
+                .map_err(crate::error::ToriiError::Git)?;
         }
 
-        rebase.finish(Some(&sig))
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase
+            .finish(Some(&sig))
+            .map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Rebase continued");
         Ok(())
@@ -368,11 +429,11 @@ impl GitRepo {
         if self.has_cli_rebase_in_progress() {
             return self.delegate_rebase_subcommand("--abort", "aborted");
         }
-        let mut rebase = self.repo.open_rebase(None)
-            .map_err(|_| crate::error::ToriiError::RepoState("No rebase in progress".to_string()))?;
+        let mut rebase = self.repo.open_rebase(None).map_err(|_| {
+            crate::error::ToriiError::RepoState("No rebase in progress".to_string())
+        })?;
 
-        rebase.abort()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase.abort().map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Rebase aborted");
         Ok(())
@@ -383,25 +444,31 @@ impl GitRepo {
         if self.has_cli_rebase_in_progress() {
             return self.delegate_rebase_subcommand("--skip", "skipped");
         }
-        let mut rebase = self.repo.open_rebase(None)
-            .map_err(|_| crate::error::ToriiError::RepoState("No rebase in progress".to_string()))?;
+        let mut rebase = self.repo.open_rebase(None).map_err(|_| {
+            crate::error::ToriiError::RepoState("No rebase in progress".to_string())
+        })?;
 
         let sig = crate::core::resolve_signature(&self.repo)?;
 
         // Advance past current step without committing
-        rebase.next()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("No current step to skip".to_string()))?
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase
+            .next()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState("No current step to skip".to_string())
+            })?
+            .map_err(crate::error::ToriiError::Git)?;
 
         // Continue remaining steps
         while let Some(op) = rebase.next() {
-            let _op = op.map_err(|e| crate::error::ToriiError::Git(e))?;
-            rebase.commit(None, &sig, None)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let _op = op.map_err(crate::error::ToriiError::Git)?;
+            rebase
+                .commit(None, &sig, None)
+                .map_err(crate::error::ToriiError::Git)?;
         }
 
-        rebase.finish(Some(&sig))
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase
+            .finish(Some(&sig))
+            .map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Patch skipped");
         Ok(())
@@ -419,14 +486,24 @@ impl GitRepo {
     fn delegate_rebase_subcommand(&self, flag: &str, verb: &str) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
         // Surface a clear error rather than panicking if libgit2 ever surprises us.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         let status = std::process::Command::new("git")
             .args(["rebase", flag])
             .current_dir(&repo_path)
             .status()
-            .map_err(|e| crate::error::ToriiError::Subprocess { tool: "git".into(), message: format!("spawn git: {}", e) })?;
+            .map_err(|e| crate::error::ToriiError::Subprocess {
+                tool: "git".into(),
+                message: format!("spawn git: {}", e),
+            })?;
         report_rebase_outcome(&repo_path, status);
         // If the rebase finished cleanly (no in-progress dir), echo the verb.
         let still_active = repo_path.join(".git").join("rebase-merge").exists()
@@ -443,31 +520,31 @@ impl GitRepo {
             // Show diff of last commit
             let head = self.repository().head()?.peel_to_commit()?;
             let tree = head.tree()?;
-            
+
             let parent_tree = if head.parent_count() > 0 {
                 Some(head.parent(0)?.tree()?)
             } else {
                 None
             };
-            
-            let diff = self.repository().diff_tree_to_tree(
-                parent_tree.as_ref(),
-                Some(&tree),
-                None,
-            )?;
-            
+
+            let diff =
+                self.repository()
+                    .diff_tree_to_tree(parent_tree.as_ref(), Some(&tree), None)?;
+
             self.print_diff(&diff)?;
         } else if staged {
             // Show staged changes
             let head = self.repository().head()?.peel_to_tree()?;
-            let diff = self.repository().diff_tree_to_index(Some(&head), None, None)?;
+            let diff = self
+                .repository()
+                .diff_tree_to_index(Some(&head), None, None)?;
             self.print_diff(&diff)?;
         } else {
             // Show unstaged changes
             let diff = self.repository().diff_index_to_workdir(None, None)?;
             self.print_diff(&diff)?;
         }
-        
+
         Ok(())
     }
 
@@ -475,7 +552,7 @@ impl GitRepo {
         diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
             let origin = line.origin();
             let content = std::str::from_utf8(line.content()).unwrap_or("<binary>");
-            
+
             match origin {
                 '+' => print!("\x1b[32m+{}\x1b[0m", content),
                 '-' => print!("\x1b[31m-{}\x1b[0m", content),
@@ -483,7 +560,7 @@ impl GitRepo {
             }
             true
         })?;
-        
+
         Ok(())
     }
 
@@ -528,14 +605,16 @@ impl GitRepo {
         let refname = format!("refs/heads/{}", name);
         // Reject if branch already exists
         if self.repository().find_reference(&refname).is_ok() {
-            return Err(crate::error::ToriiError::Usage(
-                format!("Branch '{}' already exists", name)
-            ));
+            return Err(crate::error::ToriiError::Usage(format!(
+                "Branch '{}' already exists",
+                name
+            )));
         }
         // Point HEAD at the (yet-unborn) ref. libgit2 allows symbolic HEAD
         // pointing to a non-existent branch — the first commit will create it.
-        self.repository().set_head(&refname)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        self.repository()
+            .set_head(&refname)
+            .map_err(crate::error::ToriiError::Git)?;
         Ok(())
     }
 
@@ -554,11 +633,14 @@ impl GitRepo {
 
     /// Switch to a branch
     pub fn switch_branch(&self, name: &str) -> Result<()> {
-        let obj = self.repository().revparse_single(&format!("refs/heads/{}", name))?;
+        let obj = self
+            .repository()
+            .revparse_single(&format!("refs/heads/{}", name))?;
         let mut builder = git2::build::CheckoutBuilder::new();
         attach_checkout_progress(&mut builder);
         self.repository().checkout_tree(&obj, Some(&mut builder))?;
-        self.repository().set_head(&format!("refs/heads/{}", name))?;
+        self.repository()
+            .set_head(&format!("refs/heads/{}", name))?;
         Ok(())
     }
 
@@ -566,8 +648,8 @@ impl GitRepo {
     pub fn checkout_remote_branch(&self, remote_name: &str) -> Result<()> {
         // remote_name is e.g. "origin/feature-x", local name is "feature-x"
         let local_name = remote_name
-            .splitn(2, '/')
-            .nth(1)
+            .split_once('/')
+            .map(|x| x.1)
             .unwrap_or(remote_name);
         let repo = self.repository();
         // Create local branch tracking the remote if it doesn't exist
@@ -587,7 +669,7 @@ impl GitRepo {
             dir.to_string()
         } else {
             url.split('/')
-                .last()
+                .next_back()
                 .unwrap_or("repo")
                 .trim_end_matches(".git")
                 .to_string()
@@ -670,10 +752,13 @@ impl GitRepo {
 
     /// Rename a branch
     pub fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
-        let mut branch = self.repo.find_branch(old_name, git2::BranchType::Local)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        branch.rename(new_name, false)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut branch = self
+            .repo
+            .find_branch(old_name, git2::BranchType::Local)
+            .map_err(crate::error::ToriiError::Git)?;
+        branch
+            .rename(new_name, false)
+            .map_err(crate::error::ToriiError::Git)?;
         Ok(())
     }
 
@@ -681,34 +766,41 @@ impl GitRepo {
     pub fn rewrite_history(&self, start_date: &str, end_date: &str) -> Result<()> {
         println!("🔄 Rewriting commit history...");
 
-        let start_ts = NaiveDateTime::parse_from_str(&format!("{} 00:00", start_date), "%Y-%m-%d %H:%M")
-            .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid start date: {}", e)))?
-            .and_utc().timestamp();
-        let end_ts = NaiveDateTime::parse_from_str(&format!("{} 23:59", end_date), "%Y-%m-%d %H:%M")
-            .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid end date: {}", e)))?
-            .and_utc().timestamp();
+        let start_ts =
+            NaiveDateTime::parse_from_str(&format!("{} 00:00", start_date), "%Y-%m-%d %H:%M")
+                .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid start date: {}", e)))?
+                .and_utc()
+                .timestamp();
+        let end_ts =
+            NaiveDateTime::parse_from_str(&format!("{} 23:59", end_date), "%Y-%m-%d %H:%M")
+                .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid end date: {}", e)))?
+                .and_utc()
+                .timestamp();
 
-        let mut revwalk = self.repo.revwalk()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        revwalk.push_head().map_err(|e| crate::error::ToriiError::Git(e))?;
-        revwalk.set_sorting(git2::Sort::REVERSE | git2::Sort::TIME)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut revwalk = self.repo.revwalk().map_err(crate::error::ToriiError::Git)?;
+        revwalk.push_head().map_err(crate::error::ToriiError::Git)?;
+        revwalk
+            .set_sorting(git2::Sort::REVERSE | git2::Sort::TIME)
+            .map_err(crate::error::ToriiError::Git)?;
 
-        let oids: Vec<git2::Oid> = revwalk
-            .filter_map(|r| r.ok())
-            .collect();
+        let oids: Vec<git2::Oid> = revwalk.filter_map(|r| r.ok()).collect();
 
         let total = oids.len();
-        if total == 0 { return Ok(()); }
+        if total == 0 {
+            return Ok(());
+        }
 
         let interval = (end_ts - start_ts) / (total as i64 - 1).max(1);
 
         // Walk oldest→newest, rewrite each commit with new timestamp
-        let mut old_to_new: std::collections::HashMap<git2::Oid, git2::Oid> = std::collections::HashMap::new();
+        let mut old_to_new: std::collections::HashMap<git2::Oid, git2::Oid> =
+            std::collections::HashMap::new();
 
         for (i, oid) in oids.iter().enumerate() {
-            let commit = self.repo.find_commit(*oid)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let commit = self
+                .repo
+                .find_commit(*oid)
+                .map_err(crate::error::ToriiError::Git)?;
 
             let new_ts = start_ts + (i as i64 * interval);
             let new_time = git2::Time::new(new_ts, 0);
@@ -719,17 +811,24 @@ impl GitRepo {
                 author.name().unwrap_or(""),
                 author.email().unwrap_or(""),
                 &new_time,
-            ).map_err(|e| crate::error::ToriiError::Git(e))?;
+            )
+            .map_err(crate::error::ToriiError::Git)?;
             let new_committer = git2::Signature::new(
                 committer.name().unwrap_or(""),
                 committer.email().unwrap_or(""),
                 &new_time,
-            ).map_err(|e| crate::error::ToriiError::Git(e))?;
+            )
+            .map_err(crate::error::ToriiError::Git)?;
 
-            let tree = commit.tree().map_err(|e| crate::error::ToriiError::Git(e))?;
-            let parents: Vec<git2::Commit> = commit.parent_ids()
-                .filter_map(|pid| old_to_new.get(&pid).and_then(|new_pid| self.repo.find_commit(*new_pid).ok())
-                    .or_else(|| self.repo.find_commit(pid).ok()))
+            let tree = commit.tree().map_err(crate::error::ToriiError::Git)?;
+            let parents: Vec<git2::Commit> = commit
+                .parent_ids()
+                .filter_map(|pid| {
+                    old_to_new
+                        .get(&pid)
+                        .and_then(|new_pid| self.repo.find_commit(*new_pid).ok())
+                        .or_else(|| self.repo.find_commit(pid).ok())
+                })
                 .collect();
             let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
@@ -748,11 +847,12 @@ impl GitRepo {
 
         // Update HEAD to point to the new tip
         if let Some(new_tip) = oids.last().and_then(|oid| old_to_new.get(oid)) {
-            let head = self.repo.head().map_err(|e| crate::error::ToriiError::Git(e))?;
+            let head = self.repo.head().map_err(crate::error::ToriiError::Git)?;
             if let Some(branch_name) = head.shorthand() {
                 let refname = format!("refs/heads/{}", branch_name);
-                self.repo.reference(&refname, *new_tip, true, "history rewrite")
-                    .map_err(|e| crate::error::ToriiError::Git(e))?;
+                self.repo
+                    .reference(&refname, *new_tip, true, "history rewrite")
+                    .map_err(crate::error::ToriiError::Git)?;
             }
         }
 
@@ -765,36 +865,44 @@ impl GitRepo {
     pub fn remove_file_from_history(&self, file_path: &str) -> Result<()> {
         println!("🗑️  Removing '{}' from entire history...", file_path);
 
-        let mut revwalk = self.repo.revwalk()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        revwalk.push_glob("refs/heads/*")
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        revwalk.set_sorting(git2::Sort::REVERSE | git2::Sort::TOPOLOGICAL)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut revwalk = self.repo.revwalk().map_err(crate::error::ToriiError::Git)?;
+        revwalk
+            .push_glob("refs/heads/*")
+            .map_err(crate::error::ToriiError::Git)?;
+        revwalk
+            .set_sorting(git2::Sort::REVERSE | git2::Sort::TOPOLOGICAL)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let oids: Vec<git2::Oid> = revwalk.filter_map(|r| r.ok()).collect();
-        let mut old_to_new: std::collections::HashMap<git2::Oid, git2::Oid> = std::collections::HashMap::new();
+        let mut old_to_new: std::collections::HashMap<git2::Oid, git2::Oid> =
+            std::collections::HashMap::new();
         let mut modified = 0usize;
 
         for oid in &oids {
-            let commit = self.repo.find_commit(*oid)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            let tree = commit.tree().map_err(|e| crate::error::ToriiError::Git(e))?;
+            let commit = self
+                .repo
+                .find_commit(*oid)
+                .map_err(crate::error::ToriiError::Git)?;
+            let tree = commit.tree().map_err(crate::error::ToriiError::Git)?;
 
             // Build new tree without the target file
             let new_tree_oid = remove_path_from_tree(&self.repo, &tree, file_path)?;
 
-            let parents: Vec<git2::Commit> = commit.parent_ids()
+            let parents: Vec<git2::Commit> = commit
+                .parent_ids()
                 .filter_map(|pid| {
-                    old_to_new.get(&pid)
+                    old_to_new
+                        .get(&pid)
                         .and_then(|new_pid| self.repo.find_commit(*new_pid).ok())
                         .or_else(|| self.repo.find_commit(pid).ok())
                 })
                 .collect();
             let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
 
-            let new_tree = self.repo.find_tree(new_tree_oid)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let new_tree = self
+                .repo
+                .find_tree(new_tree_oid)
+                .map_err(crate::error::ToriiError::Git)?;
 
             if new_tree_oid != tree.id() {
                 modified += 1;
@@ -814,8 +922,10 @@ impl GitRepo {
         }
 
         // Update all branch refs
-        let branches: Vec<(String, git2::Oid)> = self.repo.branches(Some(git2::BranchType::Local))
-            .map_err(|e| crate::error::ToriiError::Git(e))?
+        let branches: Vec<(String, git2::Oid)> = self
+            .repo
+            .branches(Some(git2::BranchType::Local))
+            .map_err(crate::error::ToriiError::Git)?
             .filter_map(|b| b.ok())
             .filter_map(|(branch, _)| {
                 let name = branch.name().ok()??.to_string();
@@ -827,7 +937,9 @@ impl GitRepo {
         for (name, old_oid) in branches {
             if let Some(new_oid) = old_to_new.get(&old_oid) {
                 let refname = format!("refs/heads/{}", name);
-                let _ = self.repo.reference(&refname, *new_oid, true, "remove file from history");
+                let _ = self
+                    .repo
+                    .reference(&refname, *new_oid, true, "remove file from history");
             }
         }
 
@@ -837,9 +949,11 @@ impl GitRepo {
             if let Ok(commit) = head.peel_to_commit() {
                 let mut checkout = git2::build::CheckoutBuilder::default();
                 checkout.force();
-                let _ = self.repo.checkout_tree(commit.as_object(), Some(&mut checkout));
-                let mut index = self.repo.index().map_err(|e| crate::error::ToriiError::Git(e))?;
-                let _ = index.read_tree(&commit.tree().map_err(|e| crate::error::ToriiError::Git(e))?);
+                let _ = self
+                    .repo
+                    .checkout_tree(commit.as_object(), Some(&mut checkout));
+                let mut index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
+                let _ = index.read_tree(&commit.tree().map_err(crate::error::ToriiError::Git)?);
                 let _ = index.write();
             }
         }
@@ -873,8 +987,10 @@ impl GitRepo {
     pub fn verify_remote(&self) -> Result<()> {
         println!("🔍 Verifying remote status...\n");
 
-        let local_oid = self.repo.head()
-            .map_err(|e| crate::error::ToriiError::Git(e))?
+        let local_oid = self
+            .repo
+            .head()
+            .map_err(crate::error::ToriiError::Git)?
             .target()
             .ok_or_else(|| crate::error::ToriiError::RepoState("No HEAD".to_string()))?;
 
@@ -884,17 +1000,20 @@ impl GitRepo {
         // (which is stale until the next fetch and was producing false
         // "in sync" reports right after a silently-failed push).
         let branch = self.get_current_branch()?;
-        let mut remote = self.repo.find_remote("origin")
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut remote = self
+            .repo
+            .find_remote("origin")
+            .map_err(crate::error::ToriiError::Git)?;
         let remote_url = remote.url().unwrap_or("").to_string();
         let callbacks = crate::core::GitRepo::auth_callbacks_for(&remote_url);
-        remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        remote
+            .connect_auth(git2::Direction::Fetch, Some(callbacks), None)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let remote_ref = format!("refs/heads/{}", branch);
         let remote_hash_opt = remote
             .list()
-            .map_err(|e| crate::error::ToriiError::Git(e))?
+            .map_err(crate::error::ToriiError::Git)?
             .iter()
             .find(|h| h.name() == remote_ref)
             .map(|h| h.oid().to_string());
@@ -906,7 +1025,8 @@ impl GitRepo {
             .unwrap_or_else(|| "(no such ref on remote)".to_string());
 
         println!("Local HEAD:  {}", &local_hash[..7.min(local_hash.len())]);
-        println!("Remote HEAD: {}",
+        println!(
+            "Remote HEAD: {}",
             if remote_hash_opt.is_some() {
                 remote_hash[..7.min(remote_hash.len())].to_string()
             } else {
@@ -947,16 +1067,22 @@ impl GitRepo {
         // Validate the remote exists up-front so the error message names
         // the missing remote (libgit2's own error is generic).
         if self.repo.find_remote(name).is_err() {
-            let configured: Vec<String> = self.repo.remotes()
-                .map_err(|e| crate::error::ToriiError::Git(e))?
-                .iter().flatten().map(String::from).collect();
+            let configured: Vec<String> = self
+                .repo
+                .remotes()
+                .map_err(crate::error::ToriiError::Git)?
+                .iter()
+                .flatten()
+                .map(String::from)
+                .collect();
             let list = if configured.is_empty() {
                 "(none — add one with `torii remote link <name> --url <url>`)".to_string()
             } else {
                 configured.join(", ")
             };
             return Err(crate::error::ToriiError::InvalidConfig(format!(
-                "no remote '{}' configured. Configured remotes: {}", name, list
+                "no remote '{}' configured. Configured remotes: {}",
+                name, list
             )));
         }
         println!("🔄 Fetching from '{}'...", name);
@@ -969,12 +1095,18 @@ impl GitRepo {
     /// with status, returns Err if any single remote failed (the others
     /// still get attempted before the error surfaces).
     pub fn fetch_all(&self) -> Result<()> {
-        let names: Vec<String> = self.repo.remotes()
-            .map_err(|e| crate::error::ToriiError::Git(e))?
-            .iter().flatten().map(String::from).collect();
+        let names: Vec<String> = self
+            .repo
+            .remotes()
+            .map_err(crate::error::ToriiError::Git)?
+            .iter()
+            .flatten()
+            .map(String::from)
+            .collect();
         if names.is_empty() {
             return Err(crate::error::ToriiError::InvalidConfig(
-                "no remotes configured. Add one with `torii remote link <name> --url <url>`".to_string()
+                "no remotes configured. Add one with `torii remote link <name> --url <url>`"
+                    .to_string(),
             ));
         }
         println!("🔄 Fetching from {} remote(s)...", names.len());
@@ -992,11 +1124,19 @@ impl GitRepo {
             println!("✅ Fetched from all {} remote(s)", names.len());
             Ok(())
         } else {
-            Err(crate::error::ToriiError::Network { provider: "remotes".into(), message: format!(
-                "{}/{} remote(s) failed to fetch: {}",
-                failures.len(), names.len(),
-                failures.iter().map(|(n,_)| n.as_str()).collect::<Vec<_>>().join(", ")
-            ) })
+            Err(crate::error::ToriiError::Network {
+                provider: "remotes".into(),
+                message: format!(
+                    "{}/{} remote(s) failed to fetch: {}",
+                    failures.len(),
+                    names.len(),
+                    failures
+                        .iter()
+                        .map(|(n, _)| n.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            })
         }
     }
 
@@ -1004,15 +1144,18 @@ impl GitRepo {
     /// `.git/config` for this remote (libgit2 reads it when an empty
     /// slice is passed). Honors auth callbacks + progress display.
     fn fetch_one(&self, name: &str) -> Result<()> {
-        let mut remote = self.repo.find_remote(name)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut remote = self
+            .repo
+            .find_remote(name)
+            .map_err(crate::error::ToriiError::Git)?;
         let remote_url = remote.url().unwrap_or("").to_string();
         let mut callbacks = GitRepo::auth_callbacks_for(&remote_url);
         GitRepo::attach_fetch_progress(&mut callbacks);
         let mut fetch_options = git2::FetchOptions::new();
         fetch_options.remote_callbacks(callbacks);
-        remote.fetch(&[] as &[&str], Some(&mut fetch_options), None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        remote
+            .fetch(&[] as &[&str], Some(&mut fetch_options), None)
+            .map_err(crate::error::ToriiError::Git)?;
         Ok(())
     }
 
@@ -1020,30 +1163,38 @@ impl GitRepo {
     pub fn revert_commit(&self, commit_hash: &str) -> Result<()> {
         println!("🔄 Reverting commit {}...", commit_hash);
 
-        let commit = self.repo.revparse_single(commit_hash)
-            .map_err(|e| crate::error::ToriiError::Git(e))?
+        let commit = self
+            .repo
+            .revparse_single(commit_hash)
+            .map_err(crate::error::ToriiError::Git)?
             .peel_to_commit()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+            .map_err(crate::error::ToriiError::Git)?;
 
-        self.repo.revert(&commit, None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        self.repo
+            .revert(&commit, None)
+            .map_err(crate::error::ToriiError::Git)?;
 
         // Commit the revert
         let sig = crate::core::resolve_signature(&self.repo)?;
-        let mut index = self.repo.index()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        let tree_oid = index.write_tree()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        let tree = self.repo.find_tree(tree_oid)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        let head = self.repo.head()
-            .map_err(|e| crate::error::ToriiError::Git(e))?
+        let mut index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
+        let tree_oid = index.write_tree().map_err(crate::error::ToriiError::Git)?;
+        let tree = self
+            .repo
+            .find_tree(tree_oid)
+            .map_err(crate::error::ToriiError::Git)?;
+        let head = self
+            .repo
+            .head()
+            .map_err(crate::error::ToriiError::Git)?
             .peel_to_commit()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+            .map_err(crate::error::ToriiError::Git)?;
         let msg = format!("Revert \"{}\"", commit.summary().unwrap_or(commit_hash));
         crate::core::commit_inner(&self.repo, Some("HEAD"), &sig, &msg, &tree, &[&head])?;
 
-        println!("✅ Reverted commit {}", &commit_hash[..7.min(commit_hash.len())]);
+        println!(
+            "✅ Reverted commit {}",
+            &commit_hash[..7.min(commit_hash.len())]
+        );
         Ok(())
     }
 
@@ -1051,10 +1202,13 @@ impl GitRepo {
     pub fn reset_commit(&self, commit_hash: &str, mode: &str) -> Result<()> {
         println!("🔄 Resetting to commit {} (mode: {})...", commit_hash, mode);
 
-        let obj = self.repo.revparse_single(commit_hash)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
-        let commit = obj.peel_to_commit()
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let obj = self
+            .repo
+            .revparse_single(commit_hash)
+            .map_err(crate::error::ToriiError::Git)?;
+        let commit = obj
+            .peel_to_commit()
+            .map_err(crate::error::ToriiError::Git)?;
 
         let reset_type = match mode {
             "soft" => git2::ResetType::Soft,
@@ -1062,8 +1216,9 @@ impl GitRepo {
             _ => git2::ResetType::Mixed,
         };
 
-        self.repo.reset(commit.as_object(), reset_type, None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        self.repo
+            .reset(commit.as_object(), reset_type, None)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let short = commit.id().to_string();
         println!("✅ Reset to {}", &short[..7]);
@@ -1073,13 +1228,20 @@ impl GitRepo {
     /// Merge a branch into current branch
     pub fn merge_branch(&self, branch_name: &str) -> Result<()> {
         let branch_ref = format!("refs/heads/{}", branch_name);
-        let annotated = self.repo.find_reference(&branch_ref)
-            .map_err(|e| crate::error::ToriiError::Git(e))
-            .and_then(|r| self.repo.reference_to_annotated_commit(&r)
-                .map_err(|e| crate::error::ToriiError::Git(e)))?;
+        let annotated = self
+            .repo
+            .find_reference(&branch_ref)
+            .map_err(crate::error::ToriiError::Git)
+            .and_then(|r| {
+                self.repo
+                    .reference_to_annotated_commit(&r)
+                    .map_err(crate::error::ToriiError::Git)
+            })?;
 
-        let (analysis, _) = self.repo.merge_analysis(&[&annotated])
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let (analysis, _) = self
+            .repo
+            .merge_analysis(&[&annotated])
+            .map_err(crate::error::ToriiError::Git)?;
 
         if analysis.is_up_to_date() {
             println!("Already up to date.");
@@ -1088,44 +1250,64 @@ impl GitRepo {
 
         if analysis.is_fast_forward() {
             let refname = format!("refs/heads/{}", self.get_current_branch()?);
-            let mut reference = self.repo.find_reference(&refname)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            reference.set_target(annotated.id(), "Fast-forward")
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            self.repo.set_head(&refname)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            self.repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let mut reference = self
+                .repo
+                .find_reference(&refname)
+                .map_err(crate::error::ToriiError::Git)?;
+            reference
+                .set_target(annotated.id(), "Fast-forward")
+                .map_err(crate::error::ToriiError::Git)?;
+            self.repo
+                .set_head(&refname)
+                .map_err(crate::error::ToriiError::Git)?;
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
+                .map_err(crate::error::ToriiError::Git)?;
             println!("✅ Fast-forward merged {}", branch_name);
         } else {
             // Normal merge commit
-            self.repo.merge(&[&annotated], None, None)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            self.repo
+                .merge(&[&annotated], None, None)
+                .map_err(crate::error::ToriiError::Git)?;
 
-            let mut index = self.repo.index()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let mut index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
             if index.has_conflicts() {
-                println!("⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\"");
+                println!(
+                    "⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\""
+                );
                 return Ok(());
             }
 
-            let tree_oid = index.write_tree()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            let tree = self.repo.find_tree(tree_oid)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            let tree_oid = index.write_tree().map_err(crate::error::ToriiError::Git)?;
+            let tree = self
+                .repo
+                .find_tree(tree_oid)
+                .map_err(crate::error::ToriiError::Git)?;
             let sig = crate::core::resolve_signature(&self.repo)?;
-            let head = self.repo.head()
-                .map_err(|e| crate::error::ToriiError::Git(e))?
+            let head = self
+                .repo
+                .head()
+                .map_err(crate::error::ToriiError::Git)?
                 .peel_to_commit()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
-            let branch_commit = self.repo.find_reference(&branch_ref)
-                .map_err(|e| crate::error::ToriiError::Git(e))?
+                .map_err(crate::error::ToriiError::Git)?;
+            let branch_commit = self
+                .repo
+                .find_reference(&branch_ref)
+                .map_err(crate::error::ToriiError::Git)?
                 .peel_to_commit()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+                .map_err(crate::error::ToriiError::Git)?;
             let msg = format!("Merge branch '{}'", branch_name);
-            crate::core::commit_inner(&self.repo, Some("HEAD"), &sig, &msg, &tree, &[&head, &branch_commit])?;
-            self.repo.cleanup_state()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            crate::core::commit_inner(
+                &self.repo,
+                Some("HEAD"),
+                &sig,
+                &msg,
+                &tree,
+                &[&head, &branch_commit],
+            )?;
+            self.repo
+                .cleanup_state()
+                .map_err(crate::error::ToriiError::Git)?;
 
             println!("✅ Merged {}", branch_name);
         }
@@ -1137,30 +1319,38 @@ impl GitRepo {
     pub fn rebase_branch(&self, branch_name: &str) -> Result<()> {
         // git2's Rebase API is available — use it for non-interactive rebase
         let branch_ref = format!("refs/heads/{}", branch_name);
-        let upstream = self.repo.find_reference(&branch_ref)
-            .map_err(|e| crate::error::ToriiError::Git(e))
-            .and_then(|r| self.repo.reference_to_annotated_commit(&r)
-                .map_err(|e| crate::error::ToriiError::Git(e)))?;
+        let upstream = self
+            .repo
+            .find_reference(&branch_ref)
+            .map_err(crate::error::ToriiError::Git)
+            .and_then(|r| {
+                self.repo
+                    .reference_to_annotated_commit(&r)
+                    .map_err(crate::error::ToriiError::Git)
+            })?;
 
-        let mut rebase = self.repo.rebase(None, Some(&upstream), None, None)
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        let mut rebase = self
+            .repo
+            .rebase(None, Some(&upstream), None, None)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let sig = crate::core::resolve_signature(&self.repo)?;
 
         while let Some(op) = rebase.next() {
-            op.map_err(|e| crate::error::ToriiError::Git(e))?;
-            let index = self.repo.index()
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            op.map_err(crate::error::ToriiError::Git)?;
+            let index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
             if index.has_conflicts() {
                 println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
                 return Ok(());
             }
-            rebase.commit(None, &sig, None)
-                .map_err(|e| crate::error::ToriiError::Git(e))?;
+            rebase
+                .commit(None, &sig, None)
+                .map_err(crate::error::ToriiError::Git)?;
         }
 
-        rebase.finish(Some(&sig))
-            .map_err(|e| crate::error::ToriiError::Git(e))?;
+        rebase
+            .finish(Some(&sig))
+            .map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Rebased onto {}", branch_name);
         Ok(())
@@ -1172,7 +1362,8 @@ impl GitRepo {
         let mut index = self.repo.index()?;
         index.read(true)?;
 
-        let entries: Vec<_> = index.iter()
+        let entries: Vec<_> = index
+            .iter()
             .filter(|e| {
                 let path = String::from_utf8_lossy(&e.path).to_string();
                 match path_filter {
@@ -1213,11 +1404,15 @@ impl GitRepo {
                         let commit = obj.peel_to_commit()?;
                         let sig = commit.author();
                         let time = commit.time();
-                        let timestamp = chrono::DateTime::from_timestamp(time.seconds(), 0)
-                            .unwrap_or_default();
+                        let timestamp =
+                            chrono::DateTime::from_timestamp(time.seconds(), 0).unwrap_or_default();
 
                         println!("commit {}", commit.id());
-                        println!("Author: {} <{}>", sig.name().unwrap_or(""), sig.email().unwrap_or(""));
+                        println!(
+                            "Author: {} <{}>",
+                            sig.name().unwrap_or(""),
+                            sig.email().unwrap_or("")
+                        );
                         println!("Date:   {}", timestamp.format("%Y-%m-%d %H:%M:%S"));
                         println!();
                         println!("    {}", commit.message().unwrap_or("").trim());
@@ -1249,15 +1444,18 @@ impl GitRepo {
                         let tag = obj.peel_to_tag()?;
                         println!("tag {}", tag.name().unwrap_or(""));
                         if let Some(tagger) = tag.tagger() {
-                            println!("Tagger: {} <{}>", tagger.name().unwrap_or(""), tagger.email().unwrap_or(""));
+                            println!(
+                                "Tagger: {} <{}>",
+                                tagger.name().unwrap_or(""),
+                                tagger.email().unwrap_or("")
+                            );
                         }
                         println!();
                         println!("{}", tag.message().unwrap_or("").trim());
                     }
                     Some(git2::ObjectType::Blob) => {
                         let blob = obj.peel_to_blob()?;
-                        let content = std::str::from_utf8(blob.content())
-                            .unwrap_or("<binary>");
+                        let content = std::str::from_utf8(blob.content()).unwrap_or("<binary>");
                         print!("{}", content);
                     }
                     _ => {
@@ -1266,9 +1464,10 @@ impl GitRepo {
                 }
             }
             Err(_) => {
-                return Err(crate::error::ToriiError::Usage(
-                    format!("Unknown ref or object: '{}'", target)
-                ).into());
+                return Err(crate::error::ToriiError::Usage(format!(
+                    "Unknown ref or object: '{}'",
+                    target
+                )));
             }
         }
 
@@ -1286,30 +1485,36 @@ impl GitRepo {
 pub fn signature_letter(repo: &git2::Repository, oid: git2::Oid) -> &'static str {
     let (sig_buf, payload_buf) = match repo.extract_signature(&oid, None) {
         Ok(pair) => pair,
-        Err(_)   => return "N",
+        Err(_) => return "N",
     };
     let sig_bytes: &[u8] = &sig_buf;
-    let payload: Vec<u8> = (&*payload_buf).to_vec();
+    let payload: Vec<u8> = payload_buf.to_vec();
     let armor = match std::str::from_utf8(sig_bytes) {
         Ok(s) => s.to_string(),
         Err(_) => return "B",
     };
 
-    let program = repo.workdir()
+    let program = repo
+        .workdir()
         .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
         .and_then(|c| c.git.gpg_program);
 
     match crate::gpg::verify(&armor, &payload, program.as_deref()) {
-        Ok(crate::gpg::VerifyStatus::Good { .. })          => "G",
-        Ok(crate::gpg::VerifyStatus::UnknownKey { .. })    => "U",
-        Ok(crate::gpg::VerifyStatus::Bad)                  => "B",
-        Ok(crate::gpg::VerifyStatus::Other(_)) | Err(_)    => "?",
+        Ok(crate::gpg::VerifyStatus::Good { .. }) => "G",
+        Ok(crate::gpg::VerifyStatus::UnknownKey { .. }) => "U",
+        Ok(crate::gpg::VerifyStatus::Bad) => "B",
+        Ok(crate::gpg::VerifyStatus::Other(_)) | Err(_) => "?",
     }
 }
 
-fn remove_path_from_tree(repo: &git2::Repository, tree: &git2::Tree, path: &str) -> crate::error::Result<git2::Oid> {
-    let mut builder = repo.treebuilder(Some(tree))
-        .map_err(|e| crate::error::ToriiError::Git(e))?;
+fn remove_path_from_tree(
+    repo: &git2::Repository,
+    tree: &git2::Tree,
+    path: &str,
+) -> crate::error::Result<git2::Oid> {
+    let mut builder = repo
+        .treebuilder(Some(tree))
+        .map_err(crate::error::ToriiError::Git)?;
 
     let parts: Vec<&str> = path.splitn(2, '/').collect();
     if parts.len() == 1 {
@@ -1321,19 +1526,21 @@ fn remove_path_from_tree(repo: &git2::Repository, tree: &git2::Tree, path: &str)
         if let Ok(entry) = tree.get_name(dir).ok_or(git2::Error::from_str("not found")) {
             if let Ok(sub_tree) = repo.find_tree(entry.id()) {
                 let new_sub_oid = remove_path_from_tree(repo, &sub_tree, rest)?;
-                let new_sub = repo.find_tree(new_sub_oid)
-                    .map_err(|e| crate::error::ToriiError::Git(e))?;
+                let new_sub = repo
+                    .find_tree(new_sub_oid)
+                    .map_err(crate::error::ToriiError::Git)?;
                 if new_sub.is_empty() {
                     let _ = builder.remove(dir);
                 } else {
-                    builder.insert(dir, new_sub_oid, 0o040000)
-                        .map_err(|e| crate::error::ToriiError::Git(e))?;
+                    builder
+                        .insert(dir, new_sub_oid, 0o040000)
+                        .map_err(crate::error::ToriiError::Git)?;
                 }
             }
         }
     }
 
-    builder.write().map_err(|e| crate::error::ToriiError::Git(e))
+    builder.write().map_err(crate::error::ToriiError::Git)
 }
 
 fn remove_dir_contents(dir: &std::path::Path) -> std::io::Result<()> {
@@ -1369,10 +1576,12 @@ fn remove_dir_contents(dir: &std::path::Path) -> std::io::Result<()> {
 #[cfg(unix)]
 fn preprocess_reword_todo(
     src: &std::path::Path,
-) -> Result<(std::path::PathBuf, std::collections::HashMap<String, String>)> {
-    let raw = std::fs::read_to_string(src).map_err(|e| {
-        crate::error::ToriiError::Fs(format!("read todo {}: {}", src.display(), e))
-    })?;
+) -> Result<(
+    std::path::PathBuf,
+    std::collections::HashMap<String, String>,
+)> {
+    let raw = std::fs::read_to_string(src)
+        .map_err(|e| crate::error::ToriiError::Fs(format!("read todo {}: {}", src.display(), e)))?;
 
     let mut out_lines: Vec<String> = Vec::with_capacity(raw.lines().count());
     let mut reword_map: std::collections::HashMap<String, String> =
@@ -1409,13 +1618,9 @@ fn preprocess_reword_todo(
         }
     }
 
-    let dest = std::env::temp_dir().join(format!(
-        "torii-rebase-todo-{}.txt",
-        std::process::id()
-    ));
-    std::fs::write(&dest, out_lines.join("\n") + "\n").map_err(|e| {
-        crate::error::ToriiError::Fs(format!("write todo: {}", e))
-    })?;
+    let dest = std::env::temp_dir().join(format!("torii-rebase-todo-{}.txt", std::process::id()));
+    std::fs::write(&dest, out_lines.join("\n") + "\n")
+        .map_err(|e| crate::error::ToriiError::Fs(format!("write todo: {}", e)))?;
 
     Ok((dest, reword_map))
 }
@@ -1450,9 +1655,7 @@ fn install_message_editor(
             .current_dir(repo_path)
             .output();
         let subject = match subj {
-            Ok(o) if o.status.success() => {
-                String::from_utf8_lossy(&o.stdout).trim().to_string()
-            }
+            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).trim().to_string(),
             _ => continue, // unknown sha → skip silently (rebase may still proceed)
         };
         if subject.is_empty() {
@@ -1464,24 +1667,22 @@ fn install_message_editor(
         return Ok(());
     }
 
-    let map_path = std::env::temp_dir().join(format!(
-        "torii-rebase-rewords-{}.tsv",
-        std::process::id()
-    ));
+    let map_path =
+        std::env::temp_dir().join(format!("torii-rebase-rewords-{}.tsv", std::process::id()));
     let mut map_text = String::new();
     for (subj, msg) in &subject_map {
         let safe_subj = subj.replace('\\', "\\\\").replace('\t', " ");
-        let safe_msg = msg.replace('\\', "\\\\").replace('\n', "\\n").replace('\t', "    ");
+        let safe_msg = msg
+            .replace('\\', "\\\\")
+            .replace('\n', "\\n")
+            .replace('\t', "    ");
         map_text.push_str(&format!("{}\t{}\n", safe_subj, safe_msg));
     }
-    std::fs::write(&map_path, &map_text).map_err(|e| {
-        crate::error::ToriiError::Fs(format!("write reword map: {}", e))
-    })?;
+    std::fs::write(&map_path, &map_text)
+        .map_err(|e| crate::error::ToriiError::Fs(format!("write reword map: {}", e)))?;
 
-    let shim_path = std::env::temp_dir().join(format!(
-        "torii-rebase-editor-{}.sh",
-        std::process::id()
-    ));
+    let shim_path =
+        std::env::temp_dir().join(format!("torii-rebase-editor-{}.sh", std::process::id()));
     let shim_body = format!(
         r#"#!/bin/sh
 # torii-generated rebase message editor.
@@ -1504,9 +1705,8 @@ exit 0
 "#,
         map = map_path.display(),
     );
-    std::fs::write(&shim_path, shim_body).map_err(|e| {
-        crate::error::ToriiError::Fs(format!("write shim: {}", e))
-    })?;
+    std::fs::write(&shim_path, shim_body)
+        .map_err(|e| crate::error::ToriiError::Fs(format!("write shim: {}", e)))?;
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(&shim_path)
         .map_err(|e| crate::error::ToriiError::Fs(format!("shim perms: {}", e)))?
@@ -1536,7 +1736,10 @@ fn report_rebase_outcome(repo_path: &std::path::Path, status: std::process::Exit
         if stopped_sha.is_empty() {
             eprintln!("⏸️  Rebase paused.");
         } else {
-            eprintln!("⏸️  Rebase paused at {}.", &stopped_sha[..stopped_sha.len().min(7)]);
+            eprintln!(
+                "⏸️  Rebase paused at {}.",
+                &stopped_sha[..stopped_sha.len().min(7)]
+            );
         }
         eprintln!("    Edit files / amend / cherry-pick as needed, then:");
         eprintln!("      torii history rebase --continue");
@@ -1568,7 +1771,7 @@ fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
         }
         *last = Instant::now();
 
-        let pct = if total > 0 { completed * 100 / total } else { 0 };
+        let pct = (completed * 100).checked_div(total).unwrap_or(0);
         let name = path
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
@@ -1594,7 +1797,8 @@ mod fetch_tests {
             let mut idx = repo.index().unwrap();
             let tree_oid = idx.write_tree().unwrap();
             let tree = repo.find_tree(tree_oid).unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
         }
         repo
     }
@@ -1611,7 +1815,10 @@ mod fetch_tests {
         let _ = make_source_repo(&src);
         let consumer = tmp.path().join("consumer");
         let gitorii = make_consumer_repo(&consumer);
-        gitorii.repo.remote("upstream", &format!("file://{}", src.display())).unwrap();
+        gitorii
+            .repo
+            .remote("upstream", &format!("file://{}", src.display()))
+            .unwrap();
 
         gitorii.fetch_named("upstream").unwrap();
 
@@ -1619,7 +1826,8 @@ mod fetch_tests {
         let mut found = false;
         for r in gitorii.repo.references().unwrap().flatten() {
             if r.name().unwrap_or("").starts_with("refs/remotes/upstream/") {
-                found = true; break;
+                found = true;
+                break;
             }
         }
         assert!(found, "expected refs/remotes/upstream/* after fetch_named");
@@ -1633,8 +1841,16 @@ mod fetch_tests {
         gitorii.repo.remote("origin", "file:///nowhere").unwrap();
 
         let err = gitorii.fetch_named("upstream").unwrap_err().to_string();
-        assert!(err.contains("upstream"), "error should name the missing remote: {}", err);
-        assert!(err.contains("origin"), "error should list configured remotes: {}", err);
+        assert!(
+            err.contains("upstream"),
+            "error should name the missing remote: {}",
+            err
+        );
+        assert!(
+            err.contains("origin"),
+            "error should list configured remotes: {}",
+            err
+        );
     }
 
     #[test]
@@ -1646,8 +1862,14 @@ mod fetch_tests {
         let _ = make_source_repo(&src_b);
         let consumer = tmp.path().join("consumer");
         let gitorii = make_consumer_repo(&consumer);
-        gitorii.repo.remote("a", &format!("file://{}", src_a.display())).unwrap();
-        gitorii.repo.remote("b", &format!("file://{}", src_b.display())).unwrap();
+        gitorii
+            .repo
+            .remote("a", &format!("file://{}", src_a.display()))
+            .unwrap();
+        gitorii
+            .repo
+            .remote("b", &format!("file://{}", src_b.display()))
+            .unwrap();
 
         gitorii.fetch_all().unwrap();
 
@@ -1655,8 +1877,12 @@ mod fetch_tests {
         let mut b_seen = false;
         for r in gitorii.repo.references().unwrap().flatten() {
             let n = r.name().unwrap_or("");
-            if n.starts_with("refs/remotes/a/") { a_seen = true; }
-            if n.starts_with("refs/remotes/b/") { b_seen = true; }
+            if n.starts_with("refs/remotes/a/") {
+                a_seen = true;
+            }
+            if n.starts_with("refs/remotes/b/") {
+                b_seen = true;
+            }
         }
         assert!(a_seen && b_seen, "fetch_all should populate both remotes");
     }
@@ -1668,6 +1894,10 @@ mod fetch_tests {
         let gitorii = make_consumer_repo(&consumer);
 
         let err = gitorii.fetch_all().unwrap_err().to_string();
-        assert!(err.contains("no remotes"), "error should mention missing remotes: {}", err);
+        assert!(
+            err.contains("no remotes"),
+            "error should mention missing remotes: {}",
+            err
+        );
     }
 }

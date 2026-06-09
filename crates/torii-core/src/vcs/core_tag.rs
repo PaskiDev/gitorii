@@ -15,7 +15,7 @@ impl GitRepo {
     pub fn list_tags(&self) -> Result<()> {
         let tag_mgr = TagManager::new(&self.repo);
         let tags = tag_mgr.list_tags()?;
-        
+
         if tags.is_empty() {
             println!("No tags found");
         } else {
@@ -24,7 +24,7 @@ impl GitRepo {
                 println!("  {}", tag);
             }
         }
-        
+
         Ok(())
     }
 
@@ -76,12 +76,12 @@ impl GitRepo {
     pub fn cherry_pick(&self, commit_hash: &str) -> Result<()> {
         let oid = git2::Oid::from_str(commit_hash)?;
         let commit = self.repo.find_commit(oid)?;
-        
+
         println!("🍒 Cherry-picking commit: {}", commit.id());
-        
+
         // Perform cherry-pick
         self.repo.cherrypick(&commit, None)?;
-        
+
         // Check for conflicts
         let mut index = self.repo.index()?;
         if index.has_conflicts() {
@@ -89,13 +89,13 @@ impl GitRepo {
             println!("💡 Resolve conflicts and run: torii cherry-pick --continue");
             return Ok(());
         }
-        
+
         // Create commit
         let sig = crate::core::resolve_signature(&self.repo)?;
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let head = self.repo.head()?.peel_to_commit()?;
-        
+
         crate::core::commit_inner(
             &self.repo,
             Some("HEAD"),
@@ -130,27 +130,28 @@ impl GitRepo {
         )?;
 
         println!("✅ Cherry-pick complete");
-        
+
         Ok(())
     }
 
     /// Abort cherry-pick
     pub fn cherry_pick_abort(&self) -> Result<()> {
         println!("❌ Aborting cherry-pick...");
-        
+
         // Reset to HEAD
         let head = self.repo.head()?.peel_to_commit()?;
-        self.repo.reset(head.as_object(), git2::ResetType::Hard, None)?;
-        
+        self.repo
+            .reset(head.as_object(), git2::ResetType::Hard, None)?;
+
         println!("✅ Cherry-pick aborted");
-        
+
         Ok(())
     }
 
     /// Show blame for a file
     pub fn blame(&self, file: &str, lines: Option<&str>) -> Result<()> {
         let blame = self.repo.blame_file(std::path::Path::new(file), None)?;
-        
+
         let (start_line, end_line) = if let Some(range) = lines {
             let parts: Vec<&str> = range.split(',').collect();
             if parts.len() == 2 {
@@ -163,22 +164,22 @@ impl GitRepo {
         } else {
             (1, usize::MAX)
         };
-        
+
         println!("📝 Blame for: {}", file);
         println!();
-        
+
         for (idx, hunk) in blame.iter().enumerate() {
             let line_num = idx + 1;
-            
+
             if line_num < start_line || line_num > end_line {
                 continue;
             }
-            
+
             let commit_id = hunk.final_commit_id();
             let commit = self.repo.find_commit(commit_id)?;
             let author = commit.author();
             let short_id = format!("{:.7}", commit_id);
-            
+
             println!(
                 "{} {} ({}) {}",
                 short_id,
@@ -187,7 +188,7 @@ impl GitRepo {
                 commit.message().unwrap_or("").lines().next().unwrap_or("")
             );
         }
-        
+
         Ok(())
     }
 }

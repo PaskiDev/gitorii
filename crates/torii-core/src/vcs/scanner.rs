@@ -1,6 +1,6 @@
 // Sensitive data scanner — runs before every commit
-use std::path::Path;
 use crate::error::Result;
+use std::path::Path;
 
 /// A detected sensitive pattern in a file
 pub struct Finding {
@@ -23,7 +23,8 @@ fn mask(value: &str) -> String {
         return "*".repeat(chars.len());
     }
     let visible = 4;
-    format!("{}{}",
+    format!(
+        "{}{}",
         &chars[..visible].iter().collect::<String>(),
         "*".repeat(chars.len() - visible)
     )
@@ -45,18 +46,21 @@ fn max_blob_bytes() -> usize {
 const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Private key (PEM)",
-        detect: |l| l.contains("-----BEGIN") && (
-            l.contains("PRIVATE KEY") ||
-            l.contains("RSA PRIVATE") ||
-            l.contains("EC PRIVATE")
-        ),
+        detect: |l| {
+            l.contains("-----BEGIN")
+                && (l.contains("PRIVATE KEY")
+                    || l.contains("RSA PRIVATE")
+                    || l.contains("EC PRIVATE"))
+        },
     },
     Pattern {
         name: "JWT token",
         detect: |l| {
             // eyJ... base64 header — at least 3 segments
             l.split_whitespace().any(|w| {
-                let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '.' && c != '_' && c != '-');
+                let w = w.trim_matches(|c: char| {
+                    !c.is_alphanumeric() && c != '.' && c != '_' && c != '-'
+                });
                 let parts: Vec<&str> = w.split('.').collect();
                 parts.len() == 3
                     && parts[0].starts_with("eyJ")
@@ -72,7 +76,8 @@ const PATTERNS: &[Pattern] = &[
                 let w = w.trim_matches(|c: char| !c.is_alphanumeric());
                 (w.starts_with("AKIA") || w.starts_with("ASIA") || w.starts_with("AROA"))
                     && w.len() == 20
-                    && w.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                    && w.chars()
+                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
             })
         },
     },
@@ -100,16 +105,22 @@ const PATTERNS: &[Pattern] = &[
                     return false;
                 }
                 // Skip bare prefixes used in docs (ghp_, glpat-, etc.) — real tokens are longer
-                let is_prefix_only = (w.starts_with("ghp_") && w.len() <= 5) ||
-                    (w.starts_with("gho_") && w.len() <= 5) ||
-                    (w.starts_with("ghs_") && w.len() <= 5) ||
-                    (w.starts_with("glpat-") && w.len() <= 7) ||
-                    (w.starts_with("glptt-") && w.len() <= 7) ||
-                    (w.starts_with("github_pat_") && w.len() <= 12);
-                if is_prefix_only { return false; }
-                (w.starts_with("ghp_") || w.starts_with("gho_") ||
-                w.starts_with("ghs_") || w.starts_with("github_pat_") ||
-                w.starts_with("glpat-") || w.starts_with("glptt-")) && w.len() > 20
+                let is_prefix_only = (w.starts_with("ghp_") && w.len() <= 5)
+                    || (w.starts_with("gho_") && w.len() <= 5)
+                    || (w.starts_with("ghs_") && w.len() <= 5)
+                    || (w.starts_with("glpat-") && w.len() <= 7)
+                    || (w.starts_with("glptt-") && w.len() <= 7)
+                    || (w.starts_with("github_pat_") && w.len() <= 12);
+                if is_prefix_only {
+                    return false;
+                }
+                (w.starts_with("ghp_")
+                    || w.starts_with("gho_")
+                    || w.starts_with("ghs_")
+                    || w.starts_with("github_pat_")
+                    || w.starts_with("glpat-")
+                    || w.starts_with("glptt-"))
+                    && w.len() > 20
             })
         },
     },
@@ -117,20 +128,27 @@ const PATTERNS: &[Pattern] = &[
         name: "Generic API key / token",
         detect: |l| {
             let lower = l.to_lowercase();
-            let has_key_word =
-                lower.contains("api_key") || lower.contains("api_secret") ||
-                lower.contains("auth_token") || lower.contains("access_token") ||
-                lower.contains("secret_key") || lower.contains("private_key") ||
-                lower.contains("password") || lower.contains("passwd") ||
-                lower.contains("auth_token");
+            let has_key_word = lower.contains("api_key")
+                || lower.contains("api_secret")
+                || lower.contains("auth_token")
+                || lower.contains("access_token")
+                || lower.contains("secret_key")
+                || lower.contains("private_key")
+                || lower.contains("password")
+                || lower.contains("passwd")
+                || lower.contains("auth_token");
             let has_assignment = l.contains('=') || l.contains(':');
-            let has_value = l.split(&['=', ':'][..])
+            let has_value = l
+                .split(&['=', ':'][..])
                 .nth(1)
                 .map(|v| {
-                    let v = v.trim().trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
+                    let v = v
+                        .trim()
+                        .trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
                     let vl = v.to_lowercase();
                     // Real secrets: no spaces, no sentence punctuation, min length
-                    let looks_like_secret = v.len() >= 16
+
+                    v.len() >= 16
                         && !v.contains(' ')
                         && !v.contains('.')  // sentences have dots
                         && !v.starts_with("${")
@@ -159,8 +177,7 @@ const PATTERNS: &[Pattern] = &[
                         && !vl.contains("ejemplo")
                         && !vl.contains("aqui")
                         && !vl.contains("pon_")
-                        && !vl.contains("escribe");
-                    looks_like_secret
+                        && !vl.contains("escribe")
                 })
                 .unwrap_or(false);
             has_key_word && has_assignment && has_value
@@ -170,9 +187,12 @@ const PATTERNS: &[Pattern] = &[
         name: "Database connection string with credentials",
         detect: |l| {
             let lower = l.to_lowercase();
-            (lower.contains("postgresql://") || lower.contains("mysql://") ||
-             lower.contains("mongodb://") || lower.contains("redis://") ||
-             lower.contains("libsql://") || lower.contains("turso://"))
+            (lower.contains("postgresql://")
+                || lower.contains("mysql://")
+                || lower.contains("mongodb://")
+                || lower.contains("redis://")
+                || lower.contains("libsql://")
+                || lower.contains("turso://"))
                 && l.contains('@')
                 && !l.contains("user:password@")
                 && !l.contains("user:pass@")
@@ -184,8 +204,10 @@ const PATTERNS: &[Pattern] = &[
         detect: |l| {
             l.split_whitespace().any(|w| {
                 let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-                (w.starts_with("sk_live_") || w.starts_with("pk_live_") ||
-                w.starts_with("rk_live_")) && w.len() > 16
+                (w.starts_with("sk_live_")
+                    || w.starts_with("pk_live_")
+                    || w.starts_with("rk_live_"))
+                    && w.len() > 16
             })
         },
     },
@@ -220,7 +242,7 @@ fn is_example_file(path: &str) -> bool {
 /// Files that are inherently sensitive and should never be committed
 fn is_sensitive_file(path: &str) -> bool {
     let lower = path.to_lowercase();
-    let filename = lower.split('/').last().unwrap_or(&lower);
+    let filename = lower.split('/').next_back().unwrap_or(&lower);
 
     // Exact filenames
     matches!(filename,
@@ -274,14 +296,21 @@ pub fn staged_paths(repo_path: &Path) -> Result<Vec<String>> {
     let diff = match &head_tree {
         Some(tree) => repo.diff_tree_to_index(Some(tree), Some(&index), None),
         None => repo.diff_tree_to_index(None, Some(&index), None),
-    }.map_err(crate::error::ToriiError::Git)?;
+    }
+    .map_err(crate::error::ToriiError::Git)?;
     let mut out = Vec::new();
-    diff.foreach(&mut |delta, _| {
-        if let Some(p) = delta.new_file().path() {
-            out.push(p.to_string_lossy().to_string());
-        }
-        true
-    }, None, None, None).map_err(crate::error::ToriiError::Git)?;
+    diff.foreach(
+        &mut |delta, _| {
+            if let Some(p) = delta.new_file().path() {
+                out.push(p.to_string_lossy().to_string());
+            }
+            true
+        },
+        None,
+        None,
+        None,
+    )
+    .map_err(crate::error::ToriiError::Git)?;
     Ok(out)
 }
 
@@ -292,7 +321,9 @@ pub fn scan_staged_with_custom(
     rules: &[crate::toriignore::SecretRule],
 ) -> Result<Vec<Finding>> {
     use git2::Repository;
-    if rules.is_empty() { return Ok(Vec::new()); }
+    if rules.is_empty() {
+        return Ok(Vec::new());
+    }
 
     let mut findings = Vec::new();
     let repo = Repository::discover(repo_path).map_err(crate::error::ToriiError::Git)?;
@@ -301,10 +332,20 @@ pub fn scan_staged_with_custom(
 
     for file_path in &paths {
         let p = std::path::Path::new(file_path);
-        if is_example_file(file_path) || should_skip_file(file_path) { continue; }
-        let entry = match index.get_path(p, 0) { Some(e) => e, None => continue };
-        let blob = match repo.find_blob(entry.id) { Ok(b) => b, Err(_) => continue };
-        if blob.size() > max_blob_bytes() { continue; }
+        if is_example_file(file_path) || should_skip_file(file_path) {
+            continue;
+        }
+        let entry = match index.get_path(p, 0) {
+            Some(e) => e,
+            None => continue,
+        };
+        let blob = match repo.find_blob(entry.id) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if blob.size() > max_blob_bytes() {
+            continue;
+        }
         let content = String::from_utf8_lossy(blob.content()).to_string();
 
         for (i, line) in content.lines().enumerate() {
@@ -312,7 +353,11 @@ pub fn scan_staged_with_custom(
             // Same comment-skip as scan_staged — custom rules should not
             // false-positive on documentation/comments that mention the
             // very patterns they describe.
-            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            if trimmed.starts_with('#')
+                || trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+            {
                 continue;
             }
             for rule in rules {
@@ -338,19 +383,17 @@ pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
 
     let mut findings = Vec::new();
 
-    let repo = Repository::discover(repo_path)
-        .map_err(|e| crate::error::ToriiError::Git(e))?;
-    let index = repo.index()
-        .map_err(|e| crate::error::ToriiError::Git(e))?;
+    let repo = Repository::discover(repo_path).map_err(crate::error::ToriiError::Git)?;
+    let index = repo.index().map_err(crate::error::ToriiError::Git)?;
 
     // Walk staged entries (index vs HEAD diff gives us changed files)
-    let head_tree = repo.head().ok()
-        .and_then(|h| h.peel_to_tree().ok());
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
 
     let diff = match &head_tree {
         Some(tree) => repo.diff_tree_to_index(Some(tree), Some(&index), None),
         None => repo.diff_tree_to_index(None, Some(&index), None),
-    }.map_err(|e| crate::error::ToriiError::Git(e))?;
+    }
+    .map_err(crate::error::ToriiError::Git)?;
 
     let mut staged_files: Vec<String> = Vec::new();
     diff.foreach(
@@ -360,8 +403,11 @@ pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
             }
             true
         },
-        None, None, None,
-    ).map_err(|e| crate::error::ToriiError::Git(e))?;
+        None,
+        None,
+        None,
+    )
+    .map_err(crate::error::ToriiError::Git)?;
 
     for file_path in &staged_files {
         let file_path_str = file_path.as_str();
@@ -383,21 +429,25 @@ pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
         // Read staged content from index blob
         let entry = index.get_path(std::path::Path::new(file_path_str), 0);
         let content = match entry {
-            Some(e) => {
-                match repo.find_blob(e.id) {
-                    Ok(blob) => {
-                        if blob.size() > max_blob_bytes() { continue; }
-                        String::from_utf8_lossy(blob.content()).to_string()
+            Some(e) => match repo.find_blob(e.id) {
+                Ok(blob) => {
+                    if blob.size() > max_blob_bytes() {
+                        continue;
                     }
-                    Err(_) => continue,
+                    String::from_utf8_lossy(blob.content()).to_string()
                 }
-            }
+                Err(_) => continue,
+            },
             None => continue,
         };
 
         for (line_num, line) in content.lines().enumerate() {
             let trimmed = line.trim();
-            if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+            if trimmed.starts_with('#')
+                || trimmed.starts_with("//")
+                || trimmed.starts_with("/*")
+                || trimmed.starts_with('*')
+            {
                 continue;
             }
 
@@ -426,13 +476,13 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
 
     let mut results = Vec::new();
 
-    let repo = Repository::discover(repo_path)
-        .map_err(|e| crate::error::ToriiError::Git(e))?;
+    let repo = Repository::discover(repo_path).map_err(crate::error::ToriiError::Git)?;
 
     // Walk all commits reachable from any reference
-    let mut revwalk = repo.revwalk()
-        .map_err(|e| crate::error::ToriiError::Git(e))?;
-    revwalk.push_glob("*").map_err(|e| crate::error::ToriiError::Git(e))?;
+    let mut revwalk = repo.revwalk().map_err(crate::error::ToriiError::Git)?;
+    revwalk
+        .push_glob("*")
+        .map_err(crate::error::ToriiError::Git)?;
 
     let commits: Vec<(git2::Oid, String)> = revwalk
         .filter_map(|id| id.ok())
@@ -459,11 +509,7 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
         };
         let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
 
-        let diff = match repo.diff_tree_to_tree(
-            parent_tree.as_ref(),
-            Some(&commit_tree),
-            None,
-        ) {
+        let diff = match repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&commit_tree), None) {
             Ok(d) => d,
             Err(_) => continue,
         };
@@ -479,7 +525,9 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
                 }
                 true
             },
-            None, None, None,
+            None,
+            None,
+            None,
         );
 
         for file_path in &changed_files {
@@ -492,7 +540,9 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
             let content = match entry {
                 Ok(e) => match repo.find_blob(e.id()) {
                     Ok(blob) => {
-                        if blob.size() > max_blob_bytes() { continue; }
+                        if blob.size() > max_blob_bytes() {
+                            continue;
+                        }
                         String::from_utf8_lossy(blob.content()).to_string()
                     }
                     Err(_) => continue,
@@ -502,7 +552,11 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
 
             for (line_num, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
-                if trimmed.starts_with('#') || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+                if trimmed.starts_with('#')
+                    || trimmed.starts_with("//")
+                    || trimmed.starts_with("/*")
+                    || trimmed.starts_with('*')
+                {
                     continue;
                 }
 

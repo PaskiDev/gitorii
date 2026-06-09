@@ -2,20 +2,11 @@
 
 use super::*;
 
+#[derive(Default)]
 pub struct DiffState {
     pub title: String,
     pub lines: Vec<DiffLine>,
     pub scroll: usize,
-}
-
-impl Default for DiffState {
-    fn default() -> Self {
-        Self {
-            title: String::new(),
-            lines: vec![],
-            scroll: 0,
-        }
-    }
 }
 
 // ── Log state ────────────────────────────────────────────────────────────────

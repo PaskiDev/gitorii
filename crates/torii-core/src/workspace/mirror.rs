@@ -1,10 +1,10 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use serde::{Deserialize, Serialize};
-use crate::error::{Result, ToriiError};
 use crate::core::GitRepo;
 use crate::duration::format_duration;
+use crate::error::{Result, ToriiError};
 use dirs;
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Clone, PartialEq)]
 pub enum MirrorType {
@@ -18,7 +18,10 @@ impl<'de> serde::Deserialize<'de> for MirrorType {
         match s.as_str() {
             "Primary" | "Master" => Ok(MirrorType::Primary),
             "Replica" | "Slave" => Ok(MirrorType::Replica),
-            other => Err(serde::de::Error::unknown_variant(other, &["Primary", "Replica"])),
+            other => Err(serde::de::Error::unknown_variant(
+                other,
+                &["Primary", "Replica"],
+            )),
         }
     }
 }
@@ -64,42 +67,42 @@ fn default_autofetch_interval() -> u32 {
 impl Mirror {
     /// Generate URL based on platform, account info, and protocol
     pub fn generate_url(
-        platform: &str, 
-        _account_type: &AccountType, 
-        account_name: &str, 
+        platform: &str,
+        _account_type: &AccountType,
+        account_name: &str,
         repo_name: &str,
         protocol: &Protocol,
     ) -> String {
         match protocol {
-            Protocol::SSH => {
-                match platform.to_lowercase().as_str() {
-                    "github" => format!("git@github.com:{}/{}.git", account_name, repo_name),
-                    "gitlab" => format!("git@gitlab.com:{}/{}.git", account_name, repo_name),
-                    "bitbucket" => format!("git@bitbucket.org:{}/{}.git", account_name, repo_name),
-                    "codeberg" => format!("git@codeberg.org:{}/{}.git", account_name, repo_name),
-                    "gitea" => format!("git@gitea.com:{}/{}.git", account_name, repo_name),
-                    "forgejo" => format!("git@codeberg.org:{}/{}.git", account_name, repo_name),
-                    "sourcehut" | "srht" => format!("git@git.sr.ht:~{}/{}", account_name, repo_name),
-                    "sourceforge" => format!("git@git.code.sf.net:p/{}/{}", account_name, repo_name),
-                    _ => format!("git@{}:{}/{}.git", platform, account_name, repo_name),
+            Protocol::SSH => match platform.to_lowercase().as_str() {
+                "github" => format!("git@github.com:{}/{}.git", account_name, repo_name),
+                "gitlab" => format!("git@gitlab.com:{}/{}.git", account_name, repo_name),
+                "bitbucket" => format!("git@bitbucket.org:{}/{}.git", account_name, repo_name),
+                "codeberg" => format!("git@codeberg.org:{}/{}.git", account_name, repo_name),
+                "gitea" => format!("git@gitea.com:{}/{}.git", account_name, repo_name),
+                "forgejo" => format!("git@codeberg.org:{}/{}.git", account_name, repo_name),
+                "sourcehut" | "srht" => format!("git@git.sr.ht:~{}/{}", account_name, repo_name),
+                "sourceforge" => format!("git@git.code.sf.net:p/{}/{}", account_name, repo_name),
+                _ => format!("git@{}:{}/{}.git", platform, account_name, repo_name),
+            },
+            Protocol::HTTPS => match platform.to_lowercase().as_str() {
+                "github" => format!("https://github.com/{}/{}.git", account_name, repo_name),
+                "gitlab" => format!("https://gitlab.com/{}/{}.git", account_name, repo_name),
+                "bitbucket" => format!("https://bitbucket.org/{}/{}.git", account_name, repo_name),
+                "codeberg" => format!("https://codeberg.org/{}/{}.git", account_name, repo_name),
+                "gitea" => format!("https://gitea.com/{}/{}.git", account_name, repo_name),
+                "forgejo" => format!("https://codeberg.org/{}/{}.git", account_name, repo_name),
+                "sourcehut" | "srht" => {
+                    format!("https://git.sr.ht/~{}/{}", account_name, repo_name)
                 }
-            }
-            Protocol::HTTPS => {
-                match platform.to_lowercase().as_str() {
-                    "github" => format!("https://github.com/{}/{}.git", account_name, repo_name),
-                    "gitlab" => format!("https://gitlab.com/{}/{}.git", account_name, repo_name),
-                    "bitbucket" => format!("https://bitbucket.org/{}/{}.git", account_name, repo_name),
-                    "codeberg" => format!("https://codeberg.org/{}/{}.git", account_name, repo_name),
-                    "gitea" => format!("https://gitea.com/{}/{}.git", account_name, repo_name),
-                    "forgejo" => format!("https://codeberg.org/{}/{}.git", account_name, repo_name),
-                    "sourcehut" | "srht" => format!("https://git.sr.ht/~{}/{}", account_name, repo_name),
-                    "sourceforge" => format!("https://git.code.sf.net/p/{}/{}", account_name, repo_name),
-                    _ => format!("https://{}/{}/{}.git", platform, account_name, repo_name),
+                "sourceforge" => {
+                    format!("https://git.code.sf.net/p/{}/{}", account_name, repo_name)
                 }
-            }
+                _ => format!("https://{}/{}/{}.git", platform, account_name, repo_name),
+            },
         }
     }
-    
+
     /// Get display name for the mirror
     #[allow(dead_code)]
     pub fn display_name(&self) -> String {
@@ -117,7 +120,7 @@ impl MirrorManager {
         let repo_path = repo_path.as_ref().to_path_buf();
         let torii_dir = repo_path.join(".torii");
         fs::create_dir_all(&torii_dir)?;
-        
+
         let config_path = torii_dir.join("mirrors.json");
 
         Ok(Self {
@@ -129,7 +132,7 @@ impl MirrorManager {
     /// Load mirror configuration
     fn load_config(&self) -> Result<MirrorConfig> {
         if !self.config_path.exists() {
-            return Ok(MirrorConfig { 
+            return Ok(MirrorConfig {
                 mirrors: vec![],
                 autofetch_enabled: false,
                 autofetch_interval_minutes: 30,
@@ -138,7 +141,7 @@ impl MirrorManager {
 
         let config_str = fs::read_to_string(&self.config_path)?;
         let config: MirrorConfig = serde_json::from_str(&config_str)?;
-        
+
         Ok(config)
     }
 
@@ -160,17 +163,23 @@ impl MirrorManager {
         is_primary: bool,
     ) -> Result<()> {
         let mut config = self.load_config()?;
-        
+
         // Check if master already exists
-        if is_primary && config.mirrors.iter().any(|m| m.mirror_type == MirrorType::Primary) {
+        if is_primary
+            && config
+                .mirrors
+                .iter()
+                .any(|m| m.mirror_type == MirrorType::Primary)
+        {
             return Err(ToriiError::Mirror(
-                "A primary mirror already exists. Use 'torii mirror promote' to change it.".to_string()
+                "A primary mirror already exists. Use 'torii mirror promote' to change it."
+                    .to_string(),
             ));
         }
-        
+
         // Generate URL automatically
         let url = Mirror::generate_url(platform, &account_type, account_name, repo_name, &protocol);
-        
+
         // Generate remote name
         let remote_name = if is_primary {
             "origin".to_string()
@@ -186,7 +195,11 @@ impl MirrorManager {
             repo_name: repo_name.to_string(),
             url: url.clone(),
             protocol,
-            mirror_type: if is_primary { MirrorType::Primary } else { MirrorType::Replica },
+            mirror_type: if is_primary {
+                MirrorType::Primary
+            } else {
+                MirrorType::Replica
+            },
             enabled: true,
         };
 
@@ -205,16 +218,18 @@ impl MirrorManager {
 
         Ok(())
     }
-    
+
     /// Set a mirror as master
     pub fn set_primary(&self, platform: &str, account_name: &str) -> Result<()> {
         let mut config = self.load_config()?;
-        
+
         // Find the mirror
-        let mirror_index = config.mirrors.iter().position(|m| {
-            m.platform == platform && m.account_name == account_name
-        }).ok_or_else(|| ToriiError::Mirror("Mirror not found".to_string()))?;
-        
+        let mirror_index = config
+            .mirrors
+            .iter()
+            .position(|m| m.platform == platform && m.account_name == account_name)
+            .ok_or_else(|| ToriiError::Mirror("Mirror not found".to_string()))?;
+
         // Set all to replica
         for mirror in &mut config.mirrors {
             mirror.mirror_type = MirrorType::Replica;
@@ -222,7 +237,7 @@ impl MirrorManager {
 
         // Set selected as primary
         config.mirrors[mirror_index].mirror_type = MirrorType::Primary;
-        
+
         self.save_config(&config)?;
         Ok(())
     }
@@ -249,7 +264,11 @@ impl MirrorManager {
         println!();
 
         // Show primary first
-        for mirror in config.mirrors.iter().filter(|m| m.mirror_type == MirrorType::Primary) {
+        for mirror in config
+            .mirrors
+            .iter()
+            .filter(|m| m.mirror_type == MirrorType::Primary)
+        {
             let status = if mirror.enabled { "✅" } else { "❌" };
             let account_type = match mirror.account_type {
                 AccountType::User => "👤",
@@ -259,8 +278,9 @@ impl MirrorManager {
                 Protocol::SSH => "🔑",
                 Protocol::HTTPS => "🌐",
             };
-            println!("  {} 👑 PRIMARY - {} {} {} {}/{}",
-                status, 
+            println!(
+                "  {} 👑 PRIMARY - {} {} {} {}/{}",
+                status,
                 protocol_icon,
                 account_type,
                 mirror.platform,
@@ -272,7 +292,9 @@ impl MirrorManager {
         }
 
         // Show replicas
-        let replicas: Vec<_> = config.mirrors.iter()
+        let replicas: Vec<_> = config
+            .mirrors
+            .iter()
             .filter(|m| m.mirror_type == MirrorType::Replica)
             .collect();
 
@@ -288,7 +310,8 @@ impl MirrorManager {
                     Protocol::SSH => "🔑",
                     Protocol::HTTPS => "🌐",
                 };
-                println!("    {} {} {} {} {}/{}", 
+                println!(
+                    "    {} {} {} {} {}/{}",
                     status,
                     protocol_icon,
                     account_type,
@@ -306,7 +329,9 @@ impl MirrorManager {
     /// Sync replicas silently if any are configured — called automatically by `torii sync`
     pub fn sync_replicas_if_any(&self, force: bool) -> Result<()> {
         let config = self.load_config()?;
-        let replicas: Vec<_> = config.mirrors.iter()
+        let replicas: Vec<_> = config
+            .mirrors
+            .iter()
             .filter(|m| m.mirror_type == MirrorType::Replica && m.enabled)
             .collect();
         if replicas.is_empty() {
@@ -316,7 +341,10 @@ impl MirrorManager {
         let mut failed = vec![];
         for mirror in &replicas {
             if let Err(e) = self.sync_to_mirror(&repo, mirror, force) {
-                failed.push(format!("{}/{}: {}", mirror.platform, mirror.account_name, e));
+                failed.push(format!(
+                    "{}/{}: {}",
+                    mirror.platform, mirror.account_name, e
+                ));
             }
         }
         let ok = replicas.len() - failed.len();
@@ -335,7 +363,9 @@ impl MirrorManager {
         let repo = GitRepo::open(&self.repo_path)?;
 
         // Find primary mirror
-        let primary = config.mirrors.iter()
+        let primary = config
+            .mirrors
+            .iter()
             .find(|m| m.mirror_type == MirrorType::Primary);
 
         if primary.is_none() {
@@ -345,7 +375,9 @@ impl MirrorManager {
         }
 
         // Get replica mirrors
-        let replicas: Vec<_> = config.mirrors.iter()
+        let replicas: Vec<_> = config
+            .mirrors
+            .iter()
             .filter(|m| m.mirror_type == MirrorType::Replica && m.enabled)
             .collect();
 
@@ -355,18 +387,20 @@ impl MirrorManager {
             return Ok(());
         }
 
-        println!("📤 Syncing from primary to {} replica mirror(s)...\n", replicas.len());
+        println!(
+            "📤 Syncing from primary to {} replica mirror(s)...\n",
+            replicas.len()
+        );
 
         let mut success_count = 0;
         let mut fail_count = 0;
 
         for mirror in replicas {
-            println!("🔄 Syncing to {} {}/{} ...", 
-                mirror.platform, 
-                mirror.account_name, 
-                mirror.repo_name
+            println!(
+                "🔄 Syncing to {} {}/{} ...",
+                mirror.platform, mirror.account_name, mirror.repo_name
             );
-            
+
             match self.sync_to_mirror(&repo, mirror, force) {
                 Ok(_) => {
                     println!("  ✅ Synced successfully\n");
@@ -382,7 +416,10 @@ impl MirrorManager {
             }
         }
 
-        println!("📊 Summary: {} succeeded, {} failed", success_count, fail_count);
+        println!(
+            "📊 Summary: {} succeeded, {} failed",
+            success_count, fail_count
+        );
         Ok(())
     }
 
@@ -390,7 +427,7 @@ impl MirrorManager {
     fn sync_to_mirror(&self, repo: &GitRepo, mirror: &Mirror, force: bool) -> Result<()> {
         let mut remote = repo.repository().find_remote(&mirror.name)?;
         let branch = repo.get_current_branch()?;
-        
+
         let refspec = if force {
             format!("+refs/heads/{}:refs/heads/{}", branch, branch)
         } else {
@@ -426,11 +463,15 @@ impl MirrorManager {
         // ls-remote round-trip per replica saves N stale pipelines.
         let tags = repo.repository().tag_names(None)?;
         if !tags.is_empty() {
-            let local: std::collections::HashMap<String, git2::Oid> = tags.iter()
+            let local: std::collections::HashMap<String, git2::Oid> = tags
+                .iter()
                 .flatten()
                 .filter_map(|t| {
                     let refname = format!("refs/tags/{}", t);
-                    repo.repository().refname_to_id(&refname).ok().map(|oid| (t.to_string(), oid))
+                    repo.repository()
+                        .refname_to_id(&refname)
+                        .ok()
+                        .map(|oid| (t.to_string(), oid))
                 })
                 .collect();
 
@@ -459,9 +500,11 @@ impl MirrorManager {
                 let cb = make_ssh_callbacks();
                 tag_remote.connect_auth(git2::Direction::Fetch, Some(cb), None)?;
                 let list = tag_remote.list()?;
-                let map = list.iter()
+                let map = list
+                    .iter()
                     .filter_map(|h| {
-                        h.name().strip_prefix("refs/tags/")
+                        h.name()
+                            .strip_prefix("refs/tags/")
                             .filter(|n| !n.ends_with("^{}"))
                             .map(|n| (n.to_string(), h.oid()))
                     })
@@ -470,11 +513,16 @@ impl MirrorManager {
                 map
             };
 
-            let refspecs: Vec<String> = local.iter()
+            let refspecs: Vec<String> = local
+                .iter()
                 .filter(|(name, oid)| remote_tags.get(*name) != Some(oid))
                 .map(|(t, _)| {
                     let r = format!("refs/tags/{}:refs/tags/{}", t, t);
-                    if force { format!("+{}", r) } else { r }
+                    if force {
+                        format!("+{}", r)
+                    } else {
+                        r
+                    }
                 })
                 .collect();
 
@@ -492,14 +540,18 @@ impl MirrorManager {
     /// Remove a mirror by platform and account
     pub fn remove_mirror_by_account(&self, platform: &str, account: &str) -> Result<()> {
         let mut config = self.load_config()?;
-        
-        let mirror = config.mirrors.iter()
+
+        let mirror = config
+            .mirrors
+            .iter()
             .find(|m| m.platform == platform && m.account_name == account)
             .ok_or_else(|| ToriiError::Mirror("Mirror not found".to_string()))?;
-        
+
         let remote_name = mirror.name.clone();
-        
-        config.mirrors.retain(|m| !(m.platform == platform && m.account_name == account));
+
+        config
+            .mirrors
+            .retain(|m| !(m.platform == platform && m.account_name == account));
         self.save_config(&config)?;
 
         let repo = GitRepo::open(&self.repo_path)?;
@@ -507,12 +559,12 @@ impl MirrorManager {
 
         Ok(())
     }
-    
+
     /// Remove a mirror by name (legacy)
     #[allow(dead_code)]
     pub fn remove_mirror(&self, name: &str) -> Result<()> {
         let mut config = self.load_config()?;
-        
+
         config.mirrors.retain(|m| m.name != name);
         self.save_config(&config)?;
 
@@ -525,14 +577,14 @@ impl MirrorManager {
     /// Configure autofetch settings
     pub fn configure_autofetch(&self, enable: bool, interval: Option<u32>) -> Result<()> {
         let mut config = self.load_config()?;
-        
+
         config.autofetch_enabled = enable;
         if let Some(interval_minutes) = interval {
             config.autofetch_interval_minutes = interval_minutes;
         }
-        
+
         self.save_config(&config)?;
-        
+
         if enable {
             let duration_str = format_duration(config.autofetch_interval_minutes);
             println!("✅ Autofetch enabled: every {}", duration_str);
@@ -540,23 +592,26 @@ impl MirrorManager {
         } else {
             println!("❌ Autofetch disabled");
         }
-        
+
         Ok(())
     }
 
     /// Show autofetch status
     pub fn show_autofetch_status(&self) -> Result<()> {
         let config = self.load_config()?;
-        
+
         println!("🔄 Autofetch Configuration:");
         println!();
-        
+
         if config.autofetch_enabled {
             let duration_str = format_duration(config.autofetch_interval_minutes);
             println!("  Status: ✅ Enabled");
             println!("  Interval: {}", duration_str);
             println!();
-            println!("💡 Torii will automatically fetch from all mirrors every {}", duration_str);
+            println!(
+                "💡 Torii will automatically fetch from all mirrors every {}",
+                duration_str
+            );
         } else {
             println!("  Status: ❌ Disabled");
             println!();
@@ -564,7 +619,7 @@ impl MirrorManager {
             println!("   torii mirror autofetch --enable --interval <duration>");
             println!("   Examples: 10m, 30s, 2h, 1d");
         }
-        
+
         Ok(())
     }
 }

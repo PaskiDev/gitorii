@@ -69,7 +69,8 @@ pub fn sign_blob(content: &[u8], key: &str, program: Option<&str>) -> Result<Str
         .args([
             "--detach-sign",
             "--armor",
-            "--local-user", key,
+            "--local-user",
+            key,
             // No status output on stdout — keep the armored signature
             // alone there so we can read it cleanly.
             "--no-tty",
@@ -81,39 +82,58 @@ pub fn sign_blob(content: &[u8], key: &str, program: Option<&str>) -> Result<Str
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                ToriiError::Subprocess { tool: "gpg".into(), message: format!(
-                    "gpg binary not found (tried `{}`). Install gpg or \
+                ToriiError::Subprocess {
+                    tool: "gpg".into(),
+                    message: format!(
+                        "gpg binary not found (tried `{}`). Install gpg or \
                      `torii config set git.gpg_program /path/to/gpg2`.",
-                    bin
-                ) }
+                        bin
+                    ),
+                }
             } else {
-                ToriiError::Subprocess { tool: "gpg".into(), message: format!("failed to spawn gpg: {}", e) }
+                ToriiError::Subprocess {
+                    tool: "gpg".into(),
+                    message: format!("failed to spawn gpg: {}", e),
+                }
             }
         })?;
 
     {
-        let stdin = child.stdin.as_mut()
-            .ok_or_else(|| ToriiError::Subprocess { tool: "gpg".into(), message: "gpg stdin unavailable".into() })?;
-        stdin.write_all(content)
-            .map_err(|e| ToriiError::Subprocess { tool: "gpg".into(), message: format!("writing to gpg stdin: {}", e) })?;
+        let stdin = child.stdin.as_mut().ok_or_else(|| ToriiError::Subprocess {
+            tool: "gpg".into(),
+            message: "gpg stdin unavailable".into(),
+        })?;
+        stdin
+            .write_all(content)
+            .map_err(|e| ToriiError::Subprocess {
+                tool: "gpg".into(),
+                message: format!("writing to gpg stdin: {}", e),
+            })?;
     }
 
-    let output = child.wait_with_output()
-        .map_err(|e| ToriiError::Subprocess { tool: "gpg".into(), message: format!("waiting for gpg: {}", e) })?;
+    let output = child
+        .wait_with_output()
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "gpg".into(),
+            message: format!("waiting for gpg: {}", e),
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ToriiError::Subprocess { tool: "gpg".into(), message: format!(
-            "gpg signing failed (exit {}). gpg stderr:\n{}",
-            output.status.code().unwrap_or(-1),
-            stderr.trim()
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "gpg".into(),
+            message: format!(
+                "gpg signing failed (exit {}). gpg stderr:\n{}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ),
+        });
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|e| ToriiError::Subprocess { tool: "gpg".into(), message: format!(
-            "gpg output was not valid UTF-8: {}", e
-        ) })
+    String::from_utf8(output.stdout).map_err(|e| ToriiError::Subprocess {
+        tool: "gpg".into(),
+        message: format!("gpg output was not valid UTF-8: {}", e),
+    })
 }
 
 /// Resolve which gpg binary to invoke. Argument (config-supplied)
@@ -146,14 +166,16 @@ pub fn verify(armor: &str, payload: &[u8], program: Option<&str>) -> Result<Veri
         // needed because each verify is short-lived.
         armor.len()
     ));
-    write(&sig_path, armor)
-        .map_err(|e| ToriiError::Fs(format!("write sig tempfile: {}", e)))?;
+    write(&sig_path, armor).map_err(|e| ToriiError::Fs(format!("write sig tempfile: {}", e)))?;
 
     let mut child = Command::new(&bin)
         .args([
-            "--status-fd", "1",
-            "--no-tty", "--batch",
-            "--verify", sig_path.to_str().unwrap_or(""),
+            "--status-fd",
+            "1",
+            "--no-tty",
+            "--batch",
+            "--verify",
+            sig_path.to_str().unwrap_or(""),
             "-",
         ])
         .stdin(Stdio::piped())
@@ -162,22 +184,35 @@ pub fn verify(armor: &str, payload: &[u8], program: Option<&str>) -> Result<Veri
         .spawn()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                ToriiError::Subprocess { tool: "gpg".into(), message: format!(
-                    "gpg binary not found (tried `{}`). Set git.gpg_program in config.",
-                    bin
-                ) }
+                ToriiError::Subprocess {
+                    tool: "gpg".into(),
+                    message: format!(
+                        "gpg binary not found (tried `{}`). Set git.gpg_program in config.",
+                        bin
+                    ),
+                }
             } else {
-                ToriiError::Subprocess { tool: "gpg".into(), message: format!("failed to spawn gpg: {}", e) }
+                ToriiError::Subprocess {
+                    tool: "gpg".into(),
+                    message: format!("failed to spawn gpg: {}", e),
+                }
             }
         })?;
     {
-        let stdin = child.stdin.as_mut()
-            .ok_or_else(|| ToriiError::Subprocess { tool: "gpg".into(), message: "gpg stdin unavailable".into() })?;
-        stdin.write_all(payload)
+        let stdin = child.stdin.as_mut().ok_or_else(|| ToriiError::Subprocess {
+            tool: "gpg".into(),
+            message: "gpg stdin unavailable".into(),
+        })?;
+        stdin
+            .write_all(payload)
             .map_err(|e| ToriiError::Fs(format!("writing payload: {}", e)))?;
     }
-    let out = child.wait_with_output()
-        .map_err(|e| ToriiError::Subprocess { tool: "gpg".into(), message: format!("waiting for gpg: {}", e) })?;
+    let out = child
+        .wait_with_output()
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "gpg".into(),
+            message: format!("waiting for gpg: {}", e),
+        })?;
 
     let _ = std::fs::remove_file(&sig_path);
 
@@ -220,5 +255,7 @@ pub fn verify(armor: &str, payload: &[u8], program: Option<&str>) -> Result<Veri
     }
     // Fall back to the stderr summary so the user still sees
     // something useful (e.g. expired key, revoked, broken keyring).
-    Ok(VerifyStatus::Other(stderr_lines.lines().last().unwrap_or("unknown").to_string()))
+    Ok(VerifyStatus::Other(
+        stderr_lines.lines().last().unwrap_or("unknown").to_string(),
+    ))
 }

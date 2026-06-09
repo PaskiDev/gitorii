@@ -154,7 +154,7 @@ fn extract_host(url: &str) -> Option<String> {
     }
     if let Some(rest) = url.strip_prefix("ssh://") {
         // Skip optional `user@`.
-        let after_user = rest.split('@').last()?;
+        let after_user = rest.split('@').next_back()?;
         let host = after_user.split([':', '/']).next()?;
         return Some(host.to_string());
     }
@@ -174,10 +174,10 @@ fn extract_host(url: &str) -> Option<String> {
 fn extract_owner_repo(url: &str) -> Option<(String, String)> {
     let path_part: String = if let Some(at) = url.find('@') {
         // git@host:owner/repo.git → owner/repo.git
-        url[at + 1..].splitn(2, ':').nth(1)?.to_string()
+        url[at + 1..].split_once(':')?.1.to_string()
     } else if let Some(after_scheme) = url.split("://").nth(1) {
         // https://host/owner/repo.git → owner/repo.git
-        after_scheme.splitn(2, '/').nth(1)?.to_string()
+        after_scheme.split_once('/')?.1.to_string()
     } else {
         url.to_string()
     };
@@ -281,7 +281,7 @@ pub fn detect_platform_from_remote_named(
             .trim_start_matches("rad://")
             .trim_start_matches("rad@")
             .split('/')
-            .last()?
+            .next_back()?
             .trim_end_matches(".git")
             .to_string();
         return Some((platform.to_string(), rid, String::new()));
@@ -304,12 +304,12 @@ pub fn detect_platform_from_remote_named(
     }
 
     let path = if url.contains('@') {
-        url.splitn(2, ':').nth(1)?
+        url.split_once(':')?.1
     } else {
         url.trim_start_matches("https://")
             .trim_start_matches("http://")
-            .splitn(2, '/')
-            .nth(1)?
+            .split_once('/')?
+            .1
     };
 
     let path = path.trim_end_matches(".git");

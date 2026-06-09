@@ -44,7 +44,7 @@ pub(crate) fn run(action: &ReleaseCommands, remote: &String) -> Result<()> {
             if rels.is_empty() {
                 println!("No releases found.");
             } else {
-                println!("{:<14} {:<32} {}", "TAG", "NAME", "CREATED");
+                println!("{:<14} {:<32} CREATED", "TAG", "NAME");
                 for r in &rels {
                     let created = r.created_at.get(..10).unwrap_or(&r.created_at);
                     println!("{:<14} {:<32} {}", r.tag, r.name, created);

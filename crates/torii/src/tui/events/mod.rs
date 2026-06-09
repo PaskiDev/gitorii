@@ -132,11 +132,12 @@ impl EventHandler {
         match event::read()? {
             Event::Key(key) => {
                 // Clear event log when panel is open
-                if app.show_event_log {
-                    if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::NONE {
-                        app.event_log.clear();
-                        return Ok(None);
-                    }
+                if app.show_event_log
+                    && key.code == KeyCode::Char('c')
+                    && key.modifiers == KeyModifiers::NONE
+                {
+                    app.event_log.clear();
+                    return Ok(None);
                 }
                 // Tab cycles focus: sidebar → view panels → sidebar
                 if key.code == KeyCode::Tab && key.modifiers == KeyModifiers::NONE {
@@ -159,10 +160,8 @@ impl EventHandler {
                         (_, KeyCode::Esc) => {
                             app.repo_picker_open = false;
                         }
-                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                            if app.repo_picker_idx > 0 {
-                                app.repo_picker_idx -= 1;
-                            }
+                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.repo_picker_idx > 0 => {
+                            app.repo_picker_idx -= 1;
                         }
                         (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                             let max = app.workspace_repo_paths().len().saturating_sub(1);
@@ -403,13 +402,9 @@ impl EventHandler {
                                 false
                             }
                         }
-                        View::Mirror => {
-                            if app.mirror_view.ops_mode {
-                                app.mirror_view.ops_mode = false;
-                                true
-                            } else {
-                                false
-                            }
+                        View::Mirror if app.mirror_view.ops_mode => {
+                            app.mirror_view.ops_mode = false;
+                            true
                         }
                         View::Pr => {
                             if app.pr_view.ops_mode {

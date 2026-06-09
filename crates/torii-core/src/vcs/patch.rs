@@ -49,11 +49,15 @@ pub fn export(repo_path: &Path, range: &str, opts: &ExportOpts) -> Result<()> {
         .args(&args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git format-patch: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git format-patch: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git format-patch exited with {status}"
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("git format-patch exited with {status}"),
+        });
     }
     Ok(())
 }
@@ -99,11 +103,17 @@ pub fn apply(repo_path: &Path, files: &[PathBuf], opts: &ApplyOpts) -> Result<()
         .args(&args)
         .current_dir(repo_path)
         .status()
-        .map_err(|e| ToriiError::Subprocess { tool: "git".into(), message: format!("invoke git am: {e}") })?;
+        .map_err(|e| ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!("invoke git am: {e}"),
+        })?;
     if !status.success() {
-        return Err(ToriiError::Subprocess { tool: "git".into(), message: format!(
-            "git am exited with {status} — resolve and run `torii patch apply --continue`"
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "git".into(),
+            message: format!(
+                "git am exited with {status} — resolve and run `torii patch apply --continue`"
+            ),
+        });
     }
     Ok(())
 }

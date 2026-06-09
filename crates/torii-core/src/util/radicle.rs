@@ -37,27 +37,37 @@ pub fn run_rad(args: &[&str]) -> Result<String> {
         .output()
         .map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
-                ToriiError::Subprocess { tool: "rad".into(), message: format!(
-                    "rad binary not found on PATH. Install radicle from \
+                ToriiError::Subprocess {
+                    tool: "rad".into(),
+                    message: "rad binary not found on PATH. Install radicle from \
                      https://radicle.xyz and re-run."
-                ) }
+                        .to_string(),
+                }
             } else {
-                ToriiError::Subprocess { tool: "rad".into(), message: format!("failed to spawn rad: {}", e) }
+                ToriiError::Subprocess {
+                    tool: "rad".into(),
+                    message: format!("failed to spawn rad: {}", e),
+                }
             }
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(ToriiError::Subprocess { tool: "rad".into(), message: format!(
-            "rad {} failed (exit {}):\n{}",
-            args.join(" "),
-            output.status.code().unwrap_or(-1),
-            stderr.trim()
-        ) });
+        return Err(ToriiError::Subprocess {
+            tool: "rad".into(),
+            message: format!(
+                "rad {} failed (exit {}):\n{}",
+                args.join(" "),
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ),
+        });
     }
 
-    String::from_utf8(output.stdout)
-        .map_err(|e| ToriiError::Subprocess { tool: "rad".into(), message: format!("rad output not UTF-8: {}", e) })
+    String::from_utf8(output.stdout).map_err(|e| ToriiError::Subprocess {
+        tool: "rad".into(),
+        message: format!("rad output not UTF-8: {}", e),
+    })
 }
 
 /// Run `rad <args>` with `--json` appended and parse the response.
@@ -73,15 +83,22 @@ pub fn run_rad_json(args: &[&str]) -> Result<Value> {
     // them into an array. Single-value commands emit a single object.
     let trimmed = stdout.trim();
     if trimmed.starts_with('[') || trimmed.starts_with('{') {
-        serde_json::from_str(trimmed)
-            .map_err(|e| ToriiError::MalformedResponse { provider: "radicle".into(), message: format!("rad JSON parse: {}", e) })
+        serde_json::from_str(trimmed).map_err(|e| ToriiError::MalformedResponse {
+            provider: "radicle".into(),
+            message: format!("rad JSON parse: {}", e),
+        })
     } else {
         // NDJSON: one object per line.
         let mut items = Vec::new();
         for line in trimmed.lines() {
-            if line.trim().is_empty() { continue; }
-            let v: Value = serde_json::from_str(line)
-                .map_err(|e| ToriiError::MalformedResponse { provider: "radicle".into(), message: format!("rad NDJSON parse: {}", e) })?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let v: Value =
+                serde_json::from_str(line).map_err(|e| ToriiError::MalformedResponse {
+                    provider: "radicle".into(),
+                    message: format!("rad NDJSON parse: {}", e),
+                })?;
             items.push(v);
         }
         Ok(Value::Array(items))

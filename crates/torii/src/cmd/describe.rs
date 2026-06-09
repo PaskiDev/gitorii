@@ -56,7 +56,7 @@ pub fn describe(repo_path: &Path, opts: &Opts) -> Result<()> {
             let oid = head
                 .target()
                 .ok_or_else(|| ToriiError::RepoState("HEAD has no target".into()))?;
-            format!("{}", &oid.to_string()[..7])
+            oid.to_string()[..7].to_string()
         }
     };
 

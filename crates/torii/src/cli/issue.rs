@@ -36,7 +36,7 @@ pub(crate) fn run(action: &IssueCommands) -> Result<()> {
     let client = get_issue_client(&platform)?;
     match action {
         IssueCommands::List { state } => {
-            let issues = client.list(&owner, &repo_name, &state)?;
+            let issues = client.list(&owner, &repo_name, state)?;
             if issues.is_empty() {
                 println!("No {} issues.", state);
             } else {

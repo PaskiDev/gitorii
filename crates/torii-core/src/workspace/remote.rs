@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use crate::error::{Result, ToriiError};
+use serde::{Deserialize, Serialize};
 
 /// Remote repository visibility
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,23 +28,29 @@ pub trait PlatformClient {
     /// `namespace`: None → authenticated user's personal account.
     /// Some(owner) → organization (GitHub/Gitea/Forgejo/Codeberg) or
     /// group/subgroup path (GitLab).
-    fn create_repo(&self, name: &str, description: Option<&str>, visibility: Visibility, namespace: Option<&str>) -> Result<RemoteRepo>;
-    
+    fn create_repo(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
+    ) -> Result<RemoteRepo>;
+
     /// Delete a repository
     fn delete_repo(&self, owner: &str, repo: &str) -> Result<()>;
-    
+
     /// Update repository settings
     fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo>;
-    
+
     /// Get repository information
     fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo>;
-    
+
     /// List user repositories
     fn list_repos(&self) -> Result<Vec<RemoteRepo>>;
-    
+
     /// Set repository visibility
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()>;
-    
+
     /// Enable/disable features
     fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()>;
 }
@@ -90,15 +96,26 @@ impl GitHubClient {
             base_url: "https://api.github.com".to_string(),
         }
     }
-    
+
     fn get_token() -> Result<String> {
-        crate::auth::resolve_token("github", ".").value
-            .ok_or_else(|| ToriiError::Auth { provider: "github".into(), message: "GitHub token not found. Run: torii auth set github YOUR_TOKEN".to_string() })
+        crate::auth::resolve_token("github", ".")
+            .value
+            .ok_or_else(|| ToriiError::Auth {
+                provider: "github".into(),
+                message: "GitHub token not found. Run: torii auth set github YOUR_TOKEN"
+                    .to_string(),
+            })
     }
 }
 
 impl PlatformClient for GitHubClient {
-    fn create_repo(&self, name: &str, description: Option<&str>, visibility: Visibility, namespace: Option<&str>) -> Result<RemoteRepo> {
+    fn create_repo(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
+    ) -> Result<RemoteRepo> {
         let private = matches!(visibility, Visibility::Private | Visibility::Internal);
 
         let mut body = serde_json::json!({
@@ -125,19 +142,31 @@ impl PlatformClient for GitHubClient {
             .header("User-Agent", "torii-cli")
             .json(&body)
             .send()
-            .map_err(|e| ToriiError::Network { provider: "github".into(), message: e.to_string() })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
             let msg = resp.text().unwrap_or_default();
-            return Err(ToriiError::PlatformApi { provider: "github".into(), status, message: msg });
+            return Err(ToriiError::PlatformApi {
+                provider: "github".into(),
+                status,
+                message: msg,
+            });
         }
 
-        let json: serde_json::Value = resp.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "github".into(), message: format!("Failed to parse GitHub response: {}", e) })?;
+        let json: serde_json::Value = resp.json().map_err(|e| ToriiError::MalformedResponse {
+            provider: "github".into(),
+            message: format!("Failed to parse GitHub response: {}", e),
+        })?;
 
         let repo_name = json["name"].as_str().unwrap_or(name).to_string();
-        let owner = json["owner"]["login"].as_str().unwrap_or("unknown").to_string();
+        let owner = json["owner"]["login"]
+            .as_str()
+            .unwrap_or("unknown")
+            .to_string();
 
         Ok(RemoteRepo {
             name: repo_name.clone(),
@@ -149,7 +178,7 @@ impl PlatformClient for GitHubClient {
             clone_url: format!("https://github.com/{}/{}.git", owner, repo_name),
         })
     }
-    
+
     fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
         // Native API call — no longer requires `gh` to be installed.
         // Permissions: requires the token to have the `delete_repo` scope.
@@ -160,22 +189,32 @@ impl PlatformClient for GitHubClient {
             .header("Accept", "application/vnd.github.v3+json")
             .header("User-Agent", "torii-cli")
             .send()
-            .map_err(|e| ToriiError::Network { provider: "github".into(), message: e.to_string() })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
 
         match resp.status().as_u16() {
             204 => {
                 println!("✅ Repository deleted from GitHub");
                 Ok(())
             }
-            403 => Err(ToriiError::Auth { provider: "github".into(), message: format!(
-                "GitHub refused the delete (HTTP 403). Token needs the `delete_repo` scope; \
+            403 => Err(ToriiError::Auth {
+                provider: "github".into(),
+                message: format!(
+                    "GitHub refused the delete (HTTP 403). Token needs the `delete_repo` scope; \
                  add it at https://github.com/settings/tokens or use a fine-grained token \
-                 with `Administration: write` on `{}/{}`.", owner, repo
-            ) }),
-            404 => Err(ToriiError::Auth { provider: "github".into(), message: format!(
-                "GitHub returned 404 for `{}/{}` — repo doesn't exist or token can't see it.",
-                owner, repo
-            ) }),
+                 with `Administration: write` on `{}/{}`.",
+                    owner, repo
+                ),
+            }),
+            404 => Err(ToriiError::Auth {
+                provider: "github".into(),
+                message: format!(
+                    "GitHub returned 404 for `{}/{}` — repo doesn't exist or token can't see it.",
+                    owner, repo
+                ),
+            }),
             other => {
                 let msg = resp.text().unwrap_or_default();
                 Err(ToriiError::PlatformApi {
@@ -186,23 +225,23 @@ impl PlatformClient for GitHubClient {
             }
         }
     }
-    
+
     fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
         let repo_name = format!("{}/{}", owner, repo);
         let mut args = vec!["repo", "edit", &repo_name];
-        
+
         let mut temp_args = Vec::new();
-        
+
         if let Some(desc) = &settings.description {
             temp_args.push("--description".to_string());
             temp_args.push(desc.clone());
         }
-        
+
         if let Some(homepage) = &settings.homepage {
             temp_args.push("--homepage".to_string());
             temp_args.push(homepage.clone());
         }
-        
+
         if let Some(vis) = &settings.visibility {
             match vis {
                 Visibility::Public => temp_args.push("--visibility=public".to_string()),
@@ -210,40 +249,42 @@ impl PlatformClient for GitHubClient {
                 Visibility::Internal => temp_args.push("--visibility=private".to_string()),
             }
         }
-        
+
         if let Some(branch) = &settings.default_branch {
             temp_args.push("--default-branch".to_string());
             temp_args.push(branch.clone());
         }
-        
+
         // Convert temp_args to string slices
         let arg_refs: Vec<&str> = temp_args.iter().map(|s| s.as_str()).collect();
         args.extend(arg_refs);
-        
-        let output = std::process::Command::new("gh")
-            .args(&args)
-            .output();
-        
+
+        let output = std::process::Command::new("gh").args(&args).output();
+
         match output {
             Ok(out) if out.status.success() => {
                 println!("✅ Repository settings updated");
                 self.get_repo(owner, repo)
             }
-            _ => {
-                Err(ToriiError::Subprocess {
-                    tool: "gh".into(),
-                    message: "Failed to update repository settings".to_string(),
-                })
-            }
+            _ => Err(ToriiError::Subprocess {
+                tool: "gh".into(),
+                message: "Failed to update repository settings".to_string(),
+            }),
         }
     }
-    
+
     fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
         let repo_name = format!("{}/{}", owner, repo);
         let output = std::process::Command::new("gh")
-            .args(&["repo", "view", &repo_name, "--json", "name,description,visibility,defaultBranchRef,url,sshUrl"])
+            .args([
+                "repo",
+                "view",
+                &repo_name,
+                "--json",
+                "name,description,visibility,defaultBranchRef,url,sshUrl",
+            ])
             .output();
-        
+
         match output {
             Ok(out) if out.status.success() => {
                 // Parse JSON output (simplified)
@@ -257,77 +298,90 @@ impl PlatformClient for GitHubClient {
                     clone_url: format!("https://github.com/{}/{}.git", owner, repo),
                 })
             }
-            _ => {
-                Err(ToriiError::Subprocess {
-                    tool: "gh".into(),
-                    message: "Failed to get repository information".to_string(),
-                })
-            }
+            _ => Err(ToriiError::Subprocess {
+                tool: "gh".into(),
+                message: "Failed to get repository information".to_string(),
+            }),
         }
     }
-    
+
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
         let output = std::process::Command::new("gh")
-            .args(&["repo", "list", "--json", "name,description,visibility", "--limit", "100"])
+            .args([
+                "repo",
+                "list",
+                "--json",
+                "name,description,visibility",
+                "--limit",
+                "100",
+            ])
             .output();
-        
+
         match output {
             Ok(out) if out.status.success() => {
                 // Return empty list for now (would parse JSON in full implementation)
                 Ok(Vec::new())
             }
-            _ => {
-                Err(ToriiError::Subprocess {
-                    tool: "gh".into(),
-                    message: "Failed to list repositories".to_string(),
-                })
-            }
+            _ => Err(ToriiError::Subprocess {
+                tool: "gh".into(),
+                message: "Failed to list repositories".to_string(),
+            }),
         }
     }
-    
+
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
-        let mut settings = RepoSettings::default();
-        settings.visibility = Some(visibility);
+        let settings = RepoSettings {
+            visibility: Some(visibility),
+            ..Default::default()
+        };
         self.update_repo(owner, repo, settings)?;
         Ok(())
     }
-    
+
     fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
         let repo_name = format!("{}/{}", owner, repo);
         let mut args = vec!["repo", "edit", &repo_name];
-        
+
         let mut temp_args = Vec::new();
-        
+
         if let Some(issues) = features.issues {
-            temp_args.push(if issues { "--enable-issues".to_string() } else { "--disable-issues".to_string() });
+            temp_args.push(if issues {
+                "--enable-issues".to_string()
+            } else {
+                "--disable-issues".to_string()
+            });
         }
-        
+
         if let Some(wiki) = features.wiki {
-            temp_args.push(if wiki { "--enable-wiki".to_string() } else { "--disable-wiki".to_string() });
+            temp_args.push(if wiki {
+                "--enable-wiki".to_string()
+            } else {
+                "--disable-wiki".to_string()
+            });
         }
-        
+
         if let Some(projects) = features.projects {
-            temp_args.push(if projects { "--enable-projects".to_string() } else { "--disable-projects".to_string() });
+            temp_args.push(if projects {
+                "--enable-projects".to_string()
+            } else {
+                "--disable-projects".to_string()
+            });
         }
-        
+
         let arg_refs: Vec<&str> = temp_args.iter().map(|s| s.as_str()).collect();
         args.extend(arg_refs);
-        
-        let output = std::process::Command::new("gh")
-            .args(&args)
-            .output();
-        
+
+        let output = std::process::Command::new("gh").args(&args).output();
+
         match output {
             Ok(out) if out.status.success() => {
                 println!("✅ Repository features configured");
                 Ok(())
             }
-            _ => {
-                Err(ToriiError::Subprocess {
-                    tool: "gh".into(),
-                    message: "Failed to configure repository features".to_string(),
-                })
-            }
+            _ => Err(ToriiError::Subprocess {
+                tool: "gh".into(),
+                message: "Failed to configure repository features".to_string(),
+            }),
         }
     }
 }
@@ -340,12 +394,12 @@ pub struct GitLabClient {
 
 impl GitLabClient {
     pub fn new(token: Option<String>, base_url: Option<String>) -> Self {
-        Self { 
+        Self {
             token,
             base_url: base_url.unwrap_or_else(|| "https://gitlab.com/api/v4".to_string()),
         }
     }
-    
+
     #[allow(dead_code)]
     pub fn with_url(token: String, base_url: String) -> Self {
         Self {
@@ -356,9 +410,17 @@ impl GitLabClient {
 }
 
 impl PlatformClient for GitLabClient {
-    fn create_repo(&self, name: &str, description: Option<&str>, visibility: Visibility, namespace: Option<&str>) -> Result<RemoteRepo> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+    fn create_repo(
+        &self,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
+    ) -> Result<RemoteRepo> {
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let visibility_str = match visibility {
             Visibility::Public => "public",
@@ -389,12 +451,25 @@ impl PlatformClient for GitLabClient {
                 .get(&group_url)
                 .header("Authorization", format!("Bearer {}", token))
                 .send()
-                .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("group lookup failed: {}", e) })?;
+                .map_err(|e| ToriiError::Network {
+                    provider: "gitlab".into(),
+                    message: format!("group lookup failed: {}", e),
+                })?;
 
             let ns_id = if group_resp.status().is_success() {
-                let group: serde_json::Value = group_resp.json()
-                    .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("GitLab group parse: {}", e) })?;
-                group["id"].as_i64().ok_or_else(|| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("GitLab group `{}` returned no id", ns) })?
+                let group: serde_json::Value =
+                    group_resp
+                        .json()
+                        .map_err(|e| ToriiError::MalformedResponse {
+                            provider: "gitlab".into(),
+                            message: format!("GitLab group parse: {}", e),
+                        })?;
+                group["id"]
+                    .as_i64()
+                    .ok_or_else(|| ToriiError::MalformedResponse {
+                        provider: "gitlab".into(),
+                        message: format!("GitLab group `{}` returned no id", ns),
+                    })?
             } else if group_resp.status().as_u16() == 404 {
                 // Try as a user. /users?username=… returns an array.
                 let user_url = format!("{}/users?username={}", self.base_url, ns_encoded);
@@ -402,23 +477,33 @@ impl PlatformClient for GitLabClient {
                     .get(&user_url)
                     .header("Authorization", format!("Bearer {}", token))
                     .send()
-                    .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("user lookup failed: {}", e) })?;
+                    .map_err(|e| ToriiError::Network {
+                        provider: "gitlab".into(),
+                        message: format!("user lookup failed: {}", e),
+                    })?;
                 if !user_resp.status().is_success() {
                     return Err(ToriiError::MalformedResponse {
                         provider: "gitlab".into(),
                         message: format!("namespace `{}` is neither a group nor a user", ns),
                     });
                 }
-                let users: serde_json::Value = user_resp.json()
-                    .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("GitLab user parse: {}", e) })?;
-                let user = users.as_array()
-                    .and_then(|a| a.first())
-                    .ok_or_else(|| ToriiError::Usage(
-                        format!("GitLab namespace `{}` not found", ns)
-                    ))?;
-                user["namespace_id"].as_i64()
+                let users: serde_json::Value =
+                    user_resp
+                        .json()
+                        .map_err(|e| ToriiError::MalformedResponse {
+                            provider: "gitlab".into(),
+                            message: format!("GitLab user parse: {}", e),
+                        })?;
+                let user = users.as_array().and_then(|a| a.first()).ok_or_else(|| {
+                    ToriiError::Usage(format!("GitLab namespace `{}` not found", ns))
+                })?;
+                user["namespace_id"]
+                    .as_i64()
                     .or_else(|| user["id"].as_i64())
-                    .ok_or_else(|| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("GitLab user `{}` returned no namespace_id", ns) })?
+                    .ok_or_else(|| ToriiError::MalformedResponse {
+                        provider: "gitlab".into(),
+                        message: format!("GitLab user `{}` returned no namespace_id", ns),
+                    })?
             } else {
                 let group_status = group_resp.status().as_u16();
                 let err = group_resp.text().unwrap_or_default();
@@ -437,11 +522,16 @@ impl PlatformClient for GitLabClient {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -449,23 +539,37 @@ impl PlatformClient for GitLabClient {
             });
         }
 
-        let project: serde_json::Value = response.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("Failed to parse GitLab response: {}", e) })?;
+        let project: serde_json::Value =
+            response.json().map_err(|e| ToriiError::MalformedResponse {
+                provider: "gitlab".into(),
+                message: format!("Failed to parse GitLab response: {}", e),
+            })?;
 
         Ok(RemoteRepo {
             name: project["name"].as_str().unwrap_or(name).to_string(),
             description: project["description"].as_str().map(|s| s.to_string()),
             visibility,
-            default_branch: project["default_branch"].as_str().unwrap_or("main").to_string(),
+            default_branch: project["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
             url: project["web_url"].as_str().unwrap_or("").to_string(),
-            ssh_url: project["ssh_url_to_repo"].as_str().unwrap_or("").to_string(),
-            clone_url: project["http_url_to_repo"].as_str().unwrap_or("").to_string(),
+            ssh_url: project["ssh_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            clone_url: project["http_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
         })
     }
-    
+
     fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let path_str = format!("{}/{}", owner, repo);
         let project_path = crate::url::encode(&path_str);
@@ -474,11 +578,16 @@ impl PlatformClient for GitLabClient {
             .delete(format!("{}/projects/{}", self.base_url, project_path))
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -488,10 +597,12 @@ impl PlatformClient for GitLabClient {
 
         Ok(())
     }
-    
+
     fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let path_str = format!("{}/{}", owner, repo);
         let project_path = crate::url::encode(&path_str);
@@ -519,11 +630,16 @@ impl PlatformClient for GitLabClient {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -531,8 +647,11 @@ impl PlatformClient for GitLabClient {
             });
         }
 
-        let project: serde_json::Value = response.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("Failed to parse GitLab response: {}", e) })?;
+        let project: serde_json::Value =
+            response.json().map_err(|e| ToriiError::MalformedResponse {
+                provider: "gitlab".into(),
+                message: format!("Failed to parse GitLab response: {}", e),
+            })?;
 
         let visibility = match project["visibility"].as_str() {
             Some("public") => Visibility::Public,
@@ -544,16 +663,27 @@ impl PlatformClient for GitLabClient {
             name: project["name"].as_str().unwrap_or(repo).to_string(),
             description: project["description"].as_str().map(|s| s.to_string()),
             visibility,
-            default_branch: project["default_branch"].as_str().unwrap_or("main").to_string(),
+            default_branch: project["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
             url: project["web_url"].as_str().unwrap_or("").to_string(),
-            ssh_url: project["ssh_url_to_repo"].as_str().unwrap_or("").to_string(),
-            clone_url: project["http_url_to_repo"].as_str().unwrap_or("").to_string(),
+            ssh_url: project["ssh_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            clone_url: project["http_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
         })
     }
-    
+
     fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let path_str = format!("{}/{}", owner, repo);
         let project_path = crate::url::encode(&path_str);
@@ -562,11 +692,16 @@ impl PlatformClient for GitLabClient {
             .get(format!("{}/projects/{}", self.base_url, project_path))
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -574,8 +709,11 @@ impl PlatformClient for GitLabClient {
             });
         }
 
-        let project: serde_json::Value = response.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("Failed to parse GitLab response: {}", e) })?;
+        let project: serde_json::Value =
+            response.json().map_err(|e| ToriiError::MalformedResponse {
+                provider: "gitlab".into(),
+                message: format!("Failed to parse GitLab response: {}", e),
+            })?;
 
         let visibility = match project["visibility"].as_str() {
             Some("public") => Visibility::Public,
@@ -587,27 +725,46 @@ impl PlatformClient for GitLabClient {
             name: project["name"].as_str().unwrap_or(repo).to_string(),
             description: project["description"].as_str().map(|s| s.to_string()),
             visibility,
-            default_branch: project["default_branch"].as_str().unwrap_or("main").to_string(),
+            default_branch: project["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
             url: project["web_url"].as_str().unwrap_or("").to_string(),
-            ssh_url: project["ssh_url_to_repo"].as_str().unwrap_or("").to_string(),
-            clone_url: project["http_url_to_repo"].as_str().unwrap_or("").to_string(),
+            ssh_url: project["ssh_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            clone_url: project["http_url_to_repo"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
         })
     }
-    
+
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let client = reqwest::blocking::Client::new();
         let response = client
-            .get(format!("{}/projects?membership=true&per_page=100", self.base_url))
+            .get(format!(
+                "{}/projects?membership=true&per_page=100",
+                self.base_url
+            ))
             .header("Authorization", format!("Bearer {}", token))
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -615,31 +772,48 @@ impl PlatformClient for GitLabClient {
             });
         }
 
-        let projects: Vec<serde_json::Value> = response.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("Failed to parse GitLab response: {}", e) })?;
+        let projects: Vec<serde_json::Value> =
+            response.json().map_err(|e| ToriiError::MalformedResponse {
+                provider: "gitlab".into(),
+                message: format!("Failed to parse GitLab response: {}", e),
+            })?;
 
-        Ok(projects.iter().map(|project| {
-            let visibility = match project["visibility"].as_str() {
-                Some("public") => Visibility::Public,
-                Some("internal") => Visibility::Internal,
-                _ => Visibility::Private,
-            };
+        Ok(projects
+            .iter()
+            .map(|project| {
+                let visibility = match project["visibility"].as_str() {
+                    Some("public") => Visibility::Public,
+                    Some("internal") => Visibility::Internal,
+                    _ => Visibility::Private,
+                };
 
-            RemoteRepo {
-                name: project["name"].as_str().unwrap_or("").to_string(),
-                description: project["description"].as_str().map(|s| s.to_string()),
-                visibility,
-                default_branch: project["default_branch"].as_str().unwrap_or("main").to_string(),
-                url: project["web_url"].as_str().unwrap_or("").to_string(),
-                ssh_url: project["ssh_url_to_repo"].as_str().unwrap_or("").to_string(),
-                clone_url: project["http_url_to_repo"].as_str().unwrap_or("").to_string(),
-            }
-        }).collect())
+                RemoteRepo {
+                    name: project["name"].as_str().unwrap_or("").to_string(),
+                    description: project["description"].as_str().map(|s| s.to_string()),
+                    visibility,
+                    default_branch: project["default_branch"]
+                        .as_str()
+                        .unwrap_or("main")
+                        .to_string(),
+                    url: project["web_url"].as_str().unwrap_or("").to_string(),
+                    ssh_url: project["ssh_url_to_repo"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                    clone_url: project["http_url_to_repo"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string(),
+                }
+            })
+            .collect())
     }
-    
+
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let path_str = format!("{}/{}", owner, repo);
         let project_path = crate::url::encode(&path_str);
@@ -660,11 +834,16 @@ impl PlatformClient for GitLabClient {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -674,10 +853,12 @@ impl PlatformClient for GitLabClient {
 
         Ok(())
     }
-    
+
     fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
-        let token = self.token.as_ref()
-            .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string() })?;
+        let token = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: "GitLab token not found. Set GITLAB_TOKEN environment variable".to_string(),
+        })?;
 
         let path_str = format!("{}/{}", owner, repo);
         let project_path = crate::url::encode(&path_str);
@@ -697,11 +878,16 @@ impl PlatformClient for GitLabClient {
             .header("Content-Type", "application/json")
             .json(&body)
             .send()
-            .map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab API request failed: {}", e) })?;
+            .map_err(|e| ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab API request failed: {}", e),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let error_text = response.text().unwrap_or_else(|_| "Unknown error".to_string());
+            let error_text = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
             return Err(ToriiError::PlatformApi {
                 provider: "gitlab".into(),
                 status,
@@ -828,18 +1014,34 @@ impl CodebergClient {
 fn gitea_token<'a>(label: &str, token: &'a Option<String>) -> Result<&'a String> {
     token.as_ref().ok_or_else(|| ToriiError::Auth {
         provider: label.to_lowercase(),
-        message: format!("{label} token not found. Run: torii auth set {} YOUR_TOKEN", label.to_lowercase()),
+        message: format!(
+            "{label} token not found. Run: torii auth set {} YOUR_TOKEN",
+            label.to_lowercase()
+        ),
     })
 }
 
-fn gitea_set_visibility(base_url: &str, token: &Option<String>, owner: &str, repo: &str, visibility: Visibility, label: &str) -> Result<()> {
+fn gitea_set_visibility(
+    base_url: &str,
+    token: &Option<String>,
+    owner: &str,
+    repo: &str,
+    visibility: Visibility,
+    label: &str,
+) -> Result<()> {
     // Gitea visibility is just a `private` boolean. "Internal" doesn't
     // exist on Gitea — collapse to private.
     let private = !matches!(visibility, Visibility::Public);
     let tok = gitea_token(label, token)?;
-    let url = format!("{}/api/v1/repos/{}/{}", base_url.trim_end_matches('/'), owner, repo);
+    let url = format!(
+        "{}/api/v1/repos/{}/{}",
+        base_url.trim_end_matches('/'),
+        owner,
+        repo
+    );
     let body = serde_json::json!({ "private": private });
-    let req = crate::http::make_client().patch(&url)
+    let req = crate::http::make_client()
+        .patch(&url)
         .header("Authorization", format!("token {}", tok))
         .header("Accept", "application/json")
         .json(&body);
@@ -847,75 +1049,159 @@ fn gitea_set_visibility(base_url: &str, token: &Option<String>, owner: &str, rep
 }
 
 impl PlatformClient for GiteaClient {
-    fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
+    fn create_repo(
+        &self,
+        _name: &str,
+        _description: Option<&str>,
+        _visibility: Visibility,
+        _namespace: Option<&str>,
+    ) -> Result<RemoteRepo> {
         Err(ToriiError::Unsupported("Gitea create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Gitea delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Gitea delete_repo not yet wired".to_string(),
+        ))
     }
-    fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Gitea update_repo not yet wired".to_string()))
+    fn update_repo(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _settings: RepoSettings,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Gitea update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Gitea get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Gitea get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Gitea list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Gitea list_repos not yet wired".to_string(),
+        ))
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
-        gitea_set_visibility(&self.base_url, &self.token, owner, repo, visibility, "Gitea")
+        gitea_set_visibility(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            visibility,
+            "Gitea",
+        )
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Gitea configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Gitea configure_features not yet wired".to_string(),
+        ))
     }
 }
 
 impl PlatformClient for ForgejoClient {
-    fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
+    fn create_repo(
+        &self,
+        _name: &str,
+        _description: Option<&str>,
+        _visibility: Visibility,
+        _namespace: Option<&str>,
+    ) -> Result<RemoteRepo> {
         Err(ToriiError::Unsupported("Forgejo create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Forgejo delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Forgejo delete_repo not yet wired".to_string(),
+        ))
     }
-    fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Forgejo update_repo not yet wired".to_string()))
+    fn update_repo(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _settings: RepoSettings,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Forgejo update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Forgejo get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Forgejo get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Forgejo list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Forgejo list_repos not yet wired".to_string(),
+        ))
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
-        gitea_set_visibility(&self.base_url, &self.token, owner, repo, visibility, "Forgejo")
+        gitea_set_visibility(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            visibility,
+            "Forgejo",
+        )
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Forgejo configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Forgejo configure_features not yet wired".to_string(),
+        ))
     }
 }
 
 impl PlatformClient for CodebergClient {
-    fn create_repo(&self, _name: &str, _description: Option<&str>, _visibility: Visibility, _namespace: Option<&str>) -> Result<RemoteRepo> {
+    fn create_repo(
+        &self,
+        _name: &str,
+        _description: Option<&str>,
+        _visibility: Visibility,
+        _namespace: Option<&str>,
+    ) -> Result<RemoteRepo> {
         Err(ToriiError::Unsupported("Codeberg create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
     }
     fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Codeberg delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Codeberg delete_repo not yet wired".to_string(),
+        ))
     }
-    fn update_repo(&self, _owner: &str, _repo: &str, _settings: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Codeberg update_repo not yet wired".to_string()))
+    fn update_repo(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _settings: RepoSettings,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Codeberg update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Codeberg get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Codeberg get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Codeberg list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Codeberg list_repos not yet wired".to_string(),
+        ))
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // Codeberg is just a Forgejo instance pinned to codeberg.org.
-        gitea_set_visibility("https://codeberg.org", &self.token, owner, repo, visibility, "Codeberg")
+        gitea_set_visibility(
+            "https://codeberg.org",
+            &self.token,
+            owner,
+            repo,
+            visibility,
+            "Codeberg",
+        )
     }
     fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Codeberg configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Codeberg configure_features not yet wired".to_string(),
+        ))
     }
 }
 
@@ -923,16 +1209,28 @@ impl PlatformClient for CodebergClient {
 // Bitbucket Cloud — `PUT /2.0/repositories/{ws}/{repo}` with `is_private`.
 
 #[allow(dead_code)]
-pub struct BitbucketClient { token: Option<String> }
+pub struct BitbucketClient {
+    token: Option<String>,
+}
 
 impl BitbucketClient {
-    pub fn new(token: Option<String>) -> Self { Self { token } }
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
+    }
 
     fn auth(&self) -> Result<String> {
-        let tok = self.token.as_ref().ok_or_else(|| ToriiError::Auth { provider: "bitbucket".into(), message: "Bitbucket token not found. Run: torii auth set bitbucket USERNAME:APP_PASSWORD".to_string() })?;
+        let tok = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "bitbucket".into(),
+            message:
+                "Bitbucket token not found. Run: torii auth set bitbucket USERNAME:APP_PASSWORD"
+                    .to_string(),
+        })?;
         if tok.contains(':') {
             use base64::Engine;
-            Ok(format!("Basic {}", base64::engine::general_purpose::STANDARD.encode(tok)))
+            Ok(format!(
+                "Basic {}",
+                base64::engine::general_purpose::STANDARD.encode(tok)
+            ))
         } else {
             Ok(format!("Bearer {}", tok))
         }
@@ -940,35 +1238,57 @@ impl BitbucketClient {
 }
 
 impl PlatformClient for BitbucketClient {
-    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Bitbucket create_repo not yet wired".to_string()))
+    fn create_repo(
+        &self,
+        _n: &str,
+        _d: Option<&str>,
+        _v: Visibility,
+        _ns: Option<&str>,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Bitbucket create_repo not yet wired".to_string(),
+        ))
     }
     fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Bitbucket delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Bitbucket delete_repo not yet wired".to_string(),
+        ))
     }
     fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Bitbucket update_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Bitbucket update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Bitbucket get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Bitbucket get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Bitbucket list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Bitbucket list_repos not yet wired".to_string(),
+        ))
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // Bitbucket: PUT /2.0/repositories/{ws}/{repo} with `is_private`.
         // "Internal" doesn't exist — collapse to private.
         let is_private = !matches!(visibility, Visibility::Public);
-        let url = format!("https://api.bitbucket.org/2.0/repositories/{}/{}", owner, repo);
+        let url = format!(
+            "https://api.bitbucket.org/2.0/repositories/{}/{}",
+            owner, repo
+        );
         let body = serde_json::json!({ "is_private": is_private });
-        let req = crate::http::make_client().put(&url)
+        let req = crate::http::make_client()
+            .put(&url)
             .header("Authorization", self.auth()?)
             .header("Accept", "application/json")
             .json(&body);
         crate::http::send_empty(req, "Bitbucket set visibility")
     }
     fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Bitbucket configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Bitbucket configure_features not yet wired".to_string(),
+        ))
     }
 }
 
@@ -976,36 +1296,60 @@ impl PlatformClient for BitbucketClient {
 // Sourcehut — `meta.sr.ht` GraphQL endpoint for visibility updates.
 
 #[allow(dead_code)]
-pub struct SourcehutClient { token: Option<String> }
+pub struct SourcehutClient {
+    token: Option<String>,
+}
 
 impl SourcehutClient {
-    pub fn new(token: Option<String>) -> Self { Self { token } }
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
+    }
 }
 
 impl PlatformClient for SourcehutClient {
-    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Sourcehut create_repo not yet wired".to_string()))
+    fn create_repo(
+        &self,
+        _n: &str,
+        _d: Option<&str>,
+        _v: Visibility,
+        _ns: Option<&str>,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Sourcehut create_repo not yet wired".to_string(),
+        ))
     }
     fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Sourcehut delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Sourcehut delete_repo not yet wired".to_string(),
+        ))
     }
     fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Sourcehut update_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Sourcehut update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Sourcehut get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Sourcehut get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Sourcehut list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Sourcehut list_repos not yet wired".to_string(),
+        ))
     }
     fn set_visibility(&self, _owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // git.sr.ht exposes visibility via a GraphQL mutation. Three
         // values: PUBLIC, UNLISTED, PRIVATE. We collapse torii's
         // (Public, Private, Internal) → (PUBLIC, PRIVATE, UNLISTED).
-        let tok = self.token.as_ref().ok_or_else(|| ToriiError::Auth { provider: "sourcehut".into(), message: "Sourcehut token not found. Run: torii auth set sourcehut YOUR_TOKEN".to_string() })?;
+        let tok = self.token.as_ref().ok_or_else(|| ToriiError::Auth {
+            provider: "sourcehut".into(),
+            message: "Sourcehut token not found. Run: torii auth set sourcehut YOUR_TOKEN"
+                .to_string(),
+        })?;
         let target = match visibility {
-            Visibility::Public   => "PUBLIC",
-            Visibility::Private  => "PRIVATE",
+            Visibility::Public => "PUBLIC",
+            Visibility::Private => "PRIVATE",
             Visibility::Internal => "UNLISTED",
         };
         // git.sr.ht GraphQL is at https://git.sr.ht/query
@@ -1014,7 +1358,8 @@ impl PlatformClient for SourcehutClient {
                        updateRepository(name: $name, input: { visibility: $visibility }) { id } }",
             "variables": { "name": repo, "visibility": target }
         });
-        let req = crate::http::make_client().post("https://git.sr.ht/query")
+        let req = crate::http::make_client()
+            .post("https://git.sr.ht/query")
             .header("Authorization", format!("Bearer {}", tok))
             .header("Accept", "application/json")
             .json(&query);
@@ -1025,14 +1370,19 @@ impl PlatformClient for SourcehutClient {
             if !errs.is_empty() {
                 return Err(ToriiError::MalformedResponse {
                     provider: "sourcehut".into(),
-                    message: format!("GraphQL errors: {}", serde_json::to_string(errs).unwrap_or_default()),
+                    message: format!(
+                        "GraphQL errors: {}",
+                        serde_json::to_string(errs).unwrap_or_default()
+                    ),
                 });
             }
         }
         Ok(())
     }
     fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Sourcehut configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Sourcehut configure_features not yet wired".to_string(),
+        ))
     }
 }
 
@@ -1042,36 +1392,67 @@ impl PlatformClient for SourcehutClient {
 
 pub struct AzureClient;
 
-impl AzureClient { pub fn new() -> Self { Self } }
+impl Default for AzureClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AzureClient {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 fn azure_visibility_unsupported() -> ToriiError {
     ToriiError::Unsupported(
         "Azure DevOps repo visibility is controlled at the *project* level, not \
          per-repo. Change it from `https://dev.azure.com/{org}/{project}/_settings/` \
          → Overview → Visibility. (Individual repos can be disabled but not made \
-         public independently of their parent project.)".to_string()
+         public independently of their parent project.)"
+            .to_string(),
     )
 }
 
 impl PlatformClient for AzureClient {
-    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Azure DevOps create_repo not yet wired".to_string()))
+    fn create_repo(
+        &self,
+        _n: &str,
+        _d: Option<&str>,
+        _v: Visibility,
+        _ns: Option<&str>,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Azure DevOps create_repo not yet wired".to_string(),
+        ))
     }
     fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Azure DevOps delete_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Azure DevOps delete_repo not yet wired".to_string(),
+        ))
     }
     fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Azure DevOps update_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Azure DevOps update_repo not yet wired".to_string(),
+        ))
     }
     fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Azure DevOps get_repo not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Azure DevOps get_repo not yet wired".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Azure DevOps list_repos not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Azure DevOps list_repos not yet wired".to_string(),
+        ))
     }
-    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> { Err(azure_visibility_unsupported()) }
+    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> {
+        Err(azure_visibility_unsupported())
+    }
     fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Azure DevOps configure_features not yet wired".to_string()))
+        Err(ToriiError::Unsupported(
+            "Azure DevOps configure_features not yet wired".to_string(),
+        ))
     }
 }
 
@@ -1081,33 +1462,65 @@ impl PlatformClient for AzureClient {
 
 pub struct RadicleClient;
 
-impl RadicleClient { pub fn new() -> Self { Self } }
+impl Default for RadicleClient {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RadicleClient {
+    pub fn new() -> Self {
+        Self
+    }
+}
 
 fn radicle_visibility_unsupported() -> ToriiError {
     ToriiError::Unsupported(
         "Radicle is peer-to-peer and has no central visibility setting. \
          Reachability is governed by who seeds the project — make a project \
          less discoverable by removing it from seed nodes, not by toggling a flag. \
-         See `rad node` and `rad inspect`.".to_string()
+         See `rad node` and `rad inspect`."
+            .to_string(),
     )
 }
 
 impl PlatformClient for RadicleClient {
-    fn create_repo(&self, _n: &str, _d: Option<&str>, _v: Visibility, _ns: Option<&str>) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Radicle uses `rad init` to create projects locally, not a REST API.".to_string()))
+    fn create_repo(
+        &self,
+        _n: &str,
+        _d: Option<&str>,
+        _v: Visibility,
+        _ns: Option<&str>,
+    ) -> Result<RemoteRepo> {
+        Err(ToriiError::Unsupported(
+            "Radicle uses `rad init` to create projects locally, not a REST API.".to_string(),
+        ))
     }
     fn delete_repo(&self, _o: &str, _r: &str) -> Result<()> {
-        Err(ToriiError::Unsupported("Radicle has no remote-delete — projects exist as long as someone seeds them.".to_string()))
+        Err(ToriiError::Unsupported(
+            "Radicle has no remote-delete — projects exist as long as someone seeds them."
+                .to_string(),
+        ))
     }
-    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> { Err(radicle_visibility_unsupported()) }
+    fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
+        Err(radicle_visibility_unsupported())
+    }
     fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Radicle get_repo not yet wired — use `rad inspect <RID>` directly.".to_string()))
+        Err(ToriiError::Unsupported(
+            "Radicle get_repo not yet wired — use `rad inspect <RID>` directly.".to_string(),
+        ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported("Radicle list_repos not yet wired — use `rad ls` directly.".to_string()))
+        Err(ToriiError::Unsupported(
+            "Radicle list_repos not yet wired — use `rad ls` directly.".to_string(),
+        ))
     }
-    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> { Err(radicle_visibility_unsupported()) }
+    fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> {
+        Err(radicle_visibility_unsupported())
+    }
     fn configure_features(&self, _o: &str, _r: &str, _f: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported("Radicle has no per-repo features knob.".to_string()))
+        Err(ToriiError::Unsupported(
+            "Radicle has no per-repo features knob.".to_string(),
+        ))
     }
 }

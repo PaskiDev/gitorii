@@ -110,8 +110,7 @@ impl SshStream {
                 inactivity_timeout: Some(std::time::Duration::from_secs(60)),
                 ..Default::default()
             });
-            let mut session =
-                client::connect(config, (host.as_str(), port), handler).await?;
+            let mut session = client::connect(config, (host.as_str(), port), handler).await?;
 
             authenticate(&mut session, &user).await?;
 
@@ -123,11 +122,10 @@ impl SshStream {
                     tokio::select! {
                         msg = channel.wait() => {
                             match msg {
-                                Some(ChannelMsg::Data { data }) => {
-                                    if read_tx.send(data.to_vec()).await.is_err() {
+                                Some(ChannelMsg::Data { data })
+                                    if read_tx.send(data.to_vec()).await.is_err() => {
                                         break;
                                     }
-                                }
                                 Some(ChannelMsg::Eof) | Some(ChannelMsg::ExitStatus { .. }) => {}
                                 None => break,
                                 _ => {}
@@ -319,10 +317,7 @@ impl Handler {
 impl client::Handler for Handler {
     type Error = russh::Error;
 
-    async fn check_server_key(
-        &mut self,
-        key: &PublicKey,
-    ) -> Result<bool, Self::Error> {
+    async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool, Self::Error> {
         match check_known_hosts(&self.host, self.port, key) {
             Ok(true) => Ok(true),
             Ok(false) => {
@@ -352,7 +347,10 @@ impl client::Handler for Handler {
                 }
                 let fp = key.fingerprint(Default::default());
                 eprintln!();
-                eprintln!("⚠️  Host {}:{} is not in known_hosts.", self.host, self.port);
+                eprintln!(
+                    "⚠️  Host {}:{} is not in known_hosts.",
+                    self.host, self.port
+                );
                 eprintln!("    fingerprint: {}", fp);
                 eprint!("    Trust and continue? [y/N]: ");
                 let _ = std::io::Write::flush(&mut std::io::stderr());
@@ -394,7 +392,7 @@ fn append_known_host(host: &str, port: u16, key: &PublicKey) -> io::Result<()> {
     };
     let key_line = key
         .to_openssh()
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)

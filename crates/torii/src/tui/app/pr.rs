@@ -199,12 +199,12 @@ impl App {
                 };
                 // parse owner/repo from url
                 let path = if url.contains('@') {
-                    url.splitn(2, ':').nth(1)?
+                    url.split_once(':')?.1
                 } else {
                     url.trim_start_matches("https://")
                         .trim_start_matches("http://")
-                        .splitn(2, '/')
-                        .nth(1)?
+                        .split_once('/')?
+                        .1
                 };
                 let path = path.trim_end_matches(".git");
                 let mut parts = path.splitn(2, '/');

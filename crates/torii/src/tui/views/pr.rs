@@ -292,7 +292,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let pr_label = if pr.platform == "gitlab" { "MR" } else { "PR" };
     if pr.confirm == PrConfirm::CreateTitle {
         const TITLE_MAX: usize = 255;
-        let ow = (area.width.saturating_sub(6)).min(80).max(52);
+        let ow = (area.width.saturating_sub(6)).clamp(52, 80);
         let oh = 6u16;
         let ox = area.x + area.width.saturating_sub(ow) / 2;
         let oy = area.y + area.height.saturating_sub(oh) / 2;
@@ -579,7 +579,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             ]));
         }
         lines.push(Line::from(vec![Span::styled(
-            format!("  █"),
+            "  █",
             Style::default().fg(C_CYAN),
         )]));
         while lines.len() < (oh as usize - 3) {
@@ -642,7 +642,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             List::new(drop_items).block(
                 Block::default()
                     .title(Span::styled(
-                        format!(" step 4/4: base branch (edit) "),
+                        " step 4/4: base branch (edit) ",
                         Style::default().fg(C_SUBTLE),
                     ))
                     .borders(Borders::ALL)

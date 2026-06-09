@@ -49,7 +49,7 @@ pub fn refresh(app: &mut App) {
 
     if let Ok(head) = repo.head() {
         if let Some(oid) = head.target() {
-            app.bisect_view.current_hash = Some(format!("{}", &oid.to_string()[..8]));
+            app.bisect_view.current_hash = Some(oid.to_string()[..8].to_string());
         }
     }
 
@@ -428,7 +428,7 @@ pub fn load_refs() -> Vec<RefEntry> {
         tags.push((n, t));
         true
     });
-    tags.sort_by(|a, b| b.1.cmp(&a.1));
+    tags.sort_by_key(|t| std::cmp::Reverse(t.1));
     for (n, _) in tags.into_iter().take(50) {
         out.push(RefEntry {
             display: n.clone(),

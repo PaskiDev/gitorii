@@ -1,7 +1,7 @@
-use std::path::Path;
+use anyhow::{anyhow, Result};
 use std::fs;
 use std::io::{self, BufRead};
-use anyhow::{Result, anyhow};
+use std::path::Path;
 
 /// Parsed `.toriignore` — paths + extension sections (secrets/size/hooks).
 #[derive(Default)]
@@ -47,7 +47,12 @@ enum Section {
 
 #[derive(PartialEq, Eq, Clone, Copy)]
 #[allow(dead_code)]
-enum HookKind { PreSave, PreSync, PostSave, PostSync }
+enum HookKind {
+    PreSave,
+    PreSync,
+    PostSave,
+    PostSync,
+}
 
 impl ToriIgnore {
     /// Load from repository root (returns default if file absent).
@@ -88,8 +93,12 @@ impl ToriIgnore {
         self.hooks.post_save.extend(other.hooks.post_save);
         self.hooks.post_sync.extend(other.hooks.post_sync);
         self.size.exclude.extend(other.size.exclude);
-        if other.size.max_bytes.is_some() { self.size.max_bytes = other.size.max_bytes; }
-        if other.size.warn_bytes.is_some() { self.size.warn_bytes = other.size.warn_bytes; }
+        if other.size.max_bytes.is_some() {
+            self.size.max_bytes = other.size.max_bytes;
+        }
+        if other.size.warn_bytes.is_some() {
+            self.size.warn_bytes = other.size.warn_bytes;
+        }
     }
 
     /// Default content seeded by `torii init`
@@ -157,7 +166,9 @@ impl ToriIgnore {
         for raw in reader.lines() {
             let raw = raw?;
             let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') { continue; }
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
 
             // Section header: [name] or [name:variant]
             if line.starts_with('[') && line.ends_with(']') {
@@ -185,12 +196,16 @@ impl ToriIgnore {
     fn parse_secret(&mut self, line: &str) -> Result<()> {
         // Format: deny: <regex>            (optional `# name` after)
         let body = line.strip_prefix("deny:").map(str::trim);
-        let Some(body) = body else { return Ok(()); };
+        let Some(body) = body else {
+            return Ok(());
+        };
         let (pattern, name) = match body.find('#') {
             Some(i) => (body[..i].trim(), body[i + 1..].trim().to_string()),
             None => (body, format!("Custom rule {}", self.secrets.len() + 1)),
         };
-        if pattern.is_empty() { return Ok(()); }
+        if pattern.is_empty() {
+            return Ok(());
+        }
         let regex = regex::Regex::new(pattern)
             .map_err(|e| anyhow!("invalid regex `{}` in [secrets]: {}", pattern, e))?;
         self.secrets.push(SecretRule { name, regex });
@@ -206,7 +221,9 @@ impl ToriIgnore {
             "max" => self.size.max_bytes = Some(parse_size_value(val)?),
             "warn" => self.size.warn_bytes = Some(parse_size_value(val)?),
             "exclude" => self.size.exclude.extend(
-                val.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+                val.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty()),
             ),
             _ => {}
         }
@@ -218,7 +235,9 @@ impl ToriIgnore {
             Some((k, v)) => (k.trim(), v.trim()),
             None => return Ok(()),
         };
-        if val.is_empty() { return Ok(()); }
+        if val.is_empty() {
+            return Ok(());
+        }
         match key {
             "pre-save" => self.hooks.pre_save.push(val.to_string()),
             "pre-sync" => self.hooks.pre_sync.push(val.to_string()),
@@ -236,40 +255,60 @@ impl ToriIgnore {
         let s = s.trim_start_matches('/');
         for p in &self.patterns {
             let p = p.trim_start_matches('/');
-            if matches_pattern(s, p) { return true; }
+            if matches_pattern(s, p) {
+                return true;
+            }
         }
         false
     }
 
     #[allow(dead_code)]
-    pub fn patterns(&self) -> &[String] { &self.patterns }
+    pub fn patterns(&self) -> &[String] {
+        &self.patterns
+    }
 }
 
 /// Parse "10MB", "500KB", "1024", "2GB" → bytes
 fn parse_size_value(s: &str) -> Result<u64> {
     let s = s.trim();
     let upper = s.to_uppercase();
-    let (num_str, mul): (&str, u64) =
-        if let Some(rest) = upper.strip_suffix("GB") { (rest, 1024 * 1024 * 1024) }
-        else if let Some(rest) = upper.strip_suffix("MB") { (rest, 1024 * 1024) }
-        else if let Some(rest) = upper.strip_suffix("KB") { (rest, 1024) }
-        else if let Some(rest) = upper.strip_suffix("B") { (rest, 1) }
-        else { (upper.as_str(), 1) };
-    let num: u64 = num_str.trim().parse()
+    let (num_str, mul): (&str, u64) = if let Some(rest) = upper.strip_suffix("GB") {
+        (rest, 1024 * 1024 * 1024)
+    } else if let Some(rest) = upper.strip_suffix("MB") {
+        (rest, 1024 * 1024)
+    } else if let Some(rest) = upper.strip_suffix("KB") {
+        (rest, 1024)
+    } else if let Some(rest) = upper.strip_suffix("B") {
+        (rest, 1)
+    } else {
+        (upper.as_str(), 1)
+    };
+    let num: u64 = num_str
+        .trim()
+        .parse()
         .map_err(|_| anyhow!("invalid size value: `{}`", s))?;
-    Ok(num.checked_mul(mul).ok_or_else(|| anyhow!("size overflow: {}", s))?)
+    num.checked_mul(mul)
+        .ok_or_else(|| anyhow!("size overflow: {}", s))
 }
 
 fn matches_pattern(path: &str, pattern: &str) -> bool {
-    if path == pattern { return true; }
+    if path == pattern {
+        return true;
+    }
     if pattern.ends_with('/') {
         let dir = pattern.trim_end_matches('/');
-        if path.starts_with(dir) { return true; }
+        if path.starts_with(dir) {
+            return true;
+        }
     }
-    if pattern.contains('*') { return wildcard_match(path, pattern); }
+    if pattern.contains('*') {
+        return wildcard_match(path, pattern);
+    }
     if pattern.starts_with("*.") {
         let ext = pattern.trim_start_matches("*.");
-        if path.ends_with(&format!(".{}", ext)) { return true; }
+        if path.ends_with(&format!(".{}", ext)) {
+            return true;
+        }
     }
     path.contains(pattern)
 }
@@ -280,9 +319,13 @@ fn wildcard_match(path: &str, pattern: &str) -> bool {
         if parts.len() == 2 {
             let suffix = parts[1];
             for (i, _) in path.match_indices('/') {
-                if simple_glob(&path[i + 1..], suffix) { return true; }
+                if simple_glob(&path[i + 1..], suffix) {
+                    return true;
+                }
             }
-            if simple_glob(path, suffix) { return true; }
+            if simple_glob(path, suffix) {
+                return true;
+            }
         }
     }
     if pattern.starts_with('*') && pattern.ends_with('*') {
@@ -299,21 +342,29 @@ fn wildcard_match(path: &str, pattern: &str) -> bool {
 }
 
 fn simple_glob(text: &str, pattern: &str) -> bool {
-    if !pattern.contains('*') { return text == pattern; }
+    if !pattern.contains('*') {
+        return text == pattern;
+    }
     let parts: Vec<&str> = pattern.split('*').collect();
     let mut pos = 0;
     for (i, part) in parts.iter().enumerate() {
-        if part.is_empty() { continue; }
+        if part.is_empty() {
+            continue;
+        }
         match text[pos..].find(part) {
             Some(idx) => {
-                if i == 0 && idx != 0 { return false; }
+                if i == 0 && idx != 0 {
+                    return false;
+                }
                 pos += idx + part.len();
             }
             None => return false,
         }
     }
     if let Some(last) = parts.last() {
-        if !last.is_empty() { return text.ends_with(last); }
+        if !last.is_empty() {
+            return text.ends_with(last);
+        }
     }
     true
 }
@@ -366,7 +417,9 @@ mod tests {
 
     #[test]
     fn parses_hooks_section() {
-        let t = from_str("[hooks]\npre-save: cargo fmt --check\npre-save: cargo clippy\npre-sync: cargo test\n");
+        let t = from_str(
+            "[hooks]\npre-save: cargo fmt --check\npre-save: cargo clippy\npre-sync: cargo test\n",
+        );
         assert_eq!(t.hooks.pre_save.len(), 2);
         assert_eq!(t.hooks.pre_sync.len(), 1);
         assert_eq!(t.hooks.pre_save[0], "cargo fmt --check");
@@ -386,7 +439,8 @@ mod tests {
         std::fs::write(
             dir.path().join(".toriignore"),
             "node_modules/\n[secrets]\ndeny: AKIA[0-9A-Z]{16}\n[size]\nmax: 10MB\n",
-        ).unwrap();
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join(".toriignore.local"),
             "/internal/billing/\n[secrets]\ndeny: PROP_[a-z]{20}  # Proprietary\n[size]\nmax: 5MB\n",
@@ -405,7 +459,8 @@ mod tests {
         std::fs::write(
             dir.path().join(".toriignore.local"),
             "secret.txt\n[hooks]\npre-save: ./check.sh\n",
-        ).unwrap();
+        )
+        .unwrap();
         let t = ToriIgnore::load(dir.path()).unwrap();
         assert_eq!(t.patterns.len(), 1);
         assert_eq!(t.hooks.pre_save.len(), 1);

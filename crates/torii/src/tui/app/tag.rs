@@ -85,7 +85,7 @@ impl App {
         });
         self.tag_view
             .tags
-            .sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+            .sort_by_key(|t| std::cmp::Reverse(t.timestamp));
         self.tag_view.idx = self
             .tag_view
             .idx

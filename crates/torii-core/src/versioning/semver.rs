@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use std::fmt;
 use std::str::FromStr;
 
@@ -19,13 +19,17 @@ pub enum VersionBump {
 
 impl Version {
     pub fn new(major: u32, minor: u32, patch: u32) -> Self {
-        Self { major, minor, patch }
+        Self {
+            major,
+            minor,
+            patch,
+        }
     }
-    
+
     pub fn initial() -> Self {
         Self::new(0, 1, 0)
     }
-    
+
     pub fn bump(&self, bump_type: VersionBump) -> Self {
         match bump_type {
             VersionBump::Major => Self::new(self.major + 1, 0, 0),
@@ -44,23 +48,28 @@ impl fmt::Display for Version {
 
 impl FromStr for Version {
     type Err = anyhow::Error;
-    
+
     fn from_str(s: &str) -> Result<Self> {
         // Remove 'v' prefix if present
         let s = s.trim_start_matches('v');
-        
+
         let parts: Vec<&str> = s.split('.').collect();
         if parts.len() != 3 {
-            return Err(anyhow!("Invalid version format. Expected: major.minor.patch"));
+            return Err(anyhow!(
+                "Invalid version format. Expected: major.minor.patch"
+            ));
         }
-        
-        let major = parts[0].parse::<u32>()
+
+        let major = parts[0]
+            .parse::<u32>()
             .map_err(|_| anyhow!("Invalid major version"))?;
-        let minor = parts[1].parse::<u32>()
+        let minor = parts[1]
+            .parse::<u32>()
             .map_err(|_| anyhow!("Invalid minor version"))?;
-        let patch = parts[2].parse::<u32>()
+        let patch = parts[2]
+            .parse::<u32>()
             .map_err(|_| anyhow!("Invalid patch version"))?;
-        
+
         Ok(Self::new(major, minor, patch))
     }
 }
@@ -68,7 +77,7 @@ impl FromStr for Version {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_version_parse() {
         let v = "1.2.3".parse::<Version>().unwrap();
@@ -76,7 +85,7 @@ mod tests {
         assert_eq!(v.minor, 2);
         assert_eq!(v.patch, 3);
     }
-    
+
     #[test]
     fn test_version_parse_with_v() {
         let v = "v2.0.1".parse::<Version>().unwrap();
@@ -84,28 +93,28 @@ mod tests {
         assert_eq!(v.minor, 0);
         assert_eq!(v.patch, 1);
     }
-    
+
     #[test]
     fn test_version_bump_major() {
         let v = Version::new(1, 2, 3);
         let bumped = v.bump(VersionBump::Major);
         assert_eq!(bumped, Version::new(2, 0, 0));
     }
-    
+
     #[test]
     fn test_version_bump_minor() {
         let v = Version::new(1, 2, 3);
         let bumped = v.bump(VersionBump::Minor);
         assert_eq!(bumped, Version::new(1, 3, 0));
     }
-    
+
     #[test]
     fn test_version_bump_patch() {
         let v = Version::new(1, 2, 3);
         let bumped = v.bump(VersionBump::Patch);
         assert_eq!(bumped, Version::new(1, 2, 4));
     }
-    
+
     #[test]
     fn test_version_display() {
         let v = Version::new(1, 2, 3);

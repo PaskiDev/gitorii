@@ -154,7 +154,7 @@ impl App {
                 }
             };
             let sig_bytes: &[u8] = &sig_buf;
-            let payload: Vec<u8> = (&*payload_buf).to_vec();
+            let payload: Vec<u8> = payload_buf.to_vec();
             let armor = match std::str::from_utf8(sig_bytes) {
                 Ok(s) => s.to_string(),
                 Err(e) => {

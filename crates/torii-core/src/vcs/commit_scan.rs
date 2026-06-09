@@ -109,12 +109,7 @@ impl CompiledCommitPolicy {
     }
 
     /// Evaluate a commit. Returns 0+ violations.
-    pub fn check(
-        &self,
-        commit_id: &str,
-        author_email: &str,
-        message: &str,
-    ) -> Vec<Violation> {
+    pub fn check(&self, commit_id: &str, author_email: &str, message: &str) -> Vec<Violation> {
         let short: String = commit_id.chars().take(7).collect();
         let subject = message.lines().next().unwrap_or("").trim().to_string();
         let mut out = Vec::new();
@@ -221,10 +216,12 @@ fn compile(pat: &str) -> Result<Regex> {
 ///   chore(release)!: ...
 fn is_conventional(subject: &str) -> bool {
     static TYPES: &[&str] = &[
-        "feat", "fix", "docs", "style", "refactor", "perf", "test",
-        "build", "ci", "chore", "revert",
+        "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore",
+        "revert",
     ];
-    let Some(colon) = subject.find(':') else { return false };
+    let Some(colon) = subject.find(':') else {
+        return false;
+    };
     let head = &subject[..colon];
     let head = head.strip_suffix('!').unwrap_or(head);
     let (ty, _scope) = match head.find('(') {

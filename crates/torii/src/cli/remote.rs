@@ -318,10 +318,12 @@ pub(crate) fn run(action: &RemoteCommands) -> Result<()> {
             let client = get_platform_client(platform)?;
 
             // Build settings
-            let mut settings = RepoSettings::default();
-            settings.description = description.clone();
-            settings.homepage = homepage.clone();
-            settings.default_branch = default_branch.clone();
+            let settings = RepoSettings {
+                description: description.clone(),
+                homepage: homepage.clone(),
+                default_branch: default_branch.clone(),
+                ..Default::default()
+            };
 
             // Build features
             let mut features = RepoFeatures::default();

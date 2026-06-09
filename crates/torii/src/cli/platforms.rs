@@ -57,7 +57,7 @@ pub(crate) fn run(action: &PlatformsCommands) -> Result<()> {
             let user = reg::merged(".");
             let user_names: std::collections::BTreeSet<&str> =
                 user.iter().map(|e| e.name.as_str()).collect();
-            println!("{:<22} {:<22} {:<26} {}", "NAME", "KIND", "DOMAIN", "API");
+            println!("{:<22} {:<22} {:<26} API", "NAME", "KIND", "DOMAIN");
             for e in &user {
                 println!(
                     "* {:<20} {:<22} {:<26} {}",

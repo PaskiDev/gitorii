@@ -310,12 +310,12 @@ fn run_loop(
             }
             match status {
                 crate::tui::app::OauthStatus::Done(masked) => {
-                    app.log_event(&format!("auth oauth ok: {}", masked), EventKind::Success);
+                    app.log_event(format!("auth oauth ok: {}", masked), EventKind::Success);
                     crate::tui::views::auth::refresh(app);
                     app.auth_oauth_rx = None;
                 }
                 crate::tui::app::OauthStatus::Error(msg) => {
-                    app.log_event(&format!("auth oauth error: {}", msg), EventKind::Error);
+                    app.log_event(format!("auth oauth error: {}", msg), EventKind::Error);
                     app.auth_oauth_rx = None;
                 }
                 _ => {}
@@ -334,7 +334,7 @@ fn run_loop(
                     let (visible, payload) = msg.split_at(idx);
                     let token = payload.trim_start_matches("|token=");
                     app.log_event(
-                        &format!("runner reset-token → new value: {}", token),
+                        format!("runner reset-token → new value: {}", token),
                         EventKind::Success,
                     );
                     format!("{} — open event log [e] for value", visible)
@@ -882,10 +882,10 @@ fn run_loop(
                             Ok(o) if o.status.success() => {
                                 let text = String::from_utf8_lossy(&o.stdout).to_string();
                                 app.history_view.input = text;
-                                app.log_event(&format!("blame: {}", file), EventKind::Info);
+                                app.log_event(format!("blame: {}", file), EventKind::Info);
                             }
                             _ => {
-                                app.log_event(&format!("blame failed: {}", file), EventKind::Error);
+                                app.log_event(format!("blame failed: {}", file), EventKind::Error);
                             }
                         }
                     }
@@ -1072,7 +1072,7 @@ fn run_loop(
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
                             .spawn();
-                        app.log_event(&format!("opened: {}", url), EventKind::Info);
+                        app.log_event(format!("opened: {}", url), EventKind::Info);
                     }
                 }
 
@@ -1299,7 +1299,7 @@ fn run_loop(
                             Ok(o) => {
                                 let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
                                 app.log_event(
-                                    &format!("config save error: {}", err),
+                                    format!("config save error: {}", err),
                                     EventKind::Error,
                                 );
                                 format!("failed: {}", err.lines().next().unwrap_or("unknown error"))
@@ -1701,7 +1701,7 @@ fn run_loop(
                         {
                             Ok(pr) => {
                                 app.log_event(
-                                    &format!(
+                                    format!(
                                         "created {} #{} on {}: {}",
                                         if entry.platform == "gitlab" {
                                             "MR"
@@ -1717,7 +1717,7 @@ fn run_loop(
                                 any_ok = true;
                             }
                             Err(e) => app.log_event(
-                                &format!("create failed on {}: {}", entry.platform, e),
+                                format!("create failed on {}: {}", entry.platform, e),
                                 EventKind::Error,
                             ),
                         }
@@ -1779,14 +1779,14 @@ fn run_loop(
                                     )
                                 };
                                 app.log_event(
-                                    &format!("merged #{} → {} — {}", number, base_branch, del_msg),
+                                    format!("merged #{} → {} — {}", number, base_branch, del_msg),
                                     EventKind::Success,
                                 );
                                 app.refresh().ok();
                                 app.load_prs();
                             }
                             Err(e) => {
-                                app.log_event(&format!("merge failed: {}", e), EventKind::Error)
+                                app.log_event(format!("merge failed: {}", e), EventKind::Error)
                             }
                         }
                     }
@@ -1885,13 +1885,13 @@ fn run_loop(
                         {
                             Ok(_) => {
                                 app.log_event(
-                                    &format!("updated PR #{}", number),
+                                    format!("updated PR #{}", number),
                                     EventKind::Success,
                                 );
                                 app.load_prs();
                             }
                             Err(e) => {
-                                app.log_event(&format!("update failed: {}", e), EventKind::Error)
+                                app.log_event(format!("update failed: {}", e), EventKind::Error)
                             }
                         }
                     }
@@ -1929,10 +1929,10 @@ fn run_loop(
                         .and_then(|c| c.close(&owner, &repo_name, number))
                     {
                         Ok(_) => {
-                            app.log_event(&format!("closed issue #{}", number), EventKind::Success);
+                            app.log_event(format!("closed issue #{}", number), EventKind::Success);
                             app.load_issues();
                         }
-                        Err(e) => app.log_event(&format!("close failed: {}", e), EventKind::Error),
+                        Err(e) => app.log_event(format!("close failed: {}", e), EventKind::Error),
                     }
                 }
 
@@ -1957,14 +1957,14 @@ fn run_loop(
                     {
                         Ok(i) => {
                             app.log_event(
-                                &format!("created issue #{}: {}", i.number, title),
+                                format!("created issue #{}: {}", i.number, title),
                                 EventKind::Success,
                             );
                             app.issue_view.create_title.clear();
                             app.issue_view.create_desc.clear();
                             app.load_issues();
                         }
-                        Err(e) => app.log_event(&format!("create failed: {}", e), EventKind::Error),
+                        Err(e) => app.log_event(format!("create failed: {}", e), EventKind::Error),
                     }
                 }
 
@@ -1987,13 +1987,9 @@ fn run_loop(
                     match get_issue_client(&platform)
                         .and_then(|c| c.comment(&owner, &repo_name, number, &body))
                     {
-                        Ok(_) => app.log_event(
-                            &format!("comment added to #{}", number),
-                            EventKind::Success,
-                        ),
-                        Err(e) => {
-                            app.log_event(&format!("comment failed: {}", e), EventKind::Error)
-                        }
+                        Ok(_) => app
+                            .log_event(format!("comment added to #{}", number), EventKind::Success),
+                        Err(e) => app.log_event(format!("comment failed: {}", e), EventKind::Error),
                     }
                 }
 
@@ -2005,7 +2001,7 @@ fn run_loop(
                             .stdout(std::process::Stdio::null())
                             .stderr(std::process::Stdio::null())
                             .spawn();
-                        app.log_event(&format!("opened: {}", url), EventKind::Info);
+                        app.log_event(format!("opened: {}", url), EventKind::Info);
                     }
                 }
 
@@ -2311,15 +2307,14 @@ fn copy_to_clipboard(text: &str) -> bool {
     }
 
     // Wayland
-    if std::env::var("WAYLAND_DISPLAY").is_ok() {
-        if Command::new("wl-copy")
+    if std::env::var("WAYLAND_DISPLAY").is_ok()
+        && Command::new("wl-copy")
             .arg(text)
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
-        {
-            return true;
-        }
+    {
+        return true;
     }
 
     // X11

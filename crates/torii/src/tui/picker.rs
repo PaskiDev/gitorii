@@ -572,15 +572,11 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                         (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                             break PickerResult::Cancelled
                         }
-                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                            if idx > 0 {
-                                idx -= 1;
-                            }
+                        (_, KeyCode::Up) | (_, KeyCode::Char('k')) if idx > 0 => {
+                            idx -= 1;
                         }
-                        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                            if idx + 1 < repos.len() {
-                                idx += 1;
-                            }
+                        (_, KeyCode::Down) | (_, KeyCode::Char('j')) if idx + 1 < repos.len() => {
+                            idx += 1;
                         }
                         (_, KeyCode::Char(' ')) => {
                             selected[idx] = !selected[idx];
@@ -631,21 +627,15 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                                 repos: sel_repos,
                             };
                         }
-                        (_, KeyCode::Backspace) => {
-                            if ws_cursor > 0 {
-                                ws_name.remove(ws_cursor - 1);
-                                ws_cursor -= 1;
-                            }
+                        (_, KeyCode::Backspace) if ws_cursor > 0 => {
+                            ws_name.remove(ws_cursor - 1);
+                            ws_cursor -= 1;
                         }
                         (_, KeyCode::Left) => {
-                            if ws_cursor > 0 {
-                                ws_cursor -= 1;
-                            }
+                            ws_cursor = ws_cursor.saturating_sub(1);
                         }
-                        (_, KeyCode::Right) => {
-                            if ws_cursor < ws_name.len() {
-                                ws_cursor += 1;
-                            }
+                        (_, KeyCode::Right) if ws_cursor < ws_name.len() => {
+                            ws_cursor += 1;
                         }
                         (_, KeyCode::Char(c))
                             if key.modifiers == KeyModifiers::NONE
@@ -665,15 +655,13 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                     (_, KeyCode::Char('q')) | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
                         break PickerResult::Cancelled
                     }
-                    (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                        if !ws_panel_right && ws_idx > 0 {
-                            ws_idx -= 1;
-                        }
+                    (_, KeyCode::Up) | (_, KeyCode::Char('k')) if !ws_panel_right && ws_idx > 0 => {
+                        ws_idx -= 1;
                     }
-                    (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                        if !ws_panel_right && ws_idx + 1 < saved_ws.len() {
-                            ws_idx += 1;
-                        }
+                    (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                        if !ws_panel_right && ws_idx + 1 < saved_ws.len() =>
+                    {
+                        ws_idx += 1;
                     }
                     (_, KeyCode::Right) | (_, KeyCode::Char('l')) => {
                         ws_panel_right = true;

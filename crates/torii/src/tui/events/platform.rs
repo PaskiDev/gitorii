@@ -10,15 +10,15 @@ pub(super) fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Act
     // Remote popup grabs everything when active.
     if app.platform_view.focus == PlatformFocus::RemotePopup {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.platform_view.remote_popup_idx > 0 {
-                    app.platform_view.remote_popup_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k'))
+                if app.platform_view.remote_popup_idx > 0 =>
+            {
+                app.platform_view.remote_popup_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.platform_view.remote_popup_idx + 1 < app.platform_view.remotes.len() {
-                    app.platform_view.remote_popup_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.platform_view.remote_popup_idx + 1 < app.platform_view.remotes.len() =>
+            {
+                app.platform_view.remote_popup_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 if let Some(name) = app
@@ -43,15 +43,13 @@ pub(super) fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Act
     if app.platform_view.focus == PlatformFocus::OpsDropdown {
         let ops = crate::tui::views::platform::ops_for(&app.platform_view);
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.platform_view.dropdown_idx > 0 {
-                    app.platform_view.dropdown_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.platform_view.dropdown_idx > 0 => {
+                app.platform_view.dropdown_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.platform_view.dropdown_idx + 1 < ops.len() {
-                    app.platform_view.dropdown_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.platform_view.dropdown_idx + 1 < ops.len() =>
+            {
+                app.platform_view.dropdown_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 dispatch_ops_action(app);
@@ -66,15 +64,13 @@ pub(super) fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Act
     if app.platform_view.focus == PlatformFocus::FilterDropdown {
         let rows_len = crate::tui::views::platform::filters_for(&app.platform_view).len();
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.platform_view.dropdown_idx > 0 {
-                    app.platform_view.dropdown_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.platform_view.dropdown_idx > 0 => {
+                app.platform_view.dropdown_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.platform_view.dropdown_idx + 1 < rows_len {
-                    app.platform_view.dropdown_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.platform_view.dropdown_idx + 1 < rows_len =>
+            {
+                app.platform_view.dropdown_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 dispatch_filter_action(app);
@@ -214,11 +210,12 @@ pub(super) fn handle_platform(key: event::KeyEvent, app: &mut App) -> Option<Act
         // 0.7.26: ops + filter dropdowns. Single key opens a menu of
         // the contextual actions / filters for the current sub-tab.
         // The dropdown handler (above) dispatches Enter/Esc/arrows.
-        (_, KeyCode::Char('o')) if !app.platform_view.action_in_flight => {
-            if !crate::tui::views::platform::ops_for(&app.platform_view).is_empty() {
-                app.platform_view.focus = PlatformFocus::OpsDropdown;
-                app.platform_view.dropdown_idx = 0;
-            }
+        (_, KeyCode::Char('o'))
+            if !app.platform_view.action_in_flight
+                && !crate::tui::views::platform::ops_for(&app.platform_view).is_empty() =>
+        {
+            app.platform_view.focus = PlatformFocus::OpsDropdown;
+            app.platform_view.dropdown_idx = 0;
         }
         (_, KeyCode::Char('f')) => {
             app.platform_view.focus = PlatformFocus::FilterDropdown;
