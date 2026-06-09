@@ -21,24 +21,20 @@ pub(super) fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Actio
         BisectFocus::OpsDropdown => {
             let ops = crate::tui::views::bisect::ops_for(&app.bisect_view);
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.bisect_view.dropdown_idx > 0 {
-                        app.bisect_view.dropdown_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.bisect_view.dropdown_idx > 0 => {
+                    app.bisect_view.dropdown_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.bisect_view.dropdown_idx + 1 < ops.len() {
-                        app.bisect_view.dropdown_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.bisect_view.dropdown_idx + 1 < ops.len() =>
+                {
+                    app.bisect_view.dropdown_idx += 1;
                 }
                 (_, KeyCode::Enter) => return dispatch_bisect_op(app),
                 _ => {}
             }
             None
         }
-        BisectFocus::RefPicker => {
-            return handle_bisect_picker(key, app);
-        }
+        BisectFocus::RefPicker => handle_bisect_picker(key, app),
         BisectFocus::InputArgs => {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Enter) => {
@@ -67,10 +63,8 @@ pub(super) fn handle_bisect(key: event::KeyEvent, app: &mut App) -> Option<Actio
                 (_, KeyCode::Backspace) => {
                     app.bisect_view.input_buffer.pop();
                 }
-                (_, KeyCode::Char(c)) => {
-                    if key.modifiers != KeyModifiers::CONTROL {
-                        app.bisect_view.input_buffer.push(c);
-                    }
+                (_, KeyCode::Char(c)) if key.modifiers != KeyModifiers::CONTROL => {
+                    app.bisect_view.input_buffer.push(c);
                 }
                 _ => {}
             }
@@ -164,6 +158,10 @@ pub(super) fn dispatch_bisect_op(app: &mut App) -> Option<Action> {
     None
 }
 
+// Guard-collapsing the nav/Space arms would make a falsified condition
+// fall through to the generic `Char(c)` filter-input arm (typing j/k/␣
+// into the filter), so the nested-if form is load-bearing here.
+#[allow(clippy::collapsible_match)]
 pub(super) fn handle_bisect_picker(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     use crate::tui::app::{RefPickerOp, RefPickerTab};
 
@@ -180,15 +178,11 @@ pub(super) fn handle_bisect_picker(key: event::KeyEvent, app: &mut App) -> Optio
     match (key.modifiers, key.code) {
         // Navigation. `j`/`k` only when the filter is empty so they
         // don't collide with typing into the filter.
-        (_, KeyCode::Up) => {
-            if cur_idx > 0 {
-                app.bisect_view.picker.idx = cur_idx - 1;
-            }
+        (_, KeyCode::Up) if cur_idx > 0 => {
+            app.bisect_view.picker.idx = cur_idx - 1;
         }
-        (_, KeyCode::Down) => {
-            if cur_idx + 1 < total {
-                app.bisect_view.picker.idx = cur_idx + 1;
-            }
+        (_, KeyCode::Down) if cur_idx + 1 < total => {
+            app.bisect_view.picker.idx = cur_idx + 1;
         }
         (KeyModifiers::NONE, KeyCode::Char('k')) if app.bisect_view.picker.filter.is_empty() => {
             if cur_idx > 0 {
@@ -202,15 +196,15 @@ pub(super) fn handle_bisect_picker(key: event::KeyEvent, app: &mut App) -> Optio
         }
 
         // Tab switches Bad ↔ Good only for the Start op.
-        (_, KeyCode::Tab) | (_, KeyCode::BackTab) => {
-            if matches!(app.bisect_view.picker.op, RefPickerOp::Start) {
-                app.bisect_view.picker.tab = match app.bisect_view.picker.tab {
-                    RefPickerTab::Bad => RefPickerTab::Good,
-                    RefPickerTab::Good => RefPickerTab::Bad,
-                };
-                app.bisect_view.picker.idx = 0;
-                app.bisect_view.picker.filter.clear();
-            }
+        (_, KeyCode::Tab) | (_, KeyCode::BackTab)
+            if matches!(app.bisect_view.picker.op, RefPickerOp::Start) =>
+        {
+            app.bisect_view.picker.tab = match app.bisect_view.picker.tab {
+                RefPickerTab::Bad => RefPickerTab::Good,
+                RefPickerTab::Good => RefPickerTab::Bad,
+            };
+            app.bisect_view.picker.idx = 0;
+            app.bisect_view.picker.filter.clear();
         }
 
         // Space: in Start/Good tab, toggle the current entry in the
@@ -271,9 +265,7 @@ pub(super) fn commit_bisect_picker(
     use crate::tui::app::{BisectFocus, RefPickerOp, RefPickerTab};
     let path = std::path::Path::new(".");
 
-    let Some(&orig) = filtered.get(cur_idx) else {
-        return None;
-    };
+    let &orig = filtered.get(cur_idx)?;
     let entry = app.bisect_view.picker.all[orig].clone();
 
     match app.bisect_view.picker.op.clone() {

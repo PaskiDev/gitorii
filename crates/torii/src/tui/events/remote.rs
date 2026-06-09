@@ -13,10 +13,8 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.confirm = RemoteConfirm::None;
                     app.remote_view.new_name.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_name.is_empty() {
-                        app.remote_view.confirm = RemoteConfirm::AddUrl;
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_name.is_empty() => {
+                    app.remote_view.confirm = RemoteConfirm::AddUrl;
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_name.pop();
@@ -38,10 +36,8 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.new_name.clear();
                     app.remote_view.new_url.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_url.is_empty() {
-                        return Some(Action::RemoteAdd);
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_url.is_empty() => {
+                    return Some(Action::RemoteAdd);
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_url.pop();
@@ -74,10 +70,8 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.confirm = RemoteConfirm::None;
                     app.remote_view.new_name.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_name.is_empty() {
-                        return Some(Action::RemoteRename);
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_name.is_empty() => {
+                    return Some(Action::RemoteRename);
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_name.pop();
@@ -98,10 +92,8 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.confirm = RemoteConfirm::None;
                     app.remote_view.new_url.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_url.is_empty() {
-                        return Some(Action::RemoteEditUrl);
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_url.is_empty() => {
+                    return Some(Action::RemoteEditUrl);
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_url.pop();
@@ -122,10 +114,8 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.confirm = RemoteConfirm::None;
                     app.remote_view.new_name.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_name.is_empty() {
-                        return Some(Action::MirrorRename);
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_name.is_empty() => {
+                    return Some(Action::MirrorRename);
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_name.pop();
@@ -146,11 +136,9 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.confirm = RemoteConfirm::None;
                     app.remote_view.new_mirror_platform.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_mirror_platform.is_empty() {
-                        app.remote_view.new_mirror_account.clear();
-                        app.remote_view.confirm = RemoteConfirm::MirrorAddAccount;
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_mirror_platform.is_empty() => {
+                    app.remote_view.new_mirror_account.clear();
+                    app.remote_view.confirm = RemoteConfirm::MirrorAddAccount;
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_mirror_platform.pop();
@@ -172,11 +160,9 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.new_mirror_platform.clear();
                     app.remote_view.new_mirror_account.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_mirror_account.is_empty() {
-                        app.remote_view.new_mirror_repo.clear();
-                        app.remote_view.confirm = RemoteConfirm::MirrorAddRepo;
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_mirror_account.is_empty() => {
+                    app.remote_view.new_mirror_repo.clear();
+                    app.remote_view.confirm = RemoteConfirm::MirrorAddRepo;
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_mirror_account.pop();
@@ -199,11 +185,9 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     app.remote_view.new_mirror_account.clear();
                     app.remote_view.new_mirror_repo.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.remote_view.new_mirror_repo.is_empty() {
-                        app.remote_view.new_mirror_type = 0;
-                        app.remote_view.confirm = RemoteConfirm::MirrorAddType;
-                    }
+                (_, KeyCode::Enter) if !app.remote_view.new_mirror_repo.is_empty() => {
+                    app.remote_view.new_mirror_type = 0;
+                    app.remote_view.confirm = RemoteConfirm::MirrorAddType;
                 }
                 (_, KeyCode::Backspace) => {
                     app.remote_view.new_mirror_repo.pop();
@@ -248,15 +232,13 @@ pub(super) fn handle_remote(key: event::KeyEvent, app: &mut App) -> Option<Actio
         // already having one selected).
         let ops_len = if is_mirror { 6 } else { 7 };
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.remote_view.ops_idx > 0 {
-                    app.remote_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.remote_view.ops_idx > 0 => {
+                app.remote_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.remote_view.ops_idx < ops_len - 1 {
-                    app.remote_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.remote_view.ops_idx < ops_len - 1 =>
+            {
+                app.remote_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.remote_view.ops_idx;
@@ -350,15 +332,13 @@ pub(super) fn handle_mirror(key: event::KeyEvent, app: &mut App) -> Option<Actio
     if app.mirror_view.ops_mode {
         const OPS_LEN: usize = 3;
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.mirror_view.ops_idx > 0 {
-                    app.mirror_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.mirror_view.ops_idx > 0 => {
+                app.mirror_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.mirror_view.ops_idx < OPS_LEN - 1 {
-                    app.mirror_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.mirror_view.ops_idx < OPS_LEN - 1 =>
+            {
+                app.mirror_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.mirror_view.ops_idx;

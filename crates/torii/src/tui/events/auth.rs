@@ -16,15 +16,13 @@ pub(super) fn handle_auth(key: event::KeyEvent, app: &mut App) -> Option<Action>
     match app.auth_view.focus {
         AuthFocus::List => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.auth_view.idx > 0 {
-                        app.auth_view.idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.auth_view.idx > 0 => {
+                    app.auth_view.idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.auth_view.idx + 1 < app.auth_view.items.len() {
-                        app.auth_view.idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.auth_view.idx + 1 < app.auth_view.items.len() =>
+                {
+                    app.auth_view.idx += 1;
                 }
                 (_, KeyCode::Char('o')) => {
                     if let Some(e) = app.auth_view.items.get(app.auth_view.idx) {
@@ -40,15 +38,13 @@ pub(super) fn handle_auth(key: event::KeyEvent, app: &mut App) -> Option<Action>
         AuthFocus::OpsDropdown => {
             let ops = crate::tui::views::auth::ops_for(&app.auth_view);
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.auth_view.dropdown_idx > 0 {
-                        app.auth_view.dropdown_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.auth_view.dropdown_idx > 0 => {
+                    app.auth_view.dropdown_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.auth_view.dropdown_idx + 1 < ops.len() {
-                        app.auth_view.dropdown_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.auth_view.dropdown_idx + 1 < ops.len() =>
+                {
+                    app.auth_view.dropdown_idx += 1;
                 }
                 (_, KeyCode::Enter) => {
                     return dispatch_auth_op(app);
@@ -90,10 +86,8 @@ pub(super) fn handle_auth(key: event::KeyEvent, app: &mut App) -> Option<Action>
                 (_, KeyCode::Backspace) => {
                     app.auth_view.input_buffer.pop();
                 }
-                (_, KeyCode::Char(c)) => {
-                    if key.modifiers != KeyModifiers::CONTROL {
-                        app.auth_view.input_buffer.push(c);
-                    }
+                (_, KeyCode::Char(c)) if key.modifiers != KeyModifiers::CONTROL => {
+                    app.auth_view.input_buffer.push(c);
                 }
                 _ => {}
             }

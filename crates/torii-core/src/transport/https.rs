@@ -60,12 +60,8 @@ impl SmartSubtransport for HttpsSubtransport {
     ) -> Result<Box<dyn SmartSubtransportStream>, Error> {
         let auth = resolve_auth(url);
         let stream = match action {
-            Service::UploadPackLs => {
-                HttpStream::ls(&self.client, url, "git-upload-pack", auth)?
-            }
-            Service::ReceivePackLs => {
-                HttpStream::ls(&self.client, url, "git-receive-pack", auth)?
-            }
+            Service::UploadPackLs => HttpStream::ls(&self.client, url, "git-upload-pack", auth)?,
+            Service::ReceivePackLs => HttpStream::ls(&self.client, url, "git-receive-pack", auth)?,
             Service::UploadPack => {
                 HttpStream::rpc(self.client.clone(), url, "git-upload-pack", auth)
             }
@@ -113,8 +109,15 @@ impl HttpStream {
         service: &str,
         auth: Option<String>,
     ) -> Result<Self, Error> {
-        let url = format!("{}/info/refs?service={}", base_url.trim_end_matches('/'), service);
-        let mut req = client.get(&url).header(USER_AGENT, UA).header(ACCEPT, "*/*");
+        let url = format!(
+            "{}/info/refs?service={}",
+            base_url.trim_end_matches('/'),
+            service
+        );
+        let mut req = client
+            .get(&url)
+            .header(USER_AGENT, UA)
+            .header(ACCEPT, "*/*");
         if let Some(a) = &auth {
             req = req.header(AUTHORIZATION, a);
         }
@@ -125,12 +128,7 @@ impl HttpStream {
         })
     }
 
-    fn rpc(
-        client: Client,
-        base_url: &str,
-        service: &'static str,
-        auth: Option<String>,
-    ) -> Self {
+    fn rpc(client: Client, base_url: &str, service: &'static str, auth: Option<String>) -> Self {
         let url = format!("{}/{}", base_url.trim_end_matches('/'), service);
         Self {
             inner: Mutex::new(Inner::Rpc {
@@ -175,7 +173,7 @@ impl Read for HttpStream {
                     }
                     let r = req.send().map_err(to_io)?;
                     let r = check_status(r, url, auth.is_some())
-                        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                        .map_err(|e| io::Error::other(e.to_string()))?;
                     *resp = Some(r);
                     *sent = true;
                 }
@@ -195,10 +193,7 @@ impl Write for HttpStream {
             )),
             Inner::Rpc { req_body, sent, .. } => {
                 if *sent {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        "cannot write after read started",
-                    ));
+                    return Err(io::Error::other("cannot write after read started"));
                 }
                 req_body.extend_from_slice(buf);
                 Ok(buf.len())
@@ -216,7 +211,7 @@ fn io_err(e: reqwest::Error) -> Error {
 }
 
 fn to_io(e: reqwest::Error) -> io::Error {
-    io::Error::new(io::ErrorKind::Other, e)
+    io::Error::other(e)
 }
 
 /// Translate auth-relevant HTTP statuses into actionable errors before libgit2
@@ -339,9 +334,8 @@ fn basic_auth(user: &str, pass: &str) -> String {
 
 /// Minimal RFC 4648 base64 encoder (standard alphabet, with padding).
 fn base64_encode(input: &[u8]) -> String {
-    const TAB: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity((input.len() + 2) / 3 * 4);
+    const TAB: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     let mut i = 0;
     while i + 3 <= input.len() {
         let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | input[i + 2] as u32;
@@ -374,12 +368,18 @@ mod tests {
 
     #[test]
     fn host_extraction() {
-        assert_eq!(host_of("https://github.com/owner/repo").as_deref(), Some("github.com"));
+        assert_eq!(
+            host_of("https://github.com/owner/repo").as_deref(),
+            Some("github.com")
+        );
         assert_eq!(
             host_of("https://gitlab.example.com:8443/group/repo").as_deref(),
             Some("gitlab.example.com")
         );
-        assert_eq!(host_of("https://codeberg.org/foo/bar").as_deref(), Some("codeberg.org"));
+        assert_eq!(
+            host_of("https://codeberg.org/foo/bar").as_deref(),
+            Some("codeberg.org")
+        );
     }
 
     #[test]
@@ -396,6 +396,9 @@ mod tests {
     #[test]
     fn basic_auth_format() {
         // x-access-token:secret → eC1hY2Nlc3MtdG9rZW46c2VjcmV0
-        assert_eq!(basic_auth("x-access-token", "secret"), "Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0");
+        assert_eq!(
+            basic_auth("x-access-token", "secret"),
+            "Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0"
+        );
     }
 }

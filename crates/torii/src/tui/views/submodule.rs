@@ -236,13 +236,14 @@ fn kv<'a>(k: &'a str, v: &str, vc: ratatui::style::Color) -> Line<'a> {
 /// Init/Update always available, Add gates open the two-step input
 /// flow (URL → path).
 pub fn ops_for(state: &SubmoduleState) -> Vec<(&'static str, &'static str)> {
-    let mut ops: Vec<(&'static str, &'static str)> = Vec::new();
-    ops.push(("Add new submodule", "clone a repo into a subdirectory"));
-    ops.push(("Update", "fetch + checkout to recorded commit"));
-    ops.push(("Update + init", "init missing, then update"));
-    ops.push(("Init", "register submodules without cloning"));
-    ops.push(("Sync URLs", "rewrite .git/config from .gitmodules"));
-    ops.push(("Foreach <cmd>", "run a shell command in each submodule"));
+    let mut ops: Vec<(&'static str, &'static str)> = vec![
+        ("Add new submodule", "clone a repo into a subdirectory"),
+        ("Update", "fetch + checkout to recorded commit"),
+        ("Update + init", "init missing, then update"),
+        ("Init", "register submodules without cloning"),
+        ("Sync URLs", "rewrite .git/config from .gitmodules"),
+        ("Foreach <cmd>", "run a shell command in each submodule"),
+    ];
     if state.items.get(state.idx).is_some() {
         ops.push(("Remove", "deregister + delete the working tree ⚠"));
     }

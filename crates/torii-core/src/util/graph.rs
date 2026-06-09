@@ -25,11 +25,12 @@
 
 /// Visual glyph set for the graph. Pure data, no rendering — `render` reads
 /// the glyphs from the supplied set when emitting commit / transition lines.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GraphStyle {
     /// Plain ASCII (`* | / \`). Maximum portability.
     Ascii,
     /// Unicode box-drawing curves (`● │ ╮ ╰`). Recommended default.
+    #[default]
     Curves,
     /// Heavy box-drawing (`⬢ ┃ ┓ ┗`). Bold, attention-grabbing.
     Heavy,
@@ -40,17 +41,22 @@ pub enum GraphStyle {
     BubblesX,
 }
 
-impl GraphStyle {
-    pub fn from_str(s: &str) -> Self {
-        match s {
+impl std::str::FromStr for GraphStyle {
+    type Err = ();
+
+    /// Never fails — unknown names fall back to `Curves`.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
             "ascii" => Self::Ascii,
             "heavy" => Self::Heavy,
             "bubbles" => Self::Bubbles,
             "bubbles-x" | "bubbles_x" | "bubblesx" => Self::BubblesX,
             _ => Self::Curves,
-        }
+        })
     }
+}
 
+impl GraphStyle {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Ascii => "ascii",
@@ -127,12 +133,6 @@ impl GraphStyle {
     }
 }
 
-impl Default for GraphStyle {
-    fn default() -> Self {
-        Self::Curves
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphCommit {
     pub id: String,
@@ -186,15 +186,15 @@ pub fn render_with(commits: &[GraphCommit], style: GraphStyle) -> Vec<GraphRow> 
         let lane_g = style.lane_glyph();
         let commit_g = style.commit_glyph(parent_count);
         let spacing = style.lane_spacing();
-        let pad: String = std::iter::repeat(' ').take(spacing).collect();
+        let pad: String = std::iter::repeat_n(' ', spacing).collect();
         let mut commit_line = String::with_capacity(pre_width * (1 + spacing));
-        for i in 0..pre_width {
+        for (i, l) in lanes.iter().enumerate().take(pre_width) {
             if i > 0 {
                 commit_line.push_str(&pad);
             }
             if i == lane {
                 commit_line.push(commit_g);
-            } else if lanes[i].is_some() {
+            } else if l.is_some() {
                 commit_line.push(lane_g);
             } else {
                 commit_line.push(' ');
@@ -267,7 +267,10 @@ pub fn render_with(commits: &[GraphCommit], style: GraphStyle) -> Vec<GraphRow> 
         if parent_count >= 2 {
             let new_parent_ids: Vec<&String> = commit.parents[1..].iter().collect();
             for npid in new_parent_ids {
-                if let Some(i) = lanes.iter().position(|l| l.as_deref() == Some(npid.as_str())) {
+                if let Some(i) = lanes
+                    .iter()
+                    .position(|l| l.as_deref() == Some(npid.as_str()))
+                {
                     if i > lane {
                         let chars: Vec<char> = transition.chars().collect();
                         let cell = i * (1 + spacing);
@@ -351,16 +354,16 @@ pub fn lane_color(lane: usize) -> u8 {
     // Hand-picked vivid hues, well-spaced in HSL. Stable per-lane between
     // renders so a branch keeps the same colour as you scroll.
     const PALETTE: &[u8] = &[
-        39,   // bright cyan
-        208,  // orange
-        207,  // pink/magenta
-        226,  // yellow
-        46,   // green
-        99,   // purple
-        202,  // red-orange
-        51,   // turquoise
-        220,  // gold
-        129,  // violet
+        39,  // bright cyan
+        208, // orange
+        207, // pink/magenta
+        226, // yellow
+        46,  // green
+        99,  // purple
+        202, // red-orange
+        51,  // turquoise
+        220, // gold
+        129, // violet
     ];
     PALETTE[lane % PALETTE.len()]
 }
@@ -487,11 +490,7 @@ pub fn walk_repo(
         let id = oid.to_string();
         let short_id = id.chars().take(7).collect();
         let summary = commit.summary().unwrap_or("").to_string();
-        let author = commit
-            .author()
-            .name()
-            .unwrap_or("")
-            .to_string();
+        let author = commit.author().name().unwrap_or("").to_string();
         let timestamp = commit.time().seconds();
         let parents: Vec<String> = commit.parent_ids().map(|p| p.to_string()).collect();
         let refs = labels.remove(&oid).unwrap_or_default();
@@ -534,7 +533,7 @@ pub fn render_repo_with(
         })
         .collect();
     let rows = render_with(&graph_input, style);
-    Ok(commits.into_iter().zip(rows.into_iter()).collect())
+    Ok(commits.into_iter().zip(rows).collect())
 }
 
 #[cfg(test)]

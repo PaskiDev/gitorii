@@ -1,5 +1,5 @@
-use git2::Repository;
 use crate::error::Result;
+use git2::Repository;
 
 pub struct TagManager<'repo> {
     repo: &'repo Repository,
@@ -13,7 +13,7 @@ impl<'repo> TagManager<'repo> {
     pub fn create_tag(&self, name: &str, message: Option<&str>) -> Result<()> {
         let head = self.repo.head()?;
         let target = head.peel_to_commit()?;
-        
+
         if let Some(msg) = message {
             // Annotated tag
             let sig = crate::core::resolve_signature(self.repo)?;
@@ -22,20 +22,18 @@ impl<'repo> TagManager<'repo> {
             // Lightweight tag
             self.repo.tag_lightweight(name, target.as_object(), false)?;
         }
-        
+
         Ok(())
     }
 
     pub fn list_tags(&self) -> Result<Vec<String>> {
         let tags = self.repo.tag_names(None)?;
         let mut tag_list = Vec::new();
-        
-        for tag in tags.iter() {
-            if let Some(tag_name) = tag {
-                tag_list.push(tag_name.to_string());
-            }
+
+        for tag_name in tags.iter().flatten() {
+            tag_list.push(tag_name.to_string());
         }
-        
+
         tag_list.sort();
         Ok(tag_list)
     }
@@ -48,12 +46,16 @@ impl<'repo> TagManager<'repo> {
     pub fn show_tag(&self, name: &str) -> Result<()> {
         let tag_ref = self.repo.find_reference(&format!("refs/tags/{}", name))?;
         let tag_obj = tag_ref.peel_to_tag();
-        
+
         if let Ok(tag) = tag_obj {
             // Annotated tag
             println!("Tag: {}", name);
             if let Some(tagger) = tag.tagger() {
-                println!("Tagger: {} <{}>", tagger.name().unwrap_or(""), tagger.email().unwrap_or(""));
+                println!(
+                    "Tagger: {} <{}>",
+                    tagger.name().unwrap_or(""),
+                    tagger.email().unwrap_or("")
+                );
             }
             if let Some(message) = tag.message() {
                 println!("Message: {}", message);
@@ -67,7 +69,7 @@ impl<'repo> TagManager<'repo> {
                 println!("Message: {}", msg.lines().next().unwrap_or(""));
             }
         }
-        
+
         Ok(())
     }
 }

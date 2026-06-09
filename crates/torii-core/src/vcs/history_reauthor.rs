@@ -3,7 +3,7 @@
 //! Two entry points:
 //! - `reauthor`        — match one `(old → new)` pair from CLI flags.
 //! - `mailmap_apply`   — apply every mapping from a `.mailmap` file
-//!                       (standard git format).
+//!   (standard git format).
 //!
 //! Both share the same walker: rev-walk the reachable history from HEAD (or
 //! from `--since` exclusive), recreate every commit that matches with the
@@ -56,9 +56,7 @@ impl Identity {
             ))
         })?;
         if close < open {
-            return Err(ToriiError::Usage(format!(
-                "malformed identity: {s:?}"
-            )));
+            return Err(ToriiError::Usage(format!("malformed identity: {s:?}")));
         }
         let name = s[..open].trim().trim_end_matches(',').trim().to_string();
         let email = s[open + 1..close].trim().to_string();
@@ -167,9 +165,8 @@ impl Mapping {
 /// whole load with a precise line number so the user can fix the file.
 pub fn load_mailmap<P: AsRef<Path>>(path: P) -> Result<Mapping> {
     let path = path.as_ref();
-    let raw = fs::read_to_string(path).map_err(|e| {
-        ToriiError::Fs(format!("read {}: {}", path.display(), e))
-    })?;
+    let raw = fs::read_to_string(path)
+        .map_err(|e| ToriiError::Fs(format!("read {}: {}", path.display(), e)))?;
 
     let mut rules = Vec::new();
     for (idx, line) in raw.lines().enumerate() {
@@ -179,12 +176,7 @@ pub fn load_mailmap<P: AsRef<Path>>(path: P) -> Result<Mapping> {
             continue;
         }
         let rule = parse_mailmap_line(trimmed).map_err(|e| {
-            ToriiError::InvalidConfig(format!(
-                "{}:{}: {}",
-                path.display(),
-                line_no,
-                e
-            ))
+            ToriiError::InvalidConfig(format!("{}:{}: {}", path.display(), line_no, e))
         })?;
         rules.push(rule);
     }
@@ -330,12 +322,7 @@ pub struct Stats {
 // -- Public entry points ---------------------------------------------------
 
 /// Rewrite history with a single `(old → new)` mapping (CLI form).
-pub fn reauthor(
-    repo_path: &Path,
-    old: OldMatcher,
-    new: Identity,
-    opts: &Options,
-) -> Result<Stats> {
+pub fn reauthor(repo_path: &Path, old: OldMatcher, new: Identity, opts: &Options) -> Result<Stats> {
     let mapping = Mapping::single(old, new);
     rewrite(repo_path, &mapping, opts)
 }
@@ -363,7 +350,10 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
     let snapshot_id = if !opts.no_snapshot && !opts.dry_run {
         let mgr = crate::snapshot::SnapshotManager::new(repo_path)?;
         let id = mgr.create_snapshot(Some("pre-reauthor"))?;
-        println!("📸 Snapshot: {} (revert with: torii snapshot restore {})", id, id);
+        println!(
+            "📸 Snapshot: {} (revert with: torii snapshot restore {})",
+            id, id
+        );
         Some(id)
     } else {
         None
@@ -424,18 +414,18 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
         }
 
         let author = sig_with_time(
-            new_author.as_ref().map(|s| s.as_str()).unwrap_or(""),
-            new_author.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            new_author.as_deref().unwrap_or(""),
+            new_author.as_deref().unwrap_or(""),
             commit.author().when(),
-            new_author.is_some().then(|| ()),
+            new_author.is_some().then_some(()),
             &commit.author(),
         )?;
 
         let committer = sig_with_time(
-            new_committer.as_ref().map(|s| s.as_str()).unwrap_or(""),
-            new_committer.as_ref().map(|s| s.as_str()).unwrap_or(""),
+            new_committer.as_deref().unwrap_or(""),
+            new_committer.as_deref().unwrap_or(""),
             commit.committer().when(),
-            new_committer.is_some().then(|| ()),
+            new_committer.is_some().then_some(()),
             &commit.committer(),
         )?;
 
@@ -444,7 +434,13 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
         let parent_refs: Vec<&Commit> = new_parents.iter().collect();
 
         let new_oid = crate::core::commit_inner_split(
-            &repo, None, &author, &committer, msg, &tree, &parent_refs,
+            &repo,
+            None,
+            &author,
+            &committer,
+            msg,
+            &tree,
+            &parent_refs,
         )?;
 
         remap.insert(*old_oid, new_oid);
@@ -587,9 +583,7 @@ fn update_refs(
         if let Some(target) = r.target() {
             if let Some(&new_oid) = remap.get(&target) {
                 if new_oid != target {
-                    let mut r = repo
-                        .find_reference(&name)
-                        .map_err(ToriiError::Git)?;
+                    let mut r = repo.find_reference(&name).map_err(ToriiError::Git)?;
                     r.set_target(new_oid, "torii reauthor")
                         .map_err(ToriiError::Git)?;
                     stats.refs_updated += 1;
@@ -635,7 +629,9 @@ fn handle_tag_ref(
     };
 
     // Resolve to a tag object (annotated) or commit (lightweight).
-    let obj = repo.find_object(target_oid, None).map_err(ToriiError::Git)?;
+    let obj = repo
+        .find_object(target_oid, None)
+        .map_err(ToriiError::Git)?;
 
     if let Some(tag) = obj.as_tag() {
         let pointee = tag.target_id();
@@ -643,19 +639,11 @@ fn handle_tag_ref(
             if new_pointee == pointee {
                 return Ok(());
             }
-            let new_commit = repo
-                .find_commit(new_pointee)
-                .map_err(ToriiError::Git)?;
+            let new_commit = repo.find_commit(new_pointee).map_err(ToriiError::Git)?;
             // Tagger rewrite: read existing tagger, ask the mapping, replace.
             let tagger = tag
                 .tagger()
-                .map(|t| {
-                    Signature::new(
-                        t.name().unwrap_or(""),
-                        t.email().unwrap_or(""),
-                        &t.when(),
-                    )
-                })
+                .map(|t| Signature::new(t.name().unwrap_or(""), t.email().unwrap_or(""), &t.when()))
                 .transpose()
                 .map_err(ToriiError::Git)?
                 .unwrap_or_else(|| {

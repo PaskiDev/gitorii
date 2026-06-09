@@ -24,15 +24,13 @@ pub(super) fn handle_submodule(key: event::KeyEvent, app: &mut App) -> Option<Ac
     match app.submodule_view.focus {
         SubmoduleFocus::List => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.submodule_view.idx > 0 {
-                        app.submodule_view.idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.submodule_view.idx > 0 => {
+                    app.submodule_view.idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.submodule_view.idx + 1 < app.submodule_view.items.len() {
-                        app.submodule_view.idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.submodule_view.idx + 1 < app.submodule_view.items.len() =>
+                {
+                    app.submodule_view.idx += 1;
                 }
                 (KeyModifiers::NONE, KeyCode::Char('o')) => {
                     app.submodule_view.dropdown_idx = 0;
@@ -45,15 +43,15 @@ pub(super) fn handle_submodule(key: event::KeyEvent, app: &mut App) -> Option<Ac
         SubmoduleFocus::OpsDropdown => {
             let ops = crate::tui::views::submodule::ops_for(&app.submodule_view);
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.submodule_view.dropdown_idx > 0 {
-                        app.submodule_view.dropdown_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k'))
+                    if app.submodule_view.dropdown_idx > 0 =>
+                {
+                    app.submodule_view.dropdown_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.submodule_view.dropdown_idx + 1 < ops.len() {
-                        app.submodule_view.dropdown_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.submodule_view.dropdown_idx + 1 < ops.len() =>
+                {
+                    app.submodule_view.dropdown_idx += 1;
                 }
                 (_, KeyCode::Enter) => return dispatch_submodule_op(app),
                 _ => {}

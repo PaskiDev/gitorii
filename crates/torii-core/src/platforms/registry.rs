@@ -71,8 +71,12 @@ fn load_file(path: &Path) -> Vec<PlatformEntry> {
     if !path.exists() {
         return Vec::new();
     }
-    let Ok(text) = fs::read_to_string(path) else { return Vec::new() };
-    let Ok(parsed) = toml::from_str::<OnDisk>(&text) else { return Vec::new() };
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(parsed) = toml::from_str::<OnDisk>(&text) else {
+        return Vec::new();
+    };
     parsed.platforms
 }
 
@@ -81,7 +85,9 @@ fn save_file(path: &Path, entries: &[PlatformEntry]) -> Result<()> {
         fs::create_dir_all(parent)
             .map_err(|e| ToriiError::Fs(format!("mkdir {}: {}", parent.display(), e)))?;
     }
-    let on_disk = OnDisk { platforms: entries.to_vec() };
+    let on_disk = OnDisk {
+        platforms: entries.to_vec(),
+    };
     let text = toml::to_string_pretty(&on_disk)
         .map_err(|e| ToriiError::InvalidConfig(format!("serialise platforms.toml: {}", e)))?;
     fs::write(path, text)
@@ -104,8 +110,12 @@ pub fn load_local<P: AsRef<Path>>(repo_path: P) -> Vec<PlatformEntry> {
 /// global entries that aren't shadowed survive.
 pub fn merged<P: AsRef<Path>>(repo_path: P) -> Vec<PlatformEntry> {
     let mut by_name: BTreeMap<String, PlatformEntry> = BTreeMap::new();
-    for e in load_global()       { by_name.insert(e.name.clone(), e); }
-    for e in load_local(repo_path){ by_name.insert(e.name.clone(), e); }
+    for e in load_global() {
+        by_name.insert(e.name.clone(), e);
+    }
+    for e in load_local(repo_path) {
+        by_name.insert(e.name.clone(), e);
+    }
     by_name.into_values().collect()
 }
 
@@ -174,14 +184,19 @@ pub fn find_by_host<P: AsRef<Path>>(repo_path: P, host: &str) -> Option<Platform
     // Prefer longest-matching domain. Lets "gitea.work.io" beat a
     // catch-all "work.io" entry.
     candidates.sort_by_key(|e| std::cmp::Reverse(e.domain.len()));
-    candidates.into_iter().find(|e| host == e.domain || host.ends_with(&format!(".{}", e.domain)))
+    candidates
+        .into_iter()
+        .find(|e| host == e.domain || host.ends_with(&format!(".{}", e.domain)))
 }
 
 /// Add an entry to the per-repo registry when `local`, otherwise
 /// the global one. Replaces an existing entry with the same `name`.
 pub fn add_entry<P: AsRef<Path>>(repo_path: P, entry: PlatformEntry, local: bool) -> Result<()> {
-    let path = if local { local_path(&repo_path) } else { global_path()
-        .ok_or_else(|| ToriiError::InvalidConfig("no config dir".into()))? };
+    let path = if local {
+        local_path(&repo_path)
+    } else {
+        global_path().ok_or_else(|| ToriiError::InvalidConfig("no config dir".into()))?
+    };
     let mut entries = load_file(&path);
     entries.retain(|e| e.name != entry.name);
     entries.push(entry);
@@ -193,8 +208,11 @@ pub fn add_entry<P: AsRef<Path>>(repo_path: P, entry: PlatformEntry, local: bool
 /// still fall through to "maybe it was a builtin, those can't be
 /// removed".
 pub fn remove_entry<P: AsRef<Path>>(repo_path: P, name: &str, local: bool) -> Result<bool> {
-    let path = if local { local_path(&repo_path) } else { global_path()
-        .ok_or_else(|| ToriiError::InvalidConfig("no config dir".into()))? };
+    let path = if local {
+        local_path(&repo_path)
+    } else {
+        global_path().ok_or_else(|| ToriiError::InvalidConfig("no config dir".into()))?
+    };
     let mut entries = load_file(&path);
     let before = entries.len();
     entries.retain(|e| e.name != name);

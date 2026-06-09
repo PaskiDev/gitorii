@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
-use std::fs;
+use crate::core::GitRepo;
+use crate::error::{Result, ToriiError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::error::{Result, ToriiError};
-use crate::core::GitRepo;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Recursive directory copy used by the legacy-snapshot migration when
 /// a cross-filesystem `fs::rename` fails. Best-effort — propagates
@@ -83,12 +83,21 @@ impl SnapshotManager {
         if entries.is_empty() {
             return Ok(());
         }
-        eprintln!("ℹ Migrating {} snapshot(s) from {} → {}",
-                  entries.len(), old.display(), new.display());
+        eprintln!(
+            "ℹ Migrating {} snapshot(s) from {} → {}",
+            entries.len(),
+            old.display(),
+            new.display()
+        );
         for src in entries {
-            let name = match src.file_name() { Some(n) => n.to_owned(), None => continue };
+            let name = match src.file_name() {
+                Some(n) => n.to_owned(),
+                None => continue,
+            };
             let dst = new.join(&name);
-            if dst.exists() { continue; }
+            if dst.exists() {
+                continue;
+            }
             if fs::rename(&src, &dst).is_err() {
                 // Cross-FS or busy: fall back to copy + remove, never abort.
                 if copy_dir_all(&src, &dst).is_ok() {
@@ -135,7 +144,7 @@ impl SnapshotManager {
         }
 
         let branch = repo.get_current_branch()?;
-        
+
         let metadata = SnapshotMetadata {
             id: id.clone(),
             timestamp,
@@ -213,7 +222,12 @@ impl SnapshotManager {
         self.copy_dir_recursive_excluding(src, dst, None)
     }
 
-    fn copy_dir_recursive_excluding(&self, src: &Path, dst: &Path, exclude: Option<&Path>) -> Result<()> {
+    fn copy_dir_recursive_excluding(
+        &self,
+        src: &Path,
+        dst: &Path,
+        exclude: Option<&Path>,
+    ) -> Result<()> {
         fs::create_dir_all(dst)?;
 
         // Canonicalise the exclude path once. If canonicalisation fails
@@ -249,7 +263,7 @@ impl SnapshotManager {
     /// List all snapshots
     pub fn list_snapshots(&self) -> Result<()> {
         let entries = fs::read_dir(&self.snapshots_dir)?;
-        
+
         println!("📸 Snapshots:");
         println!();
 
@@ -260,13 +274,15 @@ impl SnapshotManager {
                 if metadata_path.exists() {
                     let metadata_json = fs::read_to_string(metadata_path)?;
                     let metadata: SnapshotMetadata = serde_json::from_str(&metadata_json)?;
-                    
-                    let name_str = metadata.name
+
+                    let name_str = metadata
+                        .name
                         .as_ref()
                         .map(|n| format!(" ({})", n))
                         .unwrap_or_default();
-                    
-                    println!("  {} - {}{}", 
+
+                    println!(
+                        "  {} - {}{}",
                         metadata.id,
                         metadata.timestamp.format("%Y-%m-%d %H:%M:%S"),
                         name_str
@@ -282,7 +298,7 @@ impl SnapshotManager {
     /// Restore from a snapshot
     pub fn restore_snapshot(&self, id: &str) -> Result<()> {
         let snapshot_dir = self.snapshots_dir.join(id);
-        
+
         if !snapshot_dir.exists() {
             return Err(ToriiError::Snapshot(format!("Snapshot not found: {}", id)));
         }
@@ -295,17 +311,18 @@ impl SnapshotManager {
 
         // Reset working directory to match restored git state via git2
         {
-            let repo = git2::Repository::discover(&self.repo_path)
-                .map_err(|e| ToriiError::Git(e))?;
-            let head = repo.head()
-                .map_err(|e| ToriiError::Git(e))?
+            let repo = git2::Repository::discover(&self.repo_path).map_err(ToriiError::Git)?;
+            let head = repo
+                .head()
+                .map_err(ToriiError::Git)?
                 .peel_to_commit()
-                .map_err(|e| ToriiError::Git(e))?;
+                .map_err(ToriiError::Git)?;
             repo.reset(
                 head.as_object(),
                 git2::ResetType::Hard,
                 Some(git2::build::CheckoutBuilder::default().force()),
-            ).map_err(|e| ToriiError::Git(e))?;
+            )
+            .map_err(ToriiError::Git)?;
         }
 
         Ok(())
@@ -353,7 +370,10 @@ impl SnapshotManager {
             let metadata_json = fs::read_to_string(&metadata_path)?;
             let metadata: SnapshotMetadata = serde_json::from_str(&metadata_json)?;
             println!("📸 Snapshot {}", metadata.id);
-            println!("   timestamp: {}", metadata.timestamp.format("%Y-%m-%d %H:%M:%S"));
+            println!(
+                "   timestamp: {}",
+                metadata.timestamp.format("%Y-%m-%d %H:%M:%S")
+            );
             if let Some(name) = &metadata.name {
                 println!("   name:      {}", name);
             }
@@ -368,17 +388,20 @@ impl SnapshotManager {
         println!("   contents:");
         for entry in fs::read_dir(&snapshot_dir)? {
             let entry = entry?;
-            let kind = if entry.file_type()?.is_dir() { "dir" } else { "file" };
+            let kind = if entry.file_type()?.is_dir() {
+                "dir"
+            } else {
+                "file"
+            };
             println!("     {kind}: {}", entry.file_name().to_string_lossy());
         }
         Ok(())
     }
 
-
     /// Configure auto-snapshot settings
     pub fn configure_auto_snapshot(&self, enable: bool, interval: Option<u32>) -> Result<()> {
         let config_path = self.repo_path.join(".torii").join("config.json");
-        
+
         #[derive(Serialize, Deserialize)]
         struct Config {
             auto_snapshot_enabled: bool,
@@ -404,8 +427,7 @@ impl SnapshotManager {
     /// committed history, so any uncommitted edits were unrecoverable.
     pub fn stash(&self, name: Option<&str>, include_untracked: bool) -> Result<()> {
         let stash_name = name.unwrap_or("WIP");
-        let mut repo = git2::Repository::discover(&self.repo_path)
-            .map_err(ToriiError::Git)?;
+        let mut repo = git2::Repository::discover(&self.repo_path).map_err(ToriiError::Git)?;
 
         // Detect whether there is anything to stash; libgit2 errors with
         // "no changes selected" otherwise and the message is unhelpful.
@@ -434,7 +456,8 @@ impl SnapshotManager {
         if include_untracked {
             flags |= git2::StashFlags::INCLUDE_UNTRACKED;
         }
-        let oid = repo.stash_save2(&signature, Some(stash_name), Some(flags))
+        let oid = repo
+            .stash_save2(&signature, Some(stash_name), Some(flags))
             .map_err(ToriiError::Git)?;
 
         // Defensive: libgit2's `stash_save2` has been observed to
@@ -444,16 +467,19 @@ impl SnapshotManager {
         // lied to us and we don't want the user to think their
         // changes are safe when they aren't.
         let mut verify = git2::StatusOptions::new();
-        verify.include_untracked(include_untracked)
-              .recurse_untracked_dirs(include_untracked);
-        let still_dirty = !repo.statuses(Some(&mut verify))
+        verify
+            .include_untracked(include_untracked)
+            .recurse_untracked_dirs(include_untracked);
+        let still_dirty = !repo
+            .statuses(Some(&mut verify))
             .map_err(ToriiError::Git)?
             .is_empty();
         if still_dirty {
             return Err(ToriiError::Snapshot(
                 "stash_save2 returned OK but the working tree is still dirty — \
                  libgit2 didn't actually stash anything. Workaround: \
-                 `torii snapshot create -n WIP` (named persistent snapshot).".to_string()
+                 `torii snapshot create -n WIP` (named persistent snapshot)."
+                    .to_string(),
             ));
         }
 
@@ -473,27 +499,37 @@ impl SnapshotManager {
     /// `id` selects which stash entry: `"0"` (default) is the most recent,
     /// `"1"` the one before, etc. `keep` retains the stash entry after apply.
     pub fn unstash(&self, id: Option<&str>, keep: bool) -> Result<()> {
-        let mut repo = git2::Repository::discover(&self.repo_path)
-            .map_err(ToriiError::Git)?;
+        let mut repo = git2::Repository::discover(&self.repo_path).map_err(ToriiError::Git)?;
 
         let index: usize = match id {
-            Some(s) => s.trim_start_matches("stash@{").trim_end_matches('}')
+            Some(s) => s
+                .trim_start_matches("stash@{")
+                .trim_end_matches('}')
                 .parse()
-                .map_err(|_| ToriiError::Snapshot(
-                    format!("invalid stash index `{}` (use a number: 0, 1, …)", s)
-                ))?,
+                .map_err(|_| {
+                    ToriiError::Snapshot(format!(
+                        "invalid stash index `{}` (use a number: 0, 1, …)",
+                        s
+                    ))
+                })?,
             None => 0,
         };
 
         // Confirm the entry exists for a friendlier error than libgit2's.
         let mut count = 0;
-        repo.stash_foreach(|_, _, _| { count += 1; true }).map_err(ToriiError::Git)?;
+        repo.stash_foreach(|_, _, _| {
+            count += 1;
+            true
+        })
+        .map_err(ToriiError::Git)?;
         if count == 0 {
             return Err(ToriiError::Snapshot("No stash found".to_string()));
         }
         if index >= count {
             return Err(ToriiError::Snapshot(format!(
-                "stash@{{{}}} doesn't exist (have {} stash{})", index, count,
+                "stash@{{{}}} doesn't exist (have {} stash{})",
+                index,
+                count,
                 if count == 1 { "" } else { "es" }
             )));
         }
@@ -502,8 +538,12 @@ impl SnapshotManager {
         if keep {
             let mut opts = git2::StashApplyOptions::new();
             opts.reinstantiate_index();
-            repo.stash_apply(index, Some(&mut opts)).map_err(ToriiError::Git)?;
-            println!("   Stash kept (use `torii snapshot unstash {} --no-keep` to drop)", index);
+            repo.stash_apply(index, Some(&mut opts))
+                .map_err(ToriiError::Git)?;
+            println!(
+                "   Stash kept (use `torii snapshot unstash {} --no-keep` to drop)",
+                index
+            );
         } else {
             repo.stash_pop(index, None).map_err(ToriiError::Git)?;
             println!("   Stash popped");
@@ -523,10 +563,11 @@ impl SnapshotManager {
                 name.starts_with("before-") || name.contains("auto-")
             })
             .collect();
-        
+
         snapshots.sort_by_key(|e| e.metadata().ok().and_then(|m| m.modified().ok()));
-        
-        let latest = snapshots.last()
+
+        let latest = snapshots
+            .last()
             .ok_or_else(|| ToriiError::Snapshot("No operation to undo".to_string()))?;
 
         let snapshot_id = latest.file_name().to_string_lossy().to_string();
@@ -555,7 +596,8 @@ mod snapshot_location_tests {
         let mut idx = repo.index().unwrap();
         let tree_oid = idx.write_tree().unwrap();
         let tree = repo.find_tree(tree_oid).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
     }
 
     #[test]
@@ -570,8 +612,16 @@ mod snapshot_location_tests {
         // Must exist inside .git/torii/snapshots/, NOT .torii/snapshots/
         let new_loc = repo_path.join(".git/torii/snapshots").join(&id);
         let old_loc = repo_path.join(".torii/snapshots").join(&id);
-        assert!(new_loc.exists(), "snapshot should be at .git/torii/snapshots/{}", id);
-        assert!(!old_loc.exists(), "snapshot must NOT be in working tree at .torii/snapshots/{}", id);
+        assert!(
+            new_loc.exists(),
+            "snapshot should be at .git/torii/snapshots/{}",
+            id
+        );
+        assert!(
+            !old_loc.exists(),
+            "snapshot must NOT be in working tree at .torii/snapshots/{}",
+            id
+        );
     }
 
     #[test]
@@ -590,7 +640,10 @@ mod snapshot_location_tests {
 
         let new_loc = repo_path.join(".git/torii/snapshots/20200101_000000_000");
         assert!(new_loc.exists(), "legacy snapshot should be migrated");
-        assert!(new_loc.join("metadata.json").exists(), "files inside should come along");
+        assert!(
+            new_loc.join("metadata.json").exists(),
+            "files inside should come along"
+        );
         assert!(!legacy.exists(), "legacy location should be cleaned up");
     }
 

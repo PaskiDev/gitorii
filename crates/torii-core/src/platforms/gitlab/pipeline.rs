@@ -56,14 +56,7 @@ impl PipelineClient for GitLabPipelineClient {
             filters.per_page.clamp(1, 100)
         );
         if let Some(ref s) = filters.status {
-            let gl = match s.as_str() {
-                "success" => "success",
-                "failed" => "failed",
-                "running" => "running",
-                "canceled" => "canceled",
-                "pending" => "pending",
-                other => other,
-            };
+            let gl = s.as_str();
             url.push_str(&format!("&status={}", gl));
         }
         let req = self

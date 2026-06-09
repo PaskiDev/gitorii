@@ -496,7 +496,7 @@ pub(crate) fn branch(
                 Ok(o) => errors.push(format!(
                     "{}: {}",
                     remote_name,
-                    String::from_utf8_lossy(&o.stderr).trim().to_string()
+                    String::from_utf8_lossy(&o.stderr).trim()
                 )),
                 Err(e) => errors.push(format!("{}: {}", remote_name, e)),
             }

@@ -304,7 +304,7 @@ pub(crate) fn parse_azure_url(url: &str) -> Option<(String, String, String)> {
             // HTTPS modern: dev.azure.com/<org>/<project>/_git/<repo>
             // (host might also include "<org>@dev.azure.com" for legacy
             // basic-auth-in-URL — strip the userinfo.)
-            let host = host.split('@').last().unwrap_or(host);
+            let host = host.split('@').next_back().unwrap_or(host);
             if host == "dev.azure.com" {
                 let mut parts = path.splitn(4, '/');
                 let org = parts.next()?.to_string();

@@ -54,26 +54,28 @@ fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
     // app (useful for self-hosted Gitea/Forgejo).
     match provider {
         "github" => Some(DeviceFlowProvider {
-            device_authz_url:  "https://github.com/login/device/code",
-            token_url:         "https://github.com/login/oauth/access_token",
-            scopes:            "repo read:org workflow",
-            client_id_env:     "TORII_GITHUB_APP_ID",
+            device_authz_url: "https://github.com/login/device/code",
+            token_url: "https://github.com/login/oauth/access_token",
+            scopes: "repo read:org workflow",
+            client_id_env: "TORII_GITHUB_APP_ID",
             bundled_client_id: Some("Ov23liDcA2Njn7eRWnYV"),
         }),
         "gitlab" => Some(DeviceFlowProvider {
-            device_authz_url:  "https://gitlab.com/oauth/authorize_device",
-            token_url:         "https://gitlab.com/oauth/token",
-            scopes:            "api",
-            client_id_env:     "TORII_GITLAB_APP_ID",
-            bundled_client_id: Some("b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe"),
+            device_authz_url: "https://gitlab.com/oauth/authorize_device",
+            token_url: "https://gitlab.com/oauth/token",
+            scopes: "api",
+            client_id_env: "TORII_GITLAB_APP_ID",
+            bundled_client_id: Some(
+                "b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe",
+            ),
         }),
         // Codeberg / Gitea / Forgejo share the Gitea OAuth surface; the
         // device-flow endpoints are at the platform host.
         "codeberg" => Some(DeviceFlowProvider {
-            device_authz_url:  "https://codeberg.org/login/oauth/device/code",
-            token_url:         "https://codeberg.org/login/oauth/access_token",
-            scopes:            "",
-            client_id_env:     "TORII_CODEBERG_APP_ID",
+            device_authz_url: "https://codeberg.org/login/oauth/device/code",
+            token_url: "https://codeberg.org/login/oauth/access_token",
+            scopes: "",
+            client_id_env: "TORII_CODEBERG_APP_ID",
             bundled_client_id: Some("d114c8aa-227d-453e-8f25-cdd727f49d42"),
         }),
         _ => None,
@@ -82,32 +84,42 @@ fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
 
 #[derive(Debug, Deserialize)]
 struct DeviceCodeResponse {
-    device_code:               String,
-    user_code:                 String,
-    verification_uri:          String,
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
     #[serde(default)]
     verification_uri_complete: Option<String>,
     #[serde(default)]
-    expires_in:                u64,
+    expires_in: u64,
     #[serde(default = "default_interval")]
-    interval:                  u64,
+    interval: u64,
 }
 
-fn default_interval() -> u64 { 5 }
+fn default_interval() -> u64 {
+    5
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum TokenResponse {
     Success {
         access_token: String,
-        #[serde(default)] #[allow(dead_code)] token_type: Option<String>,
+        #[serde(default)]
+        #[allow(dead_code)]
+        token_type: Option<String>,
         // 0.7.39 — GitLab device flow returns these. GitHub OAuth
         // Apps don't, so we keep them Option-typed and the helpers
         // that need them check for `Some(...)` before using.
-        #[serde(default)] refresh_token: Option<String>,
-        #[serde(default)] expires_in:    Option<u64>,
+        #[serde(default)]
+        refresh_token: Option<String>,
+        #[serde(default)]
+        expires_in: Option<u64>,
     },
-    Error   { error: String, #[serde(default)] error_description: Option<String> },
+    Error {
+        error: String,
+        #[serde(default)]
+        error_description: Option<String>,
+    },
 }
 
 /// Run the device flow for `provider`. Blocks until the user
@@ -115,34 +127,46 @@ enum TokenResponse {
 /// Returns the access token, ready to hand to
 /// [`crate::auth::set_token`].
 pub fn run_device_flow(provider: &str) -> Result<String> {
-    let cfg = device_flow_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
-        "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg. \
-         Bitbucket needs the (separate) Authorization Code flow.", provider
-    )))?;
+    let cfg = device_flow_provider(provider).ok_or_else(|| {
+        ToriiError::InvalidConfig(format!(
+            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg. \
+         Bitbucket needs the (separate) Authorization Code flow.",
+            provider
+        ))
+    })?;
 
-    let client_id = std::env::var(cfg.client_id_env).ok()
+    let client_id = std::env::var(cfg.client_id_env)
+        .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| ToriiError::InvalidConfig(format!(
-            "No OAuth client_id available for `{}`. Set the {} env var, or wait until the \
+        .ok_or_else(|| {
+            ToriiError::InvalidConfig(format!(
+                "No OAuth client_id available for `{}`. Set the {} env var, or wait until the \
              bundled client_id ships in a future torii release. As a workaround, create a \
              Personal Access Token in the platform's web UI and run: \
              torii auth set {} YOUR_TOKEN",
-            provider, cfg.client_id_env, provider
-        )))?;
+                provider, cfg.client_id_env, provider
+            ))
+        })?;
 
     let client = crate::http::make_client();
 
     // Step 1: request device + user codes.
-    let init_req = client.post(cfg.device_authz_url)
+    let init_req = client
+        .post(cfg.device_authz_url)
         .header("Accept", "application/json")
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("scope",     cfg.scopes),
-        ]);
-    let init: DeviceCodeResponse = crate::http::send_json(init_req, "OAuth device init")
-        .and_then(|v| serde_json::from_value(v).map_err(|e| ToriiError::MalformedResponse { provider: "oauth".into(), message: format!("OAuth device init: cannot parse response: {}", e) }))?;
+        .form(&[("client_id", client_id.as_str()), ("scope", cfg.scopes)]);
+    let init: DeviceCodeResponse =
+        crate::http::send_json(init_req, "OAuth device init").and_then(|v| {
+            serde_json::from_value(v).map_err(|e| ToriiError::MalformedResponse {
+                provider: "oauth".into(),
+                message: format!("OAuth device init: cannot parse response: {}", e),
+            })
+        })?;
 
-    let display_uri = init.verification_uri_complete.as_deref().unwrap_or(&init.verification_uri);
+    let display_uri = init
+        .verification_uri_complete
+        .as_deref()
+        .unwrap_or(&init.verification_uri);
     println!();
     println!("⛩  Open this URL in your browser:");
     println!("   {}", display_uri);
@@ -162,25 +186,35 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
     loop {
         std::thread::sleep(interval);
         if Instant::now() >= deadline {
-            return Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: code expired before authorisation. Run the command again.".to_string() });
+            return Err(ToriiError::Auth {
+                provider: "oauth".into(),
+                message:
+                    "OAuth device flow: code expired before authorisation. Run the command again."
+                        .to_string(),
+            });
         }
 
-        let poll_req = client.post(cfg.token_url)
+        let poll_req = client
+            .post(cfg.token_url)
             .header("Accept", "application/json")
             .form(&[
-                ("client_id",   client_id.as_str()),
+                ("client_id", client_id.as_str()),
                 ("device_code", init.device_code.as_str()),
-                ("grant_type",  "urn:ietf:params:oauth:grant-type:device_code"),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
             ]);
 
         // We bypass send_json here because the token endpoint returns
         // 200 for "still pending" responses — only the body
         // distinguishes success from in-flight, so the standard
         // is_success() check would mis-handle the error variants.
-        let resp = poll_req.send()
-            .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!("OAuth poll: {}", e) })?;
-        let body: TokenResponse = resp.json()
-            .map_err(|e| ToriiError::MalformedResponse { provider: "oauth".into(), message: format!("OAuth poll: malformed JSON: {}", e) })?;
+        let resp = poll_req.send().map_err(|e| ToriiError::Network {
+            provider: "oauth".into(),
+            message: format!("OAuth poll: {}", e),
+        })?;
+        let body: TokenResponse = resp.json().map_err(|e| ToriiError::MalformedResponse {
+            provider: "oauth".into(),
+            message: format!("OAuth poll: malformed JSON: {}", e),
+        })?;
         match body {
             TokenResponse::Success { access_token, .. } => {
                 println!("✅ Authorised. Token saved.");
@@ -190,19 +224,39 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
                 // The in-TUI worker (start_oauth_flow) does.
                 return Ok(access_token);
             }
-            TokenResponse::Error { error, error_description } => match error.as_str() {
+            TokenResponse::Error {
+                error,
+                error_description,
+            } => match error.as_str() {
                 "authorization_pending" => continue,
                 "slow_down" => {
                     interval += Duration::from_secs(5);
                     continue;
                 }
-                "expired_token" => return Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: code expired. Run the command again.".to_string() }),
-                "access_denied" => return Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: user denied authorisation.".to_string() }),
-                other => return Err(ToriiError::Auth { provider: "oauth".into(), message: format!(
-                    "OAuth device flow error '{}': {}",
-                    other, error_description.unwrap_or_default()
-                ) }),
-            }
+                "expired_token" => {
+                    return Err(ToriiError::Auth {
+                        provider: "oauth".into(),
+                        message: "OAuth device flow: code expired. Run the command again."
+                            .to_string(),
+                    })
+                }
+                "access_denied" => {
+                    return Err(ToriiError::Auth {
+                        provider: "oauth".into(),
+                        message: "OAuth device flow: user denied authorisation.".to_string(),
+                    })
+                }
+                other => {
+                    return Err(ToriiError::Auth {
+                        provider: "oauth".into(),
+                        message: format!(
+                            "OAuth device flow error '{}': {}",
+                            other,
+                            error_description.unwrap_or_default()
+                        ),
+                    })
+                }
+            },
         }
     }
 }
@@ -245,41 +299,50 @@ pub enum DeviceFlowStep {
     SlowDown,
     /// Final state — access token in hand. Carries the refresh token
     /// + expiry hint so `auth::set_token_with_refresh` can persist
-    /// them and `auth::refresh_if_needed` can renew without prompting
-    /// the user again. `None` when the provider didn't issue one
-    /// (GitHub OAuth Apps).
+    ///   them and `auth::refresh_if_needed` can renew without prompting
+    ///   the user again. `None` when the provider didn't issue one
+    ///   (GitHub OAuth Apps).
     Done {
         access_token: String,
         refresh_token: Option<String>,
-        expires_in:   Option<u64>,
+        expires_in: Option<u64>,
     },
 }
 
 pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
-    let cfg = device_flow_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
-        "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg.",
-        provider
-    )))?;
-    let client_id = std::env::var(cfg.client_id_env).ok()
+    let cfg = device_flow_provider(provider).ok_or_else(|| {
+        ToriiError::InvalidConfig(format!(
+            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg.",
+            provider
+        ))
+    })?;
+    let client_id = std::env::var(cfg.client_id_env)
+        .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| ToriiError::InvalidConfig(format!(
-            "No OAuth client_id available for `{}`. Set the {} env var, or wait until \
+        .ok_or_else(|| {
+            ToriiError::InvalidConfig(format!(
+                "No OAuth client_id available for `{}`. Set the {} env var, or wait until \
              the bundled client_id ships. As a workaround, create a Personal Access \
              Token in the platform's web UI and run: torii auth set {} YOUR_TOKEN",
-            provider, cfg.client_id_env, provider
-        )))?;
+                provider, cfg.client_id_env, provider
+            ))
+        })?;
 
     let client = crate::http::make_client();
-    let init_req = client.post(cfg.device_authz_url)
+    let init_req = client
+        .post(cfg.device_authz_url)
         .header("Accept", "application/json")
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("scope",     cfg.scopes),
-        ]);
-    let init: DeviceCodeResponse = crate::http::send_json(init_req, "OAuth device init")
-        .and_then(|v| serde_json::from_value(v).map_err(|e| ToriiError::MalformedResponse { provider: "oauth".into(), message: format!("OAuth device init: cannot parse response: {}", e) }))?;
+        .form(&[("client_id", client_id.as_str()), ("scope", cfg.scopes)]);
+    let init: DeviceCodeResponse =
+        crate::http::send_json(init_req, "OAuth device init").and_then(|v| {
+            serde_json::from_value(v).map_err(|e| ToriiError::MalformedResponse {
+                provider: "oauth".into(),
+                message: format!("OAuth device init: cannot parse response: {}", e),
+            })
+        })?;
 
-    let display_uri = init.verification_uri_complete
+    let display_uri = init
+        .verification_uri_complete
         .clone()
         .unwrap_or_else(|| init.verification_uri.clone());
     let interval = Duration::from_secs(init.interval.max(1));
@@ -304,36 +367,65 @@ pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
 /// sleeping between calls — we want the TUI loop to keep ticking.
 pub fn poll_device_flow(session: &mut DeviceFlowSession) -> Result<DeviceFlowStep> {
     if Instant::now() >= session.deadline {
-        return Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: code expired before authorisation.".to_string() });
+        return Err(ToriiError::Auth {
+            provider: "oauth".into(),
+            message: "OAuth device flow: code expired before authorisation.".to_string(),
+        });
     }
     let client = crate::http::make_client();
-    let poll_req = client.post(&session.token_url)
+    let poll_req = client
+        .post(&session.token_url)
         .header("Accept", "application/json")
         .form(&[
-            ("client_id",   session.client_id.as_str()),
+            ("client_id", session.client_id.as_str()),
             ("device_code", session.device_code.as_str()),
-            ("grant_type",  "urn:ietf:params:oauth:grant-type:device_code"),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
         ]);
-    let resp = poll_req.send()
-        .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!("OAuth poll: {}", e) })?;
-    let body: TokenResponse = resp.json()
-        .map_err(|e| ToriiError::MalformedResponse { provider: "oauth".into(), message: format!("OAuth poll: malformed JSON: {}", e) })?;
+    let resp = poll_req.send().map_err(|e| ToriiError::Network {
+        provider: "oauth".into(),
+        message: format!("OAuth poll: {}", e),
+    })?;
+    let body: TokenResponse = resp.json().map_err(|e| ToriiError::MalformedResponse {
+        provider: "oauth".into(),
+        message: format!("OAuth poll: malformed JSON: {}", e),
+    })?;
     match body {
-        TokenResponse::Success { access_token, refresh_token, expires_in, .. } =>
-            Ok(DeviceFlowStep::Done { access_token, refresh_token, expires_in }),
-        TokenResponse::Error { error, error_description } => match error.as_str() {
+        TokenResponse::Success {
+            access_token,
+            refresh_token,
+            expires_in,
+            ..
+        } => Ok(DeviceFlowStep::Done {
+            access_token,
+            refresh_token,
+            expires_in,
+        }),
+        TokenResponse::Error {
+            error,
+            error_description,
+        } => match error.as_str() {
             "authorization_pending" => Ok(DeviceFlowStep::Pending),
             "slow_down" => {
                 session.interval += Duration::from_secs(5);
                 Ok(DeviceFlowStep::SlowDown)
             }
-            "expired_token" => Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: code expired. Start again.".to_string() }),
-            "access_denied" => Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth device flow: user denied authorisation.".to_string() }),
-            other => Err(ToriiError::Auth { provider: "oauth".into(), message: format!(
-                "OAuth device flow error '{}': {}",
-                other, error_description.unwrap_or_default()
-            ) }),
-        }
+            "expired_token" => Err(ToriiError::Auth {
+                provider: "oauth".into(),
+                message: "OAuth device flow: code expired. Start again.".to_string(),
+            }),
+            "access_denied" => Err(ToriiError::Auth {
+                provider: "oauth".into(),
+                message: "OAuth device flow: user denied authorisation.".to_string(),
+            }),
+            other => Err(ToriiError::Auth {
+                provider: "oauth".into(),
+                message: format!(
+                    "OAuth device flow error '{}': {}",
+                    other,
+                    error_description.unwrap_or_default()
+                ),
+            }),
+        },
     }
 }
 
@@ -345,41 +437,61 @@ pub fn poll_device_flow(session: &mut DeviceFlowSession) -> Result<DeviceFlowSte
 /// Returns `(new_access_token, new_refresh_token, expires_in_seconds)`
 /// — providers may rotate the refresh token, so we always store
 /// whatever they hand back.
-pub fn refresh_access_token(provider: &str, refresh_token: &str)
-    -> Result<(String, Option<String>, Option<u64>)>
-{
-    let cfg = device_flow_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
-        "OAuth refresh not configured for `{}`. Re-auth manually with `torii auth oauth {}`.",
-        provider, provider
-    )))?;
-    let client_id = std::env::var(cfg.client_id_env).ok()
+pub fn refresh_access_token(
+    provider: &str,
+    refresh_token: &str,
+) -> Result<(String, Option<String>, Option<u64>)> {
+    let cfg = device_flow_provider(provider).ok_or_else(|| {
+        ToriiError::InvalidConfig(format!(
+            "OAuth refresh not configured for `{}`. Re-auth manually with `torii auth oauth {}`.",
+            provider, provider
+        ))
+    })?;
+    let client_id = std::env::var(cfg.client_id_env)
+        .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| ToriiError::InvalidConfig(format!(
-            "No OAuth client_id for `{}` refresh.", provider
-        )))?;
+        .ok_or_else(|| {
+            ToriiError::InvalidConfig(format!("No OAuth client_id for `{}` refresh.", provider))
+        })?;
 
     let client = crate::http::make_client();
-    let req = client.post(cfg.token_url)
+    let req = client
+        .post(cfg.token_url)
         .header("Accept", "application/json")
         .form(&[
-            ("client_id",     client_id.as_str()),
+            ("client_id", client_id.as_str()),
             ("refresh_token", refresh_token),
-            ("grant_type",    "refresh_token"),
+            ("grant_type", "refresh_token"),
         ]);
-    let body: TokenResponse = req.send()
-        .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!("OAuth refresh: {}", e) })?
+    let body: TokenResponse = req
+        .send()
+        .map_err(|e| ToriiError::Network {
+            provider: "oauth".into(),
+            message: format!("OAuth refresh: {}", e),
+        })?
         .json()
-        .map_err(|e| ToriiError::MalformedResponse { provider: "oauth".into(), message: format!("OAuth refresh: malformed JSON: {}", e) })?;
+        .map_err(|e| ToriiError::MalformedResponse {
+            provider: "oauth".into(),
+            message: format!("OAuth refresh: malformed JSON: {}", e),
+        })?;
     match body {
-        TokenResponse::Success { access_token, refresh_token, expires_in, .. } => {
-            Ok((access_token, refresh_token, expires_in))
-        }
-        TokenResponse::Error { error, error_description } => {
-            Err(ToriiError::Auth { provider: "oauth".into(), message: format!(
+        TokenResponse::Success {
+            access_token,
+            refresh_token,
+            expires_in,
+            ..
+        } => Ok((access_token, refresh_token, expires_in)),
+        TokenResponse::Error {
+            error,
+            error_description,
+        } => Err(ToriiError::Auth {
+            provider: "oauth".into(),
+            message: format!(
                 "OAuth refresh error '{}': {}",
-                error, error_description.unwrap_or_default()
-            ) })
-        }
+                error,
+                error_description.unwrap_or_default()
+            ),
+        }),
     }
 }
 
@@ -413,24 +525,30 @@ fn revoke_gitlab(token: &str) -> Result<bool> {
     // way; users with a custom TORII_GITLAB_APP_ID must also have
     // it configured as a public client (the env-var fallback path
     // is for self-managed GitLab where the user controls both).
-    let client_id = std::env::var("TORII_GITLAB_APP_ID").ok()
-        .unwrap_or_else(|| "b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe".to_string());
+    let client_id = std::env::var("TORII_GITLAB_APP_ID")
+        .ok()
+        .unwrap_or_else(|| {
+            "b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe".to_string()
+        });
     let client = crate::http::make_client();
-    let req = client.post("https://gitlab.com/oauth/revoke")
-        .form(&[
-            ("client_id", client_id.as_str()),
-            ("token", token),
-            ("token_type_hint", "access_token"),
-        ]);
-    let resp = req.send().map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab revoke: {}", e) })?;
+    let req = client.post("https://gitlab.com/oauth/revoke").form(&[
+        ("client_id", client_id.as_str()),
+        ("token", token),
+        ("token_type_hint", "access_token"),
+    ]);
+    let resp = req.send().map_err(|e| ToriiError::Network {
+        provider: "gitlab".into(),
+        message: format!("GitLab revoke: {}", e),
+    })?;
     let status = resp.status().as_u16();
     match status {
         200 | 401 | 404 => Ok(true),
         _ => {
             let body = resp.text().unwrap_or_default();
-            Err(ToriiError::Network { provider: "gitlab".into(), message: format!(
-                "GitLab revoke returned HTTP {}: {}", status, body
-            ) })
+            Err(ToriiError::Network {
+                provider: "gitlab".into(),
+                message: format!("GitLab revoke returned HTTP {}: {}", status, body),
+            })
         }
     }
 }
@@ -440,26 +558,32 @@ fn revoke_github(token: &str) -> Result<bool> {
     // documented way to revoke an OAuth token, and it requires Basic
     // auth with client_id + client_secret. Bundled apps don't ship
     // their secret; users running their own app can set the env var.
-    let client_id = std::env::var("TORII_GITHUB_APP_ID").ok()
+    let client_id = std::env::var("TORII_GITHUB_APP_ID")
+        .ok()
         .unwrap_or_else(|| "Ov23liDcA2Njn7eRWnYV".to_string());
     let Ok(client_secret) = std::env::var("TORII_GITHUB_APP_SECRET") else {
         return Ok(false);
     };
     let client = crate::http::make_client();
     let url = format!("https://api.github.com/applications/{}/token", client_id);
-    let req = client.delete(&url)
+    let req = client
+        .delete(&url)
         .basic_auth(client_id.clone(), Some(client_secret))
         .header("Accept", "application/vnd.github+json")
         .json(&serde_json::json!({ "access_token": token }));
-    let resp = req.send().map_err(|e| ToriiError::Network { provider: "github".into(), message: format!("GitHub revoke: {}", e) })?;
+    let resp = req.send().map_err(|e| ToriiError::Network {
+        provider: "github".into(),
+        message: format!("GitHub revoke: {}", e),
+    })?;
     let status = resp.status().as_u16();
     match status {
         204 | 404 | 422 => Ok(true),
         _ => {
             let body = resp.text().unwrap_or_default();
-            Err(ToriiError::Network { provider: "github".into(), message: format!(
-                "GitHub revoke returned HTTP {}: {}", status, body
-            ) })
+            Err(ToriiError::Network {
+                provider: "github".into(),
+                message: format!("GitHub revoke returned HTTP {}: {}", status, body),
+            })
         }
     }
 }
@@ -469,10 +593,10 @@ fn revoke_github(token: &str) -> Result<bool> {
 /// in `torii auth rotate` to print a helpful hint.
 pub fn revoke_hint_url(provider: &str) -> Option<&'static str> {
     match provider {
-        "github"   => Some("https://github.com/settings/applications"),
-        "gitlab"   => Some("https://gitlab.com/-/profile/applications"),
+        "github" => Some("https://github.com/settings/applications"),
+        "gitlab" => Some("https://gitlab.com/-/profile/applications"),
         "codeberg" => Some("https://codeberg.org/user/settings/applications"),
-        "bitbucket"=> Some("https://bitbucket.org/account/settings/app-authorizations/"),
+        "bitbucket" => Some("https://bitbucket.org/account/settings/app-authorizations/"),
         _ => None,
     }
 }
@@ -487,22 +611,30 @@ pub fn rotate_gitlab_pat(token: &str) -> Result<String> {
     let req = client
         .post("https://gitlab.com/api/v4/personal_access_tokens/self/rotate")
         .header("Authorization", format!("Bearer {}", token));
-    let resp = req.send().map_err(|e| ToriiError::Network { provider: "gitlab".into(), message: format!("GitLab rotate PAT: {}", e) })?;
+    let resp = req.send().map_err(|e| ToriiError::Network {
+        provider: "gitlab".into(),
+        message: format!("GitLab rotate PAT: {}", e),
+    })?;
     let status = resp.status().as_u16();
     let body = resp.text().unwrap_or_default();
     if status != 200 && status != 201 {
-        return Err(ToriiError::Network { provider: "gitlab".into(), message: format!(
-            "GitLab rotate PAT returned HTTP {}: {}", status, body
-        ) });
+        return Err(ToriiError::Network {
+            provider: "gitlab".into(),
+            message: format!("GitLab rotate PAT returned HTTP {}: {}", status, body),
+        });
     }
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| {
-        ToriiError::MalformedResponse { provider: "gitlab".into(), message: format!("parse rotate response: {}", e) }
-    })?;
-    json["token"].as_str()
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| ToriiError::MalformedResponse {
+            provider: "gitlab".into(),
+            message: format!("parse rotate response: {}", e),
+        })?;
+    json["token"]
+        .as_str()
         .map(String::from)
-        .ok_or_else(|| ToriiError::Auth { provider: "gitlab".into(), message: format!(
-            "GitLab rotate PAT response missing `token`: {}", body
-        ) })
+        .ok_or_else(|| ToriiError::Auth {
+            provider: "gitlab".into(),
+            message: format!("GitLab rotate PAT response missing `token`: {}", body),
+        })
 }
 
 // =============================================================================
@@ -525,8 +657,8 @@ use std::net::TcpListener;
 
 struct AuthCodeProvider {
     authorize_url: &'static str,
-    token_url:     &'static str,
-    scopes:        &'static str,
+    token_url: &'static str,
+    scopes: &'static str,
     client_id_env: &'static str,
     bundled_client_id: Option<&'static str>,
     /// Env var name for the OAuth client_secret. Some providers (e.g.
@@ -557,19 +689,26 @@ const LOOPBACK_PATH: &str = "/callback";
 /// Run the authorization-code flow for `provider`. Blocks until the
 /// user authorises (success) or the listener is interrupted.
 pub fn run_auth_code_flow(provider: &str) -> Result<String> {
-    let cfg = auth_code_provider(provider).ok_or_else(|| ToriiError::InvalidConfig(format!(
-        "OAuth authorization-code flow not configured for `{}`.", provider
-    )))?;
+    let cfg = auth_code_provider(provider).ok_or_else(|| {
+        ToriiError::InvalidConfig(format!(
+            "OAuth authorization-code flow not configured for `{}`.",
+            provider
+        ))
+    })?;
 
-    let client_id = std::env::var(cfg.client_id_env).ok()
+    let client_id = std::env::var(cfg.client_id_env)
+        .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| ToriiError::InvalidConfig(format!(
-            "No OAuth client_id for `{}`. Set {} or create a PAT manually and run \
+        .ok_or_else(|| {
+            ToriiError::InvalidConfig(format!(
+                "No OAuth client_id for `{}`. Set {} or create a PAT manually and run \
              `torii auth set {} ...`.",
-            provider, cfg.client_id_env, provider
-        )))?;
+                provider, cfg.client_id_env, provider
+            ))
+        })?;
 
-    let client_secret = cfg.client_secret_env
+    let client_secret = cfg
+        .client_secret_env
         .and_then(|name| std::env::var(name).ok());
 
     // PKCE: random verifier + SHA-256 challenge. RFC 7636 demands the
@@ -594,28 +733,38 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     // Bind the loopback listener BEFORE printing the URL so we can
     // fail fast if the port is busy. Lossless: if another torii flow
     // is in progress on 8888 the user finds out immediately.
-    let listener = TcpListener::bind(("127.0.0.1", LOOPBACK_PORT))
-        .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!(
-            "OAuth loopback: cannot bind 127.0.0.1:{} ({}). Is another flow already running?",
-            LOOPBACK_PORT, e
-        ) })?;
+    let listener =
+        TcpListener::bind(("127.0.0.1", LOOPBACK_PORT)).map_err(|e| ToriiError::Network {
+            provider: "oauth".into(),
+            message: format!(
+                "OAuth loopback: cannot bind 127.0.0.1:{} ({}). Is another flow already running?",
+                LOOPBACK_PORT, e
+            ),
+        })?;
 
     println!();
     println!("⛩  Open this URL in your browser to authorise Torii:");
     println!();
     println!("   {}", authz_url);
     println!();
-    println!("Waiting for the redirect on localhost:{}{}…", LOOPBACK_PORT, LOOPBACK_PATH);
+    println!(
+        "Waiting for the redirect on localhost:{}{}…",
+        LOOPBACK_PORT, LOOPBACK_PATH
+    );
 
     // Accept a single connection.
-    let (mut stream, _addr) = listener.accept()
-        .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!("OAuth loopback accept: {}", e) })?;
+    let (mut stream, _addr) = listener.accept().map_err(|e| ToriiError::Network {
+        provider: "oauth".into(),
+        message: format!("OAuth loopback accept: {}", e),
+    })?;
 
     // Read the request line + a bit of the headers — we only need the
     // URL path with the code+state query string.
     let mut buf = [0u8; 4096];
-    let n = stream.read(&mut buf)
-        .map_err(|e| ToriiError::Network { provider: "oauth".into(), message: format!("OAuth loopback read: {}", e) })?;
+    let n = stream.read(&mut buf).map_err(|e| ToriiError::Network {
+        provider: "oauth".into(),
+        message: format!("OAuth loopback read: {}", e),
+    })?;
     let request = String::from_utf8_lossy(&buf[..n]);
     let request_line = request.lines().next().unwrap_or("");
     // `GET /callback?code=...&state=... HTTP/1.1`
@@ -624,18 +773,24 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     // Always respond with something so the browser doesn't show an
     // error page — this happens before we know whether the code is
     // valid, so the response is best-effort.
-    let body = "<!doctype html><html><body><h2>⛩  Authorised — you can close this tab.</h2></body></html>";
+    let body =
+        "<!doctype html><html><body><h2>⛩  Authorised — you can close this tab.</h2></body></html>";
     let _ = write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         body.len(), body
     );
 
-    let (code, returned_state) = parse_callback(path_query)
-        .ok_or_else(|| ToriiError::Auth { provider: "oauth".into(), message: "OAuth callback didn't include a `code` parameter.".to_string() })?;
+    let (code, returned_state) = parse_callback(path_query).ok_or_else(|| ToriiError::Auth {
+        provider: "oauth".into(),
+        message: "OAuth callback didn't include a `code` parameter.".to_string(),
+    })?;
 
     if returned_state != state {
-        return Err(ToriiError::Auth { provider: "oauth".into(), message: "OAuth state mismatch (possible CSRF). Run the command again.".to_string() });
+        return Err(ToriiError::Auth {
+            provider: "oauth".into(),
+            message: "OAuth state mismatch (possible CSRF). Run the command again.".to_string(),
+        });
     }
 
     // Exchange the code for a token. Bitbucket accepts both client
@@ -643,17 +798,20 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     // available, fall back to PKCE alone.
     let client = crate::http::make_client();
     let mut params = vec![
-        ("grant_type",    "authorization_code".to_string()),
-        ("code",          code),
-        ("redirect_uri",  redirect_uri),
-        ("client_id",     client_id.clone()),
+        ("grant_type", "authorization_code".to_string()),
+        ("code", code),
+        ("redirect_uri", redirect_uri),
+        ("client_id", client_id.clone()),
         ("code_verifier", code_verifier),
     ];
-    let mut req = client.post(cfg.token_url).header("Accept", "application/json");
+    let mut req = client
+        .post(cfg.token_url)
+        .header("Accept", "application/json");
     if let Some(secret) = &client_secret {
         // Bitbucket prefers Basic auth for confidential consumers.
         use base64::Engine;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", client_id, secret));
+        let b64 =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", client_id, secret));
         req = req.header("Authorization", format!("Basic {}", b64));
     } else {
         // Public-client flow — Bitbucket needs client_id in the body
@@ -661,20 +819,36 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
         params.push(("client_secret_present", "false".to_string()));
         params.pop(); // remove the placeholder
     }
-    let resp = req.form(&params).send()
-        .map_err(|e| ToriiError::Auth { provider: "oauth".into(), message: format!("OAuth token exchange: {}", e) })?;
-    let json: serde_json::Value = resp.json()
-        .map_err(|e| ToriiError::Auth { provider: "oauth".into(), message: format!("OAuth token: malformed JSON: {}", e) })?;
+    let resp = req.form(&params).send().map_err(|e| ToriiError::Auth {
+        provider: "oauth".into(),
+        message: format!("OAuth token exchange: {}", e),
+    })?;
+    let json: serde_json::Value = resp.json().map_err(|e| ToriiError::Auth {
+        provider: "oauth".into(),
+        message: format!("OAuth token: malformed JSON: {}", e),
+    })?;
     if let Some(err) = json.get("error").and_then(|v| v.as_str()) {
-        return Err(ToriiError::Auth { provider: "oauth".into(), message: format!(
-            "OAuth token exchange failed: {} — {}", err,
-            json.get("error_description").and_then(|v| v.as_str()).unwrap_or("")
-        ) });
+        return Err(ToriiError::Auth {
+            provider: "oauth".into(),
+            message: format!(
+                "OAuth token exchange failed: {} — {}",
+                err,
+                json.get("error_description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+            ),
+        });
     }
-    let token = json.get("access_token").and_then(|v| v.as_str())
-        .ok_or_else(|| ToriiError::Auth { provider: "oauth".into(), message: format!(
-            "OAuth token exchange: response had no access_token. Body: {}", json
-        ) })?
+    let token = json
+        .get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ToriiError::Auth {
+            provider: "oauth".into(),
+            message: format!(
+                "OAuth token exchange: response had no access_token. Body: {}",
+                json
+            ),
+        })?
         .to_string();
 
     println!("✅ Authorised. Token saved.");
@@ -690,7 +864,7 @@ fn parse_callback(path_query: &str) -> Option<(String, String)> {
     for pair in qs.split('&') {
         let mut iter = pair.splitn(2, '=');
         match (iter.next(), iter.next()) {
-            (Some("code"), Some(v))  => code  = Some(urldecode(v)),
+            (Some("code"), Some(v)) => code = Some(urldecode(v)),
             (Some("state"), Some(v)) => state = Some(urldecode(v)),
             _ => {}
         }
@@ -702,11 +876,13 @@ fn parse_callback(path_query: &str) -> Option<(String, String)> {
 /// `std::time` mixed with a per-process counter — enough entropy for a
 /// short-lived PKCE verifier without pulling in `rand`.
 fn random_verifier() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
     let mut seed = [0u8; 48];
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let pid = std::process::id() as u64;
     let bump = COUNTER.fetch_add(1, Ordering::Relaxed);
     seed[..8].copy_from_slice(&now.as_nanos().to_le_bytes()[..8]);
@@ -752,10 +928,13 @@ fn urldecode(s: &str) -> String {
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
-            b'+' => { out.push(' '); i += 1; }
+            b'+' => {
+                out.push(' ');
+                i += 1;
+            }
             b'%' if i + 2 < bytes.len() => {
-                let hi = (bytes[i+1] as char).to_digit(16);
-                let lo = (bytes[i+2] as char).to_digit(16);
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
                 if let (Some(hi), Some(lo)) = (hi, lo) {
                     out.push(((hi << 4) | lo) as u8 as char);
                     i += 3;
@@ -764,7 +943,10 @@ fn urldecode(s: &str) -> String {
                     i += 1;
                 }
             }
-            c => { out.push(c as char); i += 1; }
+            c => {
+                out.push(c as char);
+                i += 1;
+            }
         }
     }
     out

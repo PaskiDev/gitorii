@@ -18,7 +18,11 @@ pub fn check() -> Option<String> {
     let informer = update_informer::new(registry::Crates, PKG_NAME, PKG_VERSION)
         .interval(interval)
         .timeout(Duration::from_secs(2));
-    informer.check_version().ok().flatten().map(|v| v.to_string())
+    informer
+        .check_version()
+        .ok()
+        .flatten()
+        .map(|v| v.to_string())
 }
 
 /// CLI banner — printed on stderr after command execution if an update is available.
@@ -30,7 +34,10 @@ pub fn maybe_notify() {
     if let Some(new_version) = check() {
         let cmd = update_command();
         eprintln!();
-        eprintln!("💡 New version of torii available: {} → {}", PKG_VERSION, new_version);
+        eprintln!(
+            "💡 New version of torii available: {} → {}",
+            PKG_VERSION, new_version
+        );
         eprintln!("   Update: {}", cmd);
         eprintln!("   Disable: torii config set update.check false");
     }
@@ -39,7 +46,10 @@ pub fn maybe_notify() {
 /// Suggested update command based on install method.
 pub fn update_command() -> &'static str {
     let exe = std::env::current_exe().ok();
-    let path = exe.as_ref().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
+    let path = exe
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
 
     if path.contains("/.cargo/bin/") {
         "cargo install gitorii  (or: cargo binstall gitorii)"

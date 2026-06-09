@@ -1,8 +1,8 @@
+use crate::error::{Result, ToriiError};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use serde::{Deserialize, Serialize};
-use crate::error::{Result, ToriiError};
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct WorkspaceConfig {
@@ -18,7 +18,9 @@ pub struct WorkspaceEntry {
 impl WorkspaceConfig {
     fn path() -> Result<PathBuf> {
         let dir = dirs::config_dir()
-            .ok_or_else(|| ToriiError::InvalidConfig("Could not determine config directory".to_string()))?
+            .ok_or_else(|| {
+                ToriiError::InvalidConfig("Could not determine config directory".to_string())
+            })?
             .join("torii");
         fs::create_dir_all(&dir)?;
         Ok(dir.join("workspaces.toml"))
@@ -30,7 +32,8 @@ impl WorkspaceConfig {
             return Ok(Self::default());
         }
         let s = fs::read_to_string(&path)?;
-        toml::from_str(&s).map_err(|e| ToriiError::Workspace(format!("Failed to parse workspaces.toml: {}", e)))
+        toml::from_str(&s)
+            .map_err(|e| ToriiError::Workspace(format!("Failed to parse workspaces.toml: {}", e)))
     }
 
     pub fn save(&self) -> Result<()> {
@@ -43,7 +46,10 @@ impl WorkspaceConfig {
 
     pub fn add_repo(&mut self, workspace: &str, repo_path: &str) -> Result<()> {
         let expanded = expand_path(repo_path)?;
-        let entry = self.workspace.entry(workspace.to_string()).or_insert(WorkspaceEntry { repos: vec![] });
+        let entry = self
+            .workspace
+            .entry(workspace.to_string())
+            .or_insert(WorkspaceEntry { repos: vec![] });
         let canonical = expanded.to_string_lossy().to_string();
         if !entry.repos.contains(&canonical) {
             entry.repos.push(canonical);
@@ -66,10 +72,11 @@ impl WorkspaceConfig {
 }
 
 fn expand_path(path: &str) -> Result<PathBuf> {
-    if path.starts_with("~/") {
-        let home = dirs::home_dir()
-            .ok_or_else(|| ToriiError::InvalidConfig("Could not determine home directory".to_string()))?;
-        Ok(home.join(&path[2..]))
+    if let Some(rest) = path.strip_prefix("~/") {
+        let home = dirs::home_dir().ok_or_else(|| {
+            ToriiError::InvalidConfig("Could not determine home directory".to_string())
+        })?;
+        Ok(home.join(rest))
     } else {
         Ok(PathBuf::from(path))
     }
@@ -139,8 +146,9 @@ impl WorkspaceManager {
     /// the entry's `error` field instead of aborting the sweep.
     pub fn status(workspace_name: &str) -> Result<Vec<WorkspaceRepoStatus>> {
         let cfg = WorkspaceConfig::load()?;
-        let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
+        let entry = cfg.get(workspace_name).ok_or_else(|| {
+            ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name))
+        })?;
 
         Ok(entry
             .repos
@@ -172,8 +180,9 @@ impl WorkspaceManager {
         mut on_repo: impl FnMut(&WorkspaceSaveResult),
     ) -> Result<Vec<WorkspaceSaveResult>> {
         let cfg = WorkspaceConfig::load()?;
-        let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
+        let entry = cfg.get(workspace_name).ok_or_else(|| {
+            ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name))
+        })?;
 
         Ok(entry
             .repos
@@ -201,8 +210,9 @@ impl WorkspaceManager {
         mut on_repo: impl FnMut(&WorkspaceSyncResult),
     ) -> Result<Vec<WorkspaceSyncResult>> {
         let cfg = WorkspaceConfig::load()?;
-        let entry = cfg.get(workspace_name)
-            .ok_or_else(|| ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name)))?;
+        let entry = cfg.get(workspace_name).ok_or_else(|| {
+            ToriiError::Workspace(format!("Workspace '{}' not found", workspace_name))
+        })?;
 
         Ok(entry
             .repos
@@ -210,7 +220,9 @@ impl WorkspaceManager {
             .map(|repo_path| {
                 let result = WorkspaceSyncResult {
                     name: repo_display_name(repo_path),
-                    error: Self::repo_sync(repo_path, force).err().map(|e| e.to_string()),
+                    error: Self::repo_sync(repo_path, force)
+                        .err()
+                        .map(|e| e.to_string()),
                 };
                 on_repo(&result);
                 result
@@ -244,7 +256,10 @@ impl WorkspaceManager {
         let expanded = expand_path(repo_path)?;
 
         if !expanded.exists() {
-            return Err(ToriiError::Usage(format!("Path does not exist: {}", expanded.display())));
+            return Err(ToriiError::Usage(format!(
+                "Path does not exist: {}",
+                expanded.display()
+            )));
         }
 
         cfg.add_repo(workspace, repo_path)?;
@@ -262,7 +277,10 @@ impl WorkspaceManager {
     pub fn delete(workspace: &str) -> Result<()> {
         let mut cfg = WorkspaceConfig::load()?;
         if cfg.workspace.remove(workspace).is_none() {
-            return Err(ToriiError::Workspace(format!("Workspace '{}' not found", workspace)));
+            return Err(ToriiError::Workspace(format!(
+                "Workspace '{}' not found",
+                workspace
+            )));
         }
         cfg.save()?;
         Ok(())
@@ -274,14 +292,15 @@ impl WorkspaceManager {
         let repo = git2::Repository::discover(repo_path)
             .map_err(|_| ToriiError::Usage(format!("Not a git repo: {}", repo_path)))?;
 
-        let branch = repo.head().ok()
+        let branch = repo
+            .head()
+            .ok()
             .and_then(|h| h.shorthand().map(|s| s.to_string()))
             .unwrap_or_else(|| "detached".to_string());
 
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(true);
-        let statuses = repo.statuses(Some(&mut opts))
-            .map_err(|e| ToriiError::Git(e))?;
+        let statuses = repo.statuses(Some(&mut opts)).map_err(ToriiError::Git)?;
 
         let mut staged = 0usize;
         let mut unstaged = 0usize;
@@ -290,19 +309,37 @@ impl WorkspaceManager {
         for entry in statuses.iter() {
             let s = entry.status();
             if s.intersects(
-                git2::Status::INDEX_NEW | git2::Status::INDEX_MODIFIED |
-                git2::Status::INDEX_DELETED | git2::Status::INDEX_RENAMED
-            ) { staged += 1; }
+                git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_DELETED
+                    | git2::Status::INDEX_RENAMED,
+            ) {
+                staged += 1;
+            }
             if s.intersects(
-                git2::Status::WT_MODIFIED | git2::Status::WT_DELETED | git2::Status::WT_RENAMED
-            ) { unstaged += 1; }
-            if s.contains(git2::Status::WT_NEW) { untracked += 1; }
+                git2::Status::WT_MODIFIED | git2::Status::WT_DELETED | git2::Status::WT_RENAMED,
+            ) {
+                unstaged += 1;
+            }
+            if s.contains(git2::Status::WT_NEW) {
+                untracked += 1;
+            }
         }
 
         // Ahead/behind vs origin
         let (ahead, behind) = Self::ahead_behind(&repo, &branch).unwrap_or((0, 0));
 
-        Ok(WorkspaceRepoStatus { path: repo_path.to_string(), name, branch, ahead, behind, staged, unstaged, untracked, error: None })
+        Ok(WorkspaceRepoStatus {
+            path: repo_path.to_string(),
+            name,
+            branch,
+            ahead,
+            behind,
+            staged,
+            unstaged,
+            untracked,
+            error: None,
+        })
     }
 
     fn ahead_behind(repo: &git2::Repository, branch: &str) -> Option<(usize, usize)> {
@@ -319,8 +356,10 @@ impl WorkspaceManager {
         // Check for changes
         let mut opts = git2::StatusOptions::new();
         opts.include_untracked(false);
-        let statuses = repo.repository().statuses(Some(&mut opts))
-            .map_err(|e| ToriiError::Git(e))?;
+        let statuses = repo
+            .repository()
+            .statuses(Some(&mut opts))
+            .map_err(ToriiError::Git)?;
 
         if statuses.is_empty() {
             return Ok(false);
@@ -331,13 +370,15 @@ impl WorkspaceManager {
         }
 
         // Re-check after staging
-        let mut index = repo.repository().index()
-            .map_err(|e| ToriiError::Git(e))?;
-        index.read(true).map_err(|e| ToriiError::Git(e))?;
-        let tree_oid = index.write_tree().map_err(|e| ToriiError::Git(e))?;
+        let mut index = repo.repository().index().map_err(ToriiError::Git)?;
+        index.read(true).map_err(ToriiError::Git)?;
+        let tree_oid = index.write_tree().map_err(ToriiError::Git)?;
 
         // Check if there's actually something staged
-        let head_tree = repo.repository().head().ok()
+        let head_tree = repo
+            .repository()
+            .head()
+            .ok()
             .and_then(|h| h.peel_to_tree().ok());
         if let Some(head) = head_tree {
             if head.id() == tree_oid {

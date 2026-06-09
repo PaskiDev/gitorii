@@ -33,15 +33,11 @@ pub(super) fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> 
     if app.log.ops_mode {
         let ops_len = crate::tui::views::log::log_ops().len();
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.log.ops_idx > 0 {
-                    app.log.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.log.ops_idx > 0 => {
+                app.log.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.log.ops_idx + 1 < ops_len {
-                    app.log.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.log.ops_idx + 1 < ops_len => {
+                app.log.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.log.ops_idx;

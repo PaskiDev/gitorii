@@ -8,18 +8,18 @@
 //! - [`add`]      — register a new submodule, clone it, stage it for commit.
 //! - [`status`]   — list submodules with HEAD, index, working-tree state.
 //! - [`init`]     — copy `.gitmodules` URLs into `.git/config` (so update
-//!                  knows where to fetch from). Idempotent.
+//!   knows where to fetch from). Idempotent.
 //! - [`update`]   — fetch + checkout the commit each submodule is pinned
-//!                  at. Equivalent to `git submodule update --init`.
+//!   at. Equivalent to `git submodule update --init`.
 //! - [`sync`]     — re-copy `.gitmodules` URLs into `.git/config` (useful
-//!                  after the upstream submodule URL changes).
+//!   after the upstream submodule URL changes).
 //! - [`foreach`]  — run an arbitrary command inside each submodule's
-//!                  working directory, with `SUBMODULE_NAME` / `_PATH` in
-//!                  the environment. Stops at the first failure.
+//!   working directory, with `SUBMODULE_NAME` / `_PATH` in
+//!   the environment. Stops at the first failure.
 //! - [`remove`]   — deregister a submodule cleanly: scrub `.gitmodules`,
-//!                  remove from `.git/config`, delete `.git/modules/<n>`,
-//!                  and `git rm` the working-tree path. Stages the
-//!                  deletion for commit.
+//!   remove from `.git/config`, delete `.git/modules/<n>`,
+//!   and `git rm` the working-tree path. Stages the
+//!   deletion for commit.
 //!
 //! Design notes:
 //!

@@ -85,7 +85,7 @@ impl TuiSettings {
                     }
                 }
                 "graph_style" => {
-                    s.graph_style = crate::graph::GraphStyle::from_str(val);
+                    s.graph_style = val.parse().unwrap_or_default();
                 }
                 _ => {}
             }
@@ -126,18 +126,10 @@ fn parse_rgb(s: &str) -> Option<(u8, u8, u8)> {
     ))
 }
 
+#[derive(Default)]
 pub struct SettingsState {
     pub idx: usize,
     pub status: Option<String>,
-}
-
-impl Default for SettingsState {
-    fn default() -> Self {
-        Self {
-            idx: 0,
-            status: None,
-        }
-    }
 }
 
 // -- Worktree view ---------------------------------------------------------

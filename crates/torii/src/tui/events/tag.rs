@@ -21,10 +21,8 @@ pub(super) fn handle_tag(key: event::KeyEvent, app: &mut App) -> Option<Action> 
         }
         TagConfirm::CreateName => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.tag_view.new_name.trim().is_empty() {
-                        app.tag_view.confirm = TagConfirm::CreateMessage;
-                    }
+                (_, KeyCode::Enter) if !app.tag_view.new_name.trim().is_empty() => {
+                    app.tag_view.confirm = TagConfirm::CreateMessage;
                 }
                 (_, KeyCode::Backspace) => {
                     app.tag_view.new_name.pop();
@@ -54,15 +52,11 @@ pub(super) fn handle_tag(key: event::KeyEvent, app: &mut App) -> Option<Action> 
     }
     if app.tag_view.ops_mode {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.tag_view.ops_idx > 0 {
-                    app.tag_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.tag_view.ops_idx > 0 => {
+                app.tag_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.tag_view.ops_idx < 2 {
-                    app.tag_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.tag_view.ops_idx < 2 => {
+                app.tag_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.tag_view.ops_idx;
@@ -74,10 +68,8 @@ pub(super) fn handle_tag(key: event::KeyEvent, app: &mut App) -> Option<Action> 
                         app.tag_view.new_message.clear();
                         app.tag_view.confirm = TagConfirm::CreateName;
                     }
-                    2 => {
-                        if !app.tag_view.tags.is_empty() {
-                            app.tag_view.confirm = TagConfirm::Delete;
-                        }
+                    2 if !app.tag_view.tags.is_empty() => {
+                        app.tag_view.confirm = TagConfirm::Delete;
                     }
                     _ => {}
                 }

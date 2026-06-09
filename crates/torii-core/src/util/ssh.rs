@@ -1,7 +1,7 @@
-use std::path::PathBuf;
-use std::fs;
 use crate::error::Result;
 use dirs;
+use std::fs;
+use std::path::PathBuf;
 
 /// SSH key detection and management
 pub struct SshHelper;
@@ -15,16 +15,9 @@ impl SshHelper {
         }
 
         // Check for common SSH key files
-        let key_files = vec![
-            "id_rsa",
-            "id_ed25519",
-            "id_ecdsa",
-            "id_dsa",
-        ];
+        let key_files = ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"];
 
-        key_files.iter().any(|key| {
-            ssh_dir.join(key).exists()
-        })
+        key_files.iter().any(|key| ssh_dir.join(key).exists())
     }
 
     /// Get SSH directory path
@@ -41,12 +34,7 @@ impl SshHelper {
             return vec![];
         }
 
-        let key_files = vec![
-            "id_rsa",
-            "id_ed25519",
-            "id_ecdsa",
-            "id_dsa",
-        ];
+        let key_files = ["id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"];
 
         key_files
             .iter()
@@ -60,7 +48,7 @@ impl SshHelper {
     pub fn get_public_key(key_name: &str) -> Result<String> {
         let ssh_dir = Self::ssh_dir();
         let pub_key_path = ssh_dir.join(format!("{}.pub", key_name));
-        
+
         if !pub_key_path.exists() {
             return Ok(String::new());
         }
@@ -82,7 +70,7 @@ impl SshHelper {
     #[allow(dead_code)]
     pub fn get_setup_instructions() -> String {
         let mut instructions = String::new();
-        
+
         instructions.push_str("📚 SSH Setup Instructions:\n\n");
         instructions.push_str("1. Generate SSH key:\n");
         instructions.push_str("   ssh-keygen -t ed25519 -C \"your_email@example.com\"\n\n");
@@ -95,7 +83,7 @@ impl SshHelper {
         instructions.push_str("   • GitHub: https://github.com/settings/keys\n");
         instructions.push_str("   • GitLab: https://gitlab.com/-/profile/keys\n");
         instructions.push_str("   • Bitbucket: https://bitbucket.org/account/settings/ssh-keys/\n");
-        
+
         instructions
     }
 }

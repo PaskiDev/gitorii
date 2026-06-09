@@ -136,15 +136,13 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                 app.pr_view.confirm = PrConfirm::None;
                 app.pr_view.create_input.clear();
             }
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.branch_idx > 0 {
-                    app.pr_view.branch_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.branch_idx > 0 => {
+                app.pr_view.branch_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() {
-                    app.pr_view.branch_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() =>
+            {
+                app.pr_view.branch_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 if let Some(branch) = app.pr_view.branches.get(app.pr_view.branch_idx) {
@@ -176,15 +174,13 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                 app.pr_view.confirm = PrConfirm::None;
                 app.pr_view.create_input.clear();
             }
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.branch_idx > 0 {
-                    app.pr_view.branch_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.branch_idx > 0 => {
+                app.pr_view.branch_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() {
-                    app.pr_view.branch_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() =>
+            {
+                app.pr_view.branch_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 if let Some(branch) = app.pr_view.branches.get(app.pr_view.branch_idx) {
@@ -205,10 +201,8 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             (_, KeyCode::Esc) => {
                 app.pr_view.confirm = PrConfirm::None;
             }
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.create_platform_idx > 0 {
-                    app.pr_view.create_platform_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.create_platform_idx > 0 => {
+                app.pr_view.create_platform_idx -= 1;
             }
             (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
                 let n = app.pr_view.available_platforms.len();
@@ -245,15 +239,13 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             (_, KeyCode::Esc) => {
                 app.pr_view.confirm = PrConfirm::None;
             }
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.platform_idx > 0 {
-                    app.pr_view.platform_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.platform_idx > 0 => {
+                app.pr_view.platform_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.pr_view.platform_idx + 1 < app.pr_view.available_platforms.len() {
-                    app.pr_view.platform_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.pr_view.platform_idx + 1 < app.pr_view.available_platforms.len() =>
+            {
+                app.pr_view.platform_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 return Some(Action::PrSwitchPlatform);
@@ -337,15 +329,13 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                 app.pr_view.edit_input.clear();
                 app.pr_view.edit_desc.clear();
             }
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.branch_idx > 0 {
-                    app.pr_view.branch_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.branch_idx > 0 => {
+                app.pr_view.branch_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() {
-                    app.pr_view.branch_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.pr_view.branch_idx + 1 < app.pr_view.branches.len() =>
+            {
+                app.pr_view.branch_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 app.pr_view.confirm = PrConfirm::None;
@@ -363,15 +353,11 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
             (_, KeyCode::Esc) => {
                 app.pr_view.confirm = PrConfirm::None;
             }
-            (_, KeyCode::Left) | (_, KeyCode::Char('h')) => {
-                if app.pr_view.merge_method > 0 {
-                    app.pr_view.merge_method -= 1;
-                }
+            (_, KeyCode::Left) | (_, KeyCode::Char('h')) if app.pr_view.merge_method > 0 => {
+                app.pr_view.merge_method -= 1;
             }
-            (_, KeyCode::Right) | (_, KeyCode::Char('l')) => {
-                if app.pr_view.merge_method < 2 {
-                    app.pr_view.merge_method += 1;
-                }
+            (_, KeyCode::Right) | (_, KeyCode::Char('l')) if app.pr_view.merge_method < 2 => {
+                app.pr_view.merge_method += 1;
             }
             (_, KeyCode::Enter) => {
                 app.pr_view.confirm = PrConfirm::None;
@@ -401,15 +387,11 @@ pub(super) fn handle_pr(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     // Ops dropdown
     if app.pr_view.ops_mode {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.pr_view.ops_idx > 0 {
-                    app.pr_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.pr_view.ops_idx > 0 => {
+                app.pr_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.pr_view.ops_idx < 6 {
-                    app.pr_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.pr_view.ops_idx < 6 => {
+                app.pr_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.pr_view.ops_idx;

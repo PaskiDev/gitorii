@@ -8,13 +8,13 @@
 //! which is the canonical URL → (`platform`, `owner`, `repo`) parser
 //! shared by every CLI command that accepts `--remote`.
 
-pub mod pr;
 pub mod issue;
-pub mod pipeline;
-pub mod release;
 pub mod package;
-pub mod runner;
+pub mod pipeline;
+pub mod pr;
 pub mod registry;
+pub mod release;
+pub mod runner;
 
 // Per-platform client implementations.
 pub mod azure;

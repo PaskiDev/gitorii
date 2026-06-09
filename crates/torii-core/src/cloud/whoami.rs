@@ -19,8 +19,14 @@ pub fn whoami(client: &CloudClient) -> Result<WhoAmI> {
     let resp = client
         .get("/api/v1/whoami")
         .send()
-        .map_err(|e| ToriiError::Network { provider: "gitorii.com".into(), message: format!("whoami request: {}", e) })?;
+        .map_err(|e| ToriiError::Network {
+            provider: "gitorii.com".into(),
+            message: format!("whoami request: {}", e),
+        })?;
     let resp = check_status(resp)?;
     resp.json::<WhoAmI>()
-        .map_err(|e| ToriiError::MalformedResponse { provider: "gitorii.com".into(), message: format!("whoami parse: {}", e) })
+        .map_err(|e| ToriiError::MalformedResponse {
+            provider: "gitorii.com".into(),
+            message: format!("whoami parse: {}", e),
+        })
 }

@@ -75,7 +75,11 @@ pub(crate) fn check_status(resp: Response) -> Result<Response> {
         s if (500..=599).contains(&s) => format!("server error {}: {}", s, short_body(&body)),
         s => format!("unexpected HTTP {}: {}", s, short_body(&body)),
     };
-    Err(ToriiError::PlatformApi { provider: "gitorii.com".into(), status: status.as_u16(), message: msg })
+    Err(ToriiError::PlatformApi {
+        provider: "gitorii.com".into(),
+        status: status.as_u16(),
+        message: msg,
+    })
 }
 
 fn short_body(body: &str) -> String {

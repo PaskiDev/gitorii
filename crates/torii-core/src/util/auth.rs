@@ -89,15 +89,14 @@ pub const PROVIDERS: &[&str] = &[
     "codeberg",
     "bitbucket",
     "sourcehut",
-    "azure",      // 0.7.18 — Azure DevOps Repos / Pipelines / Releases / Artifacts
+    "azure", // 0.7.18 — Azure DevOps Repos / Pipelines / Releases / Artifacts
     "cargo",
 ];
 
 // -- Default endpoint for cloud --------------------------------------------
 
 pub fn default_endpoint() -> String {
-    std::env::var("TORII_API_ENDPOINT")
-        .unwrap_or_else(|_| "https://api.gitorii.com".to_string())
+    std::env::var("TORII_API_ENDPOINT").unwrap_or_else(|_| "https://api.gitorii.com".to_string())
 }
 
 // -- Paths -----------------------------------------------------------------
@@ -163,8 +162,7 @@ pub fn load_local_raw<P: AsRef<Path>>(repo_path: P) -> AuthStore {
 /// Persist a store to disk with chmod 600 on Unix.
 fn save_to(path: &Path, store: &AuthStore) -> Result<()> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| ToriiError::Fs(format!("create dir: {}", e)))?;
+        fs::create_dir_all(parent).map_err(|e| ToriiError::Fs(format!("create dir: {}", e)))?;
     }
     let mut out = String::new();
     out.push_str("# torii credentials — managed by 'torii auth …'. Do not share.\n\n");
@@ -193,8 +191,7 @@ fn save_to(path: &Path, store: &AuthStore) -> Result<()> {
             out.push_str(&format!("{} = \"{}\"\n", k, v));
         }
     }
-    fs::write(path, out)
-        .map_err(|e| ToriiError::Fs(format!("write {}: {}", path.display(), e)))?;
+    fs::write(path, out).map_err(|e| ToriiError::Fs(format!("write {}: {}", path.display(), e)))?;
     restrict_permissions(path);
     Ok(())
 }
@@ -229,9 +226,8 @@ pub fn delete() -> Result<()> {
         // Whole file was just the cloud key — remove it entirely.
         if let Some(path) = global_path() {
             if path.exists() {
-                fs::remove_file(&path).map_err(|e| {
-                    ToriiError::Fs(format!("remove {}: {}", path.display(), e))
-                })?;
+                fs::remove_file(&path)
+                    .map_err(|e| ToriiError::Fs(format!("remove {}: {}", path.display(), e)))?;
             }
         }
         return Ok(());
@@ -304,7 +300,9 @@ pub fn set_token_with_refresh(
         when.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     });
     let mut store = load_global();
-    store.tokens.insert(provider.clone(), access_token.to_string());
+    store
+        .tokens
+        .insert(provider.clone(), access_token.to_string());
     apply_expiry(&mut store.expirations, &provider, expires_at.as_deref());
     if let Some(r) = refresh_token {
         store.refresh_tokens.insert(provider.clone(), r.to_string());
@@ -329,14 +327,18 @@ pub fn refresh_if_needed(provider: &str) -> Result<bool> {
     // Only refresh when within 5 minutes of expiry. Earlier than
     // that and we waste round-trips; later than that and the platform
     // may already be rejecting.
-    let due = store.expirations.get(&provider_lc)
+    let due = store
+        .expirations
+        .get(&provider_lc)
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|when| {
             let now = chrono::Utc::now();
             when.with_timezone(&chrono::Utc) - now < chrono::Duration::minutes(5)
         })
         .unwrap_or(false);
-    if !due { return Ok(false); }
+    if !due {
+        return Ok(false);
+    }
 
     let (new_access, new_refresh, expires_in) =
         crate::oauth::refresh_access_token(&provider_lc, &refresh)?;
@@ -351,8 +353,12 @@ pub fn refresh_if_needed(provider: &str) -> Result<bool> {
 
 fn apply_expiry(map: &mut BTreeMap<String, String>, provider: &str, expires_at: Option<&str>) {
     match expires_at {
-        Some(s) if !s.is_empty() => { map.insert(provider.to_string(), s.to_string()); }
-        _ => { map.remove(provider); }
+        Some(s) if !s.is_empty() => {
+            map.insert(provider.to_string(), s.to_string());
+        }
+        _ => {
+            map.remove(provider);
+        }
     }
 }
 
@@ -417,7 +423,9 @@ pub struct ResolvedToken {
 // mid-run; the few mutating commands (`set_token`, `remove_token`)
 // invalidate the cache below.
 fn token_cache() -> &'static std::sync::Mutex<std::collections::HashMap<String, ResolvedToken>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, ResolvedToken>>> = std::sync::OnceLock::new();
+    static CACHE: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<String, ResolvedToken>>,
+    > = std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
@@ -455,7 +463,11 @@ pub fn resolve_token<P: AsRef<Path>>(provider: &str, repo_path: P) -> ResolvedTo
     // own error path decides what to do with the 401 that follows.
     let _ = refresh_if_needed(provider);
 
-    let key = format!("{}|{}", provider.to_lowercase(), repo_path.as_ref().display());
+    let key = format!(
+        "{}|{}",
+        provider.to_lowercase(),
+        repo_path.as_ref().display()
+    );
     if let Ok(g) = token_cache().lock() {
         if let Some(hit) = g.get(&key) {
             return hit.clone();
@@ -537,7 +549,7 @@ fn env_vars_for(provider: &str) -> &'static [&'static str] {
         "forgejo" => &["FORGEJO_TOKEN"],
         "codeberg" => &["CODEBERG_TOKEN"],
         "bitbucket" => &["BITBUCKET_TOKEN"],
-        "azure"     => &["AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "AZDO_TOKEN"],
+        "azure" => &["AZURE_DEVOPS_TOKEN", "AZURE_DEVOPS_EXT_PAT", "AZDO_TOKEN"],
         "sourcehut" => &["SOURCEHUT_TOKEN", "SRHT_TOKEN"],
         "cargo" => &["CARGO_REGISTRY_TOKEN"],
         _ => &[],

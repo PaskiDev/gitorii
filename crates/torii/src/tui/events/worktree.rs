@@ -14,15 +14,13 @@ pub(super) fn handle_worktree(key: event::KeyEvent, app: &mut App) -> Option<Act
     match app.worktree_view.focus {
         WorktreeFocus::List => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.worktree_view.idx > 0 {
-                        app.worktree_view.idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.worktree_view.idx > 0 => {
+                    app.worktree_view.idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.worktree_view.idx + 1 < app.worktree_view.items.len() {
-                        app.worktree_view.idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.worktree_view.idx + 1 < app.worktree_view.items.len() =>
+                {
+                    app.worktree_view.idx += 1;
                 }
                 (KeyModifiers::NONE, KeyCode::Char('o')) => {
                     app.worktree_view.dropdown_idx = 0;
@@ -35,15 +33,15 @@ pub(super) fn handle_worktree(key: event::KeyEvent, app: &mut App) -> Option<Act
         WorktreeFocus::OpsDropdown => {
             let ops = crate::tui::views::worktree::ops_for(&app.worktree_view);
             match (key.modifiers, key.code) {
-                (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                    if app.worktree_view.dropdown_idx > 0 {
-                        app.worktree_view.dropdown_idx -= 1;
-                    }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k'))
+                    if app.worktree_view.dropdown_idx > 0 =>
+                {
+                    app.worktree_view.dropdown_idx -= 1;
                 }
-                (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                    if app.worktree_view.dropdown_idx + 1 < ops.len() {
-                        app.worktree_view.dropdown_idx += 1;
-                    }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.worktree_view.dropdown_idx + 1 < ops.len() =>
+                {
+                    app.worktree_view.dropdown_idx += 1;
                 }
                 (_, KeyCode::Enter) => return dispatch_worktree_op(app),
                 _ => {}

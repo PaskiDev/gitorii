@@ -410,6 +410,7 @@ pub(crate) fn run(action: &RunnerCommands, remote: &String) -> Result<()> {
 /// We never copy the platform's logic; we just hand it the token and
 /// a tidy argv. If the binary is missing we tell the user where to
 /// install it from, instead of trying to ship our own.
+#[allow(clippy::too_many_arguments)]
 fn run_runner_register(
     platform: &str,
     reg: &crate::runner::RegistrationToken,
@@ -678,6 +679,7 @@ fn container_name(suffix: &str) -> String {
 /// the current project. Two-phase: `docker run` to start the agent,
 /// then `docker exec gitlab-runner register` inside to attach it.
 /// Mirrors the manual flow the user has been doing by hand.
+#[allow(clippy::too_many_arguments)]
 fn run_runner_spawn(
     platform: &str,
     owner: &str,

@@ -13,11 +13,9 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
                     app.issue_view.confirm = IssueConfirm::None;
                     app.issue_view.create_title.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.issue_view.create_title.is_empty() {
-                        app.issue_view.create_desc.clear();
-                        app.issue_view.confirm = IssueConfirm::CreateDesc;
-                    }
+                (_, KeyCode::Enter) if !app.issue_view.create_title.is_empty() => {
+                    app.issue_view.create_desc.clear();
+                    app.issue_view.confirm = IssueConfirm::CreateDesc;
                 }
                 (_, KeyCode::Backspace) => {
                     app.issue_view.create_title.pop();
@@ -63,10 +61,8 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
                     app.issue_view.confirm = IssueConfirm::None;
                     app.issue_view.comment_input.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.issue_view.comment_input.is_empty() {
-                        return Some(Action::IssueComment);
-                    }
+                (_, KeyCode::Enter) if !app.issue_view.comment_input.is_empty() => {
+                    return Some(Action::IssueComment);
                 }
                 (_, KeyCode::Backspace) => {
                     app.issue_view.comment_input.pop();
@@ -101,15 +97,11 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
     // ops dropdown
     if app.issue_view.ops_mode {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.issue_view.ops_idx > 0 {
-                    app.issue_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.issue_view.ops_idx > 0 => {
+                app.issue_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.issue_view.ops_idx < 3 {
-                    app.issue_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.issue_view.ops_idx < 3 => {
+                app.issue_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.issue_view.ops_idx;
@@ -145,15 +137,13 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
         return Some(a);
     }
     match (key.modifiers, key.code) {
-        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-            if app.issue_view.idx > 0 {
-                app.issue_view.idx -= 1;
-            }
+        (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.issue_view.idx > 0 => {
+            app.issue_view.idx -= 1;
         }
-        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-            if app.issue_view.idx + 1 < app.issue_view.issues.len() {
-                app.issue_view.idx += 1;
-            }
+        (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+            if app.issue_view.idx + 1 < app.issue_view.issues.len() =>
+        {
+            app.issue_view.idx += 1;
         }
         (_, KeyCode::Char('o')) => {
             app.issue_view.ops_mode = true;

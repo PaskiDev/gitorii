@@ -47,15 +47,11 @@ pub(super) fn handle_branch(key: event::KeyEvent, app: &mut App) -> Option<Actio
     }
     if app.branch_view.ops_mode {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.branch_view.ops_idx > 0 {
-                    app.branch_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.branch_view.ops_idx > 0 => {
+                app.branch_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.branch_view.ops_idx < 3 {
-                    app.branch_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.branch_view.ops_idx < 3 => {
+                app.branch_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.branch_view.ops_idx;
@@ -66,10 +62,8 @@ pub(super) fn handle_branch(key: event::KeyEvent, app: &mut App) -> Option<Actio
                         app.branch_view.new_name.clear();
                         app.branch_view.confirm = BranchConfirm::NewBranch;
                     }
-                    2 => {
-                        if !app.branch_view.current_has_upstream {
-                            return Some(Action::BranchPush);
-                        }
+                    2 if !app.branch_view.current_has_upstream => {
+                        return Some(Action::BranchPush);
                     }
                     3 => {
                         if let Some(b) = app.branch_view.branches.get(app.branch_view.idx) {

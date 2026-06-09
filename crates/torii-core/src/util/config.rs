@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
-use std::fs;
-use serde::{Deserialize, Serialize};
 use crate::error::{Result, ToriiError};
+use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// Global Torii configuration
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -81,7 +81,10 @@ pub struct UpdateConfig {
 
 impl Default for UpdateConfig {
     fn default() -> Self {
-        Self { check: true, interval_hours: 24 }
+        Self {
+            check: true,
+            interval_hours: 24,
+        }
     }
 }
 
@@ -107,10 +110,10 @@ pub struct AuthConfig {
 pub struct UserConfig {
     /// Default author name for commits
     pub name: Option<String>,
-    
+
     /// Default author email for commits
     pub email: Option<String>,
-    
+
     /// Preferred editor
     pub editor: Option<String>,
 }
@@ -119,13 +122,13 @@ pub struct UserConfig {
 pub struct SnapshotConfig {
     /// Enable auto-snapshots
     pub auto_enabled: bool,
-    
+
     /// Auto-snapshot interval in minutes
     pub auto_interval_minutes: u32,
-    
+
     /// Retention period in days
     pub retention_days: u32,
-    
+
     /// Maximum number of snapshots to keep
     pub max_snapshots: Option<u32>,
 }
@@ -134,10 +137,10 @@ pub struct SnapshotConfig {
 pub struct MirrorConfig {
     /// Enable auto-fetch from mirrors
     pub autofetch_enabled: bool,
-    
+
     /// Auto-fetch interval in minutes
     pub autofetch_interval_minutes: u32,
-    
+
     /// Default protocol (ssh or https)
     pub default_protocol: String,
 }
@@ -167,13 +170,13 @@ pub struct GitConfig {
 pub struct UiConfig {
     /// Use colored output
     pub colors: bool,
-    
+
     /// Show emoji in output
     pub emoji: bool,
-    
+
     /// Verbose output
     pub verbose: bool,
-    
+
     /// Preferred date format
     pub date_format: String,
 }
@@ -221,51 +224,56 @@ impl ToriiConfig {
     /// Get the global config file path
     fn global_config_path() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
-            .ok_or_else(|| ToriiError::InvalidConfig("Could not determine config directory for this platform".to_string()))?
+            .ok_or_else(|| {
+                ToriiError::InvalidConfig(
+                    "Could not determine config directory for this platform".to_string(),
+                )
+            })?
             .join("torii");
         fs::create_dir_all(&config_dir)?;
         Ok(config_dir.join("config.toml"))
     }
-    
+
     /// Get the local repo config file path
     fn local_config_path<P: AsRef<Path>>(repo_path: P) -> Result<PathBuf> {
         let torii_dir = repo_path.as_ref().join(".torii");
         fs::create_dir_all(&torii_dir)?;
         Ok(torii_dir.join("config.toml"))
     }
-    
+
     /// Load global configuration
     pub fn load_global() -> Result<Self> {
         let config_path = Self::global_config_path()?;
-        
+
         if !config_path.exists() {
             return Ok(Self::default());
         }
-        
+
         let config_str = fs::read_to_string(&config_path)?;
         let config: ToriiConfig = toml::from_str(&config_str)
             .map_err(|e| ToriiError::InvalidConfig(format!("Failed to parse config: {}", e)))?;
-        
+
         Ok(config)
     }
-    
+
     /// Load local repository configuration (merged with global)
     pub fn load_local<P: AsRef<Path>>(repo_path: P) -> Result<Self> {
         let mut config = Self::load_global()?;
-        
+
         let local_path = Self::local_config_path(&repo_path)?;
         if local_path.exists() {
             let local_str = fs::read_to_string(&local_path)?;
-            let local_config: ToriiConfig = toml::from_str(&local_str)
-                .map_err(|e| ToriiError::InvalidConfig(format!("Failed to parse local config: {}", e)))?;
-            
+            let local_config: ToriiConfig = toml::from_str(&local_str).map_err(|e| {
+                ToriiError::InvalidConfig(format!("Failed to parse local config: {}", e))
+            })?;
+
             // Merge local config over global (local takes precedence)
             config = Self::merge(config, local_config);
         }
-        
+
         Ok(config)
     }
-    
+
     /// Save global configuration
     pub fn save_global(&self) -> Result<()> {
         let config_path = Self::global_config_path()?;
@@ -274,7 +282,7 @@ impl ToriiConfig {
         fs::write(&config_path, config_str)?;
         Ok(())
     }
-    
+
     /// Save local repository configuration
     pub fn save_local<P: AsRef<Path>>(&self, repo_path: P) -> Result<()> {
         let config_path = Self::local_config_path(repo_path)?;
@@ -283,7 +291,7 @@ impl ToriiConfig {
         fs::write(&config_path, config_str)?;
         Ok(())
     }
-    
+
     /// Merge two configs (second takes precedence for non-None values)
     fn merge(mut base: Self, overlay: Self) -> Self {
         // User config
@@ -296,13 +304,13 @@ impl ToriiConfig {
         if overlay.user.editor.is_some() {
             base.user.editor = overlay.user.editor;
         }
-        
+
         // Snapshot config
         base.snapshot = overlay.snapshot;
-        
+
         // Mirror config
         base.mirror = overlay.mirror;
-        
+
         // Git config — 0.7.35 fix: merge field-by-field instead of a
         // wholesale replace. With the old `base.git = overlay.git` line,
         // a local `.torii/config.toml` that only declared (say)
@@ -327,43 +335,61 @@ impl ToriiConfig {
             base.git.default_branch = overlay.git.default_branch;
         }
         base.git.sign_commits = base.git.sign_commits || overlay.git.sign_commits;
-        if overlay.git.gpg_key.is_some()     { base.git.gpg_key     = overlay.git.gpg_key; }
-        if overlay.git.gpg_program.is_some() { base.git.gpg_program = overlay.git.gpg_program; }
+        if overlay.git.gpg_key.is_some() {
+            base.git.gpg_key = overlay.git.gpg_key;
+        }
+        if overlay.git.gpg_program.is_some() {
+            base.git.gpg_program = overlay.git.gpg_program;
+        }
         base.git.pull_rebase = base.git.pull_rebase || overlay.git.pull_rebase;
 
         // UI config
         base.ui = overlay.ui;
 
         // Auth config
-        if overlay.auth.github_token.is_some() { base.auth.github_token = overlay.auth.github_token; }
-        if overlay.auth.gitlab_token.is_some() { base.auth.gitlab_token = overlay.auth.gitlab_token; }
-        if overlay.auth.gitea_token.is_some() { base.auth.gitea_token = overlay.auth.gitea_token; }
-        if overlay.auth.forgejo_token.is_some() { base.auth.forgejo_token = overlay.auth.forgejo_token; }
-        if overlay.auth.codeberg_token.is_some() { base.auth.codeberg_token = overlay.auth.codeberg_token; }
+        if overlay.auth.github_token.is_some() {
+            base.auth.github_token = overlay.auth.github_token;
+        }
+        if overlay.auth.gitlab_token.is_some() {
+            base.auth.gitlab_token = overlay.auth.gitlab_token;
+        }
+        if overlay.auth.gitea_token.is_some() {
+            base.auth.gitea_token = overlay.auth.gitea_token;
+        }
+        if overlay.auth.forgejo_token.is_some() {
+            base.auth.forgejo_token = overlay.auth.forgejo_token;
+        }
+        if overlay.auth.codeberg_token.is_some() {
+            base.auth.codeberg_token = overlay.auth.codeberg_token;
+        }
 
         // Worktree config — full overwrite, like snapshot/mirror.
         base.worktree = overlay.worktree;
 
         base
     }
-    
+
     /// Get a configuration value by key path (e.g., "user.name", "snapshot.auto_enabled")
     pub fn get(&self, key: &str) -> Option<String> {
         let parts: Vec<&str> = key.split('.').collect();
         if parts.len() != 2 {
             return None;
         }
-        
+
         match (parts[0], parts[1]) {
             ("user", "name") => self.user.name.clone(),
             ("user", "email") => self.user.email.clone(),
             ("user", "editor") => self.user.editor.clone(),
             ("snapshot", "auto_enabled") => Some(self.snapshot.auto_enabled.to_string()),
-            ("snapshot", "auto_interval_minutes") => Some(self.snapshot.auto_interval_minutes.to_string()),
+            ("snapshot", "auto_interval_minutes") => {
+                Some(self.snapshot.auto_interval_minutes.to_string())
+            }
             ("snapshot", "retention_days") => Some(self.snapshot.retention_days.to_string()),
             ("snapshot", "max_snapshots") => self.snapshot.max_snapshots.map(|v| v.to_string()),
             ("mirror", "autofetch_enabled") => Some(self.mirror.autofetch_enabled.to_string()),
-            ("mirror", "autofetch_interval_minutes") => Some(self.mirror.autofetch_interval_minutes.to_string()),
+            ("mirror", "autofetch_interval_minutes") => {
+                Some(self.mirror.autofetch_interval_minutes.to_string())
+            }
             ("mirror", "default_protocol") => Some(self.mirror.default_protocol.clone()),
             ("git", "default_branch") => Some(self.git.default_branch.clone()),
             ("git", "sign_commits") => Some(self.git.sign_commits.to_string()),
@@ -382,8 +408,14 @@ impl ToriiConfig {
             ("auth", "github_token") => self.auth.github_token.clone().map(|_| "[set]".to_string()),
             ("auth", "gitlab_token") => self.auth.gitlab_token.clone().map(|_| "[set]".to_string()),
             ("auth", "gitea_token") => self.auth.gitea_token.clone().map(|_| "[set]".to_string()),
-            ("auth", "forgejo_token") => self.auth.forgejo_token.clone().map(|_| "[set]".to_string()),
-            ("auth", "codeberg_token") => self.auth.codeberg_token.clone().map(|_| "[set]".to_string()),
+            ("auth", "forgejo_token") => {
+                self.auth.forgejo_token.clone().map(|_| "[set]".to_string())
+            }
+            ("auth", "codeberg_token") => self
+                .auth
+                .codeberg_token
+                .clone()
+                .map(|_| "[set]".to_string()),
             ("worktree", "base_dir") => Some(self.worktree.base_dir.clone()),
             ("worktree", "inherit_paths") => {
                 if self.worktree.inherit_paths.is_empty() {
@@ -395,52 +427,64 @@ impl ToriiConfig {
             _ => None,
         }
     }
-    
+
     /// Set a configuration value by key path
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
         let parts: Vec<&str> = key.split('.').collect();
         if parts.len() != 2 {
-            return Err(ToriiError::InvalidConfig(format!("Invalid config key: {}", key)));
+            return Err(ToriiError::InvalidConfig(format!(
+                "Invalid config key: {}",
+                key
+            )));
         }
-        
+
         match (parts[0], parts[1]) {
             ("user", "name") => self.user.name = Some(value.to_string()),
             ("user", "email") => self.user.email = Some(value.to_string()),
             ("user", "editor") => self.user.editor = Some(value.to_string()),
             ("snapshot", "auto_enabled") => {
-                self.snapshot.auto_enabled = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.snapshot.auto_enabled = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("snapshot", "auto_interval_minutes") => {
-                self.snapshot.auto_interval_minutes = value.parse()
+                self.snapshot.auto_interval_minutes = value
+                    .parse()
                     .map_err(|_| ToriiError::InvalidConfig("Value must be a number".to_string()))?;
             }
             ("snapshot", "retention_days") => {
-                self.snapshot.retention_days = value.parse()
+                self.snapshot.retention_days = value
+                    .parse()
                     .map_err(|_| ToriiError::InvalidConfig("Value must be a number".to_string()))?;
             }
             ("snapshot", "max_snapshots") => {
-                self.snapshot.max_snapshots = Some(value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be a number".to_string()))?);
+                self.snapshot.max_snapshots = Some(value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be a number".to_string())
+                })?);
             }
             ("mirror", "autofetch_enabled") => {
-                self.mirror.autofetch_enabled = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.mirror.autofetch_enabled = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("mirror", "autofetch_interval_minutes") => {
-                self.mirror.autofetch_interval_minutes = value.parse()
+                self.mirror.autofetch_interval_minutes = value
+                    .parse()
                     .map_err(|_| ToriiError::InvalidConfig("Value must be a number".to_string()))?;
             }
             ("mirror", "default_protocol") => {
                 if value != "ssh" && value != "https" {
-                    return Err(ToriiError::InvalidConfig("Protocol must be 'ssh' or 'https'".to_string()));
+                    return Err(ToriiError::InvalidConfig(
+                        "Protocol must be 'ssh' or 'https'".to_string(),
+                    ));
                 }
                 self.mirror.default_protocol = value.to_string();
             }
             ("git", "default_branch") => self.git.default_branch = value.to_string(),
             ("git", "sign_commits") => {
-                self.git.sign_commits = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.git.sign_commits = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("git", "gpg_key") => self.git.gpg_key = Some(value.to_string()),
             ("git", "gpg_program") => self.git.gpg_program = Some(value.to_string()),
@@ -450,24 +494,29 @@ impl ToriiConfig {
             ("user", "signingkey") => self.git.gpg_key = Some(value.to_string()),
             ("gpg", "program") => self.git.gpg_program = Some(value.to_string()),
             ("commit", "gpgsign") => {
-                self.git.sign_commits = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.git.sign_commits = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("git", "pull_rebase") => {
-                self.git.pull_rebase = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.git.pull_rebase = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("ui", "colors") => {
-                self.ui.colors = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.ui.colors = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("ui", "emoji") => {
-                self.ui.emoji = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.ui.emoji = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("ui", "verbose") => {
-                self.ui.verbose = value.parse()
-                    .map_err(|_| ToriiError::InvalidConfig("Value must be true or false".to_string()))?;
+                self.ui.verbose = value.parse().map_err(|_| {
+                    ToriiError::InvalidConfig("Value must be true or false".to_string())
+                })?;
             }
             ("ui", "date_format") => self.ui.date_format = value.to_string(),
             ("auth", "github_token") => self.auth.github_token = Some(value.to_string()),
@@ -478,7 +527,8 @@ impl ToriiConfig {
             ("worktree", "base_dir") => {
                 if value.trim().is_empty() {
                     return Err(ToriiError::InvalidConfig(
-                        "worktree.base_dir must not be empty (use '..' for sibling directories)".to_string(),
+                        "worktree.base_dir must not be empty (use '..' for sibling directories)"
+                            .to_string(),
                     ));
                 }
                 self.worktree.base_dir = value.to_string();
@@ -495,16 +545,21 @@ impl ToriiConfig {
                         .collect()
                 };
             }
-            _ => return Err(ToriiError::InvalidConfig(format!("Unknown config key: {}", key))),
+            _ => {
+                return Err(ToriiError::InvalidConfig(format!(
+                    "Unknown config key: {}",
+                    key
+                )))
+            }
         }
-        
+
         Ok(())
     }
-    
+
     /// List all configuration values
     pub fn list(&self) -> Vec<(String, String)> {
         let mut items = Vec::new();
-        
+
         // User
         if let Some(name) = &self.user.name {
             items.push(("user.name".to_string(), name.clone()));
@@ -515,31 +570,58 @@ impl ToriiConfig {
         if let Some(editor) = &self.user.editor {
             items.push(("user.editor".to_string(), editor.clone()));
         }
-        
+
         // Snapshot
-        items.push(("snapshot.auto_enabled".to_string(), self.snapshot.auto_enabled.to_string()));
-        items.push(("snapshot.auto_interval_minutes".to_string(), self.snapshot.auto_interval_minutes.to_string()));
-        items.push(("snapshot.retention_days".to_string(), self.snapshot.retention_days.to_string()));
+        items.push((
+            "snapshot.auto_enabled".to_string(),
+            self.snapshot.auto_enabled.to_string(),
+        ));
+        items.push((
+            "snapshot.auto_interval_minutes".to_string(),
+            self.snapshot.auto_interval_minutes.to_string(),
+        ));
+        items.push((
+            "snapshot.retention_days".to_string(),
+            self.snapshot.retention_days.to_string(),
+        ));
         if let Some(max) = self.snapshot.max_snapshots {
             items.push(("snapshot.max_snapshots".to_string(), max.to_string()));
         }
-        
+
         // Mirror
-        items.push(("mirror.autofetch_enabled".to_string(), self.mirror.autofetch_enabled.to_string()));
-        items.push(("mirror.autofetch_interval_minutes".to_string(), self.mirror.autofetch_interval_minutes.to_string()));
-        items.push(("mirror.default_protocol".to_string(), self.mirror.default_protocol.clone()));
-        
+        items.push((
+            "mirror.autofetch_enabled".to_string(),
+            self.mirror.autofetch_enabled.to_string(),
+        ));
+        items.push((
+            "mirror.autofetch_interval_minutes".to_string(),
+            self.mirror.autofetch_interval_minutes.to_string(),
+        ));
+        items.push((
+            "mirror.default_protocol".to_string(),
+            self.mirror.default_protocol.clone(),
+        ));
+
         // Git
-        items.push(("git.default_branch".to_string(), self.git.default_branch.clone()));
-        items.push(("git.sign_commits".to_string(), self.git.sign_commits.to_string()));
+        items.push((
+            "git.default_branch".to_string(),
+            self.git.default_branch.clone(),
+        ));
+        items.push((
+            "git.sign_commits".to_string(),
+            self.git.sign_commits.to_string(),
+        ));
         if let Some(key) = &self.git.gpg_key {
             items.push(("git.gpg_key".to_string(), key.clone()));
         }
         if let Some(p) = &self.git.gpg_program {
             items.push(("git.gpg_program".to_string(), p.clone()));
         }
-        items.push(("git.pull_rebase".to_string(), self.git.pull_rebase.to_string()));
-        
+        items.push((
+            "git.pull_rebase".to_string(),
+            self.git.pull_rebase.to_string(),
+        ));
+
         // UI
         items.push(("ui.colors".to_string(), self.ui.colors.to_string()));
         items.push(("ui.emoji".to_string(), self.ui.emoji.to_string()));
@@ -547,14 +629,52 @@ impl ToriiConfig {
         items.push(("ui.date_format".to_string(), self.ui.date_format.clone()));
 
         // Auth (always show, mask value if set)
-        items.push(("auth.github_token".to_string(), if self.auth.github_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
-        items.push(("auth.gitlab_token".to_string(), if self.auth.gitlab_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
-        items.push(("auth.gitea_token".to_string(), if self.auth.gitea_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
-        items.push(("auth.forgejo_token".to_string(), if self.auth.forgejo_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
-        items.push(("auth.codeberg_token".to_string(), if self.auth.codeberg_token.is_some() { "[set]".to_string() } else { "[not set]".to_string() }));
+        items.push((
+            "auth.github_token".to_string(),
+            if self.auth.github_token.is_some() {
+                "[set]".to_string()
+            } else {
+                "[not set]".to_string()
+            },
+        ));
+        items.push((
+            "auth.gitlab_token".to_string(),
+            if self.auth.gitlab_token.is_some() {
+                "[set]".to_string()
+            } else {
+                "[not set]".to_string()
+            },
+        ));
+        items.push((
+            "auth.gitea_token".to_string(),
+            if self.auth.gitea_token.is_some() {
+                "[set]".to_string()
+            } else {
+                "[not set]".to_string()
+            },
+        ));
+        items.push((
+            "auth.forgejo_token".to_string(),
+            if self.auth.forgejo_token.is_some() {
+                "[set]".to_string()
+            } else {
+                "[not set]".to_string()
+            },
+        ));
+        items.push((
+            "auth.codeberg_token".to_string(),
+            if self.auth.codeberg_token.is_some() {
+                "[set]".to_string()
+            } else {
+                "[not set]".to_string()
+            },
+        ));
 
         // Worktree
-        items.push(("worktree.base_dir".to_string(), self.worktree.base_dir.clone()));
+        items.push((
+            "worktree.base_dir".to_string(),
+            self.worktree.base_dir.clone(),
+        ));
         if !self.worktree.inherit_paths.is_empty() {
             items.push((
                 "worktree.inherit_paths".to_string(),

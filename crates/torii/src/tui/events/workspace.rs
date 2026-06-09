@@ -37,11 +37,9 @@ pub(super) fn handle_workspace(key: event::KeyEvent, app: &mut App) -> Option<Ac
                     app.workspace_view.confirm = WorkspaceConfirm::None;
                     app.workspace_view.input.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.workspace_view.input.trim().is_empty() {
-                        app.workspace_view.confirm = WorkspaceConfirm::None;
-                        return Some(Action::WorkspaceSave);
-                    }
+                (_, KeyCode::Enter) if !app.workspace_view.input.trim().is_empty() => {
+                    app.workspace_view.confirm = WorkspaceConfirm::None;
+                    return Some(Action::WorkspaceSave);
                 }
                 (_, KeyCode::Backspace) => {
                     app.workspace_view.input.pop();
@@ -63,11 +61,9 @@ pub(super) fn handle_workspace(key: event::KeyEvent, app: &mut App) -> Option<Ac
                     app.workspace_view.confirm = WorkspaceConfirm::None;
                     app.workspace_view.input.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.workspace_view.input.trim().is_empty() {
-                        app.workspace_view.confirm = WorkspaceConfirm::None;
-                        return Some(Action::WorkspaceAddRepo);
-                    }
+                (_, KeyCode::Enter) if !app.workspace_view.input.trim().is_empty() => {
+                    app.workspace_view.confirm = WorkspaceConfirm::None;
+                    return Some(Action::WorkspaceAddRepo);
                 }
                 (_, KeyCode::Backspace) => {
                     app.workspace_view.input.pop();
@@ -89,11 +85,9 @@ pub(super) fn handle_workspace(key: event::KeyEvent, app: &mut App) -> Option<Ac
                     app.workspace_view.confirm = WorkspaceConfirm::None;
                     app.workspace_view.input.clear();
                 }
-                (_, KeyCode::Enter) => {
-                    if !app.workspace_view.input.trim().is_empty() {
-                        app.workspace_view.confirm = WorkspaceConfirm::None;
-                        return Some(Action::WorkspaceRename);
-                    }
+                (_, KeyCode::Enter) if !app.workspace_view.input.trim().is_empty() => {
+                    app.workspace_view.confirm = WorkspaceConfirm::None;
+                    return Some(Action::WorkspaceRename);
                 }
                 (_, KeyCode::Backspace) => {
                     app.workspace_view.input.pop();
@@ -117,15 +111,13 @@ pub(super) fn handle_workspace(key: event::KeyEvent, app: &mut App) -> Option<Ac
         let is_repos = app.workspace_view.focus == WorkspaceFocus::Repos;
         let ops_len = if is_repos { 4 } else { 5 };
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.workspace_view.ops_idx > 0 {
-                    app.workspace_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.workspace_view.ops_idx > 0 => {
+                app.workspace_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.workspace_view.ops_idx < ops_len - 1 {
-                    app.workspace_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.workspace_view.ops_idx < ops_len - 1 =>
+            {
+                app.workspace_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.workspace_view.ops_idx;

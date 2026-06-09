@@ -1,6 +1,6 @@
-use git2::{Repository, Signature, IndexAddOption, StatusOptions};
-use std::path::{Path, PathBuf};
 use crate::error::{Result, ToriiError};
+use git2::{IndexAddOption, Repository, Signature, StatusOptions};
+use std::path::{Path, PathBuf};
 
 pub struct GitRepo {
     pub(crate) repo: Repository,
@@ -25,9 +25,7 @@ impl GitRepo {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path_ref = path.as_ref();
         let repo = Repository::discover(path_ref)
-            .map_err(|_| ToriiError::RepositoryNotFound(
-                path_ref.display().to_string()
-            ))?;
+            .map_err(|_| ToriiError::RepositoryNotFound(path_ref.display().to_string()))?;
         let git_repo = Self { repo };
         // Sync .toriignore on every open so all git operations respect it
         git_repo.sync_toriignore()?;
@@ -40,8 +38,15 @@ impl GitRepo {
     /// Called automatically on open and before staging.
     pub fn sync_toriignore(&self) -> Result<()> {
         // .git/ always has a parent (the work tree) for non-bare repos.
-        let repo_path = self.repo.path().parent()
-            .ok_or_else(|| crate::error::ToriiError::RepoState("git directory has no parent (bare repo?)".to_string()))?
+        let repo_path = self
+            .repo
+            .path()
+            .parent()
+            .ok_or_else(|| {
+                crate::error::ToriiError::RepoState(
+                    "git directory has no parent (bare repo?)".to_string(),
+                )
+            })?
             .to_path_buf();
         let public_path = repo_path.join(".toriignore");
         let local_path = repo_path.join(".toriignore.local");
@@ -56,7 +61,9 @@ impl GitRepo {
         if public_path.exists() {
             if let Ok(content) = std::fs::read_to_string(&public_path) {
                 buf.push_str(&content);
-                if !buf.ends_with('\n') { buf.push('\n'); }
+                if !buf.ends_with('\n') {
+                    buf.push('\n');
+                }
             }
         }
 
@@ -99,11 +106,17 @@ impl GitRepo {
                 0 // add
             }
         };
-        index.add_all(["*"].iter(), IndexAddOption::DEFAULT, Some(cb as &mut git2::IndexMatchedPath<'_>))?;
+        index.add_all(
+            ["*"].iter(),
+            IndexAddOption::DEFAULT,
+            Some(cb as &mut git2::IndexMatchedPath<'_>),
+        )?;
         index.write()?;
         if skipped_torii {
-            eprintln!("ℹ Skipped `.torii/` from staging (reserved for torii internal state). \
-                       Pass paths explicitly if you really want to stage something inside it.");
+            eprintln!(
+                "ℹ Skipped `.torii/` from staging (reserved for torii internal state). \
+                       Pass paths explicitly if you really want to stage something inside it."
+            );
         }
         Ok(())
     }
@@ -182,7 +195,8 @@ impl GitRepo {
         // Resolve HEAD via the branch ref directly to dodge stale internal state
         // after operations like history rewrite.
         let head_ref = self.repo.head()?;
-        let head_oid = head_ref.target()
+        let head_oid = head_ref
+            .target()
             .ok_or_else(|| ToriiError::RepoState("HEAD has no target".to_string()))?;
         let head_commit = self.repo.find_commit(head_oid)?;
 
@@ -204,7 +218,7 @@ impl GitRepo {
 
         Ok(())
     }
-    
+
     /// Build auth callbacks for SSH and HTTPS token auth.
     /// Pass the remote URL so the correct token is selected per host.
     pub(crate) fn auth_callbacks_for<'a>(url: &str) -> git2::RemoteCallbacks<'a> {
@@ -213,7 +227,11 @@ impl GitRepo {
         let url_owned = url.to_string();
         let mut callbacks = git2::RemoteCallbacks::new();
         callbacks.credentials(move |cb_url, username_from_url, allowed_types| {
-            let effective_url = if url_owned.is_empty() { cb_url } else { &url_owned };
+            let effective_url = if url_owned.is_empty() {
+                cb_url
+            } else {
+                &url_owned
+            };
             if allowed_types.contains(git2::CredentialType::SSH_KEY) {
                 let username = username_from_url.unwrap_or("git");
                 let home = dirs::home_dir().unwrap_or_default();
@@ -251,8 +269,8 @@ impl GitRepo {
     /// Attach progress reporters to an existing `RemoteCallbacks`. Covers:
     ///   - transfer_progress: pack receive + indexing + delta resolution
     ///   - sideband_progress: server messages like "Counting objects: …"
-    /// Reused by clone / fetch / pull so every long-running op gives the
-    /// same visual feedback. Throttled to ~10 fps.
+    ///     Reused by clone / fetch / pull so every long-running op gives the
+    ///     same visual feedback. Throttled to ~10 fps.
     pub(crate) fn attach_fetch_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
         use std::cell::RefCell;
         use std::io::Write;
@@ -280,12 +298,12 @@ impl GitRepo {
             // libgit2 reports both via the same callback, so emit whichever
             // is currently advancing.
             if total_deltas > 0 && recv == total {
-                let pct = if total_deltas > 0 { idx_deltas * 100 / total_deltas } else { 100 };
+                let pct = (idx_deltas * 100).checked_div(total_deltas).unwrap_or(100);
                 print!(
                     "\r🧩 Resolving deltas {pct}%  {idx_deltas}/{total_deltas}                       "
                 );
             } else {
-                let pct = if total > 0 { recv * 100 / total } else { 0 };
+                let pct = (recv * 100).checked_div(total).unwrap_or(0);
                 print!(
                     "\r📥 {pct}%  {recv}/{total} objects  {idx} indexed  {mb:.1} MB       ",
                 );
@@ -305,7 +323,7 @@ impl GitRepo {
     /// Attach progress reporters for push (different libgit2 callback set).
     ///   - push_transfer_progress: pack upload
     ///   - sideband_progress: server messages
-    /// Throttled to ~10 fps.
+    ///     Throttled to ~10 fps.
     pub(crate) fn attach_push_progress<'a>(callbacks: &mut git2::RemoteCallbacks<'a>) {
         use std::cell::RefCell;
         use std::io::Write;
@@ -320,7 +338,7 @@ impl GitRepo {
             }
             *last = Instant::now();
 
-            let pct = if total > 0 { current * 100 / total } else { 0 };
+            let pct = (current * 100).checked_div(total).unwrap_or(0);
             let mb = bytes as f64 / (1024.0 * 1024.0);
             print!("\r📤 {pct}%  {current}/{total} objects  {mb:.1} MB       ");
             std::io::stdout().flush().ok();
@@ -352,7 +370,11 @@ impl GitRepo {
         // and libgit2 then refuses to parse it as a reference. Treat that
         // as "nothing to pull" — same outcome as up-to-date.
         let fetch_head_path = self.repo.path().join("FETCH_HEAD");
-        if fetch_head_path.metadata().map(|m| m.len() == 0).unwrap_or(true) {
+        if fetch_head_path
+            .metadata()
+            .map(|m| m.len() == 0)
+            .unwrap_or(true)
+        {
             return Ok(());
         }
         let fetch_head = self.repo.find_reference("FETCH_HEAD")?;
@@ -368,7 +390,8 @@ impl GitRepo {
             let mut reference = self.repo.find_reference(&refname)?;
             reference.set_target(fetch_commit.id(), "Fast-forward")?;
             self.repo.set_head(&refname)?;
-            self.repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
             return Ok(());
         }
 
@@ -449,7 +472,7 @@ impl GitRepo {
             return Err(ToriiError::Git(git2::Error::from_str(
                 "push completed without server acknowledging any refs — \
                  transport may have failed silently. Check network / auth and retry. \
-                 (Common with very large pushes over SSH; try HTTPS with a token.)"
+                 (Common with very large pushes over SSH; try HTTPS with a token.)",
             )));
         }
 
@@ -486,11 +509,15 @@ impl GitRepo {
 
         // Build the local-OID map first so we don't keep the repo borrowed
         // while we open the remote connection.
-        let local: std::collections::HashMap<String, git2::Oid> = local_tags.iter()
+        let local: std::collections::HashMap<String, git2::Oid> = local_tags
+            .iter()
             .flatten()
             .filter_map(|t| {
                 let refname = format!("refs/tags/{}", t);
-                self.repo.refname_to_id(&refname).ok().map(|oid| (t.to_string(), oid))
+                self.repo
+                    .refname_to_id(&refname)
+                    .ok()
+                    .map(|oid| (t.to_string(), oid))
             })
             .collect();
 
@@ -503,7 +530,8 @@ impl GitRepo {
             let callbacks = Self::auth_callbacks_for(&remote_url);
             remote.connect_auth(git2::Direction::Fetch, Some(callbacks), None)?;
             let list = remote.list()?;
-            let map = list.iter()
+            let map = list
+                .iter()
                 .filter_map(|h| {
                     let name = h.name();
                     name.strip_prefix("refs/tags/")
@@ -522,11 +550,16 @@ impl GitRepo {
         // Only the tags whose OID differs (or are missing remotely) get a
         // refspec. Tags that match are left alone — GitLab won't see a
         // push event for them, so its workflow:rules won't fire.
-        let refspecs: Vec<String> = local.iter()
+        let refspecs: Vec<String> = local
+            .iter()
             .filter(|(name, oid)| remote_tags.get(*name) != Some(oid))
             .map(|(t, _)| {
                 let r = format!("refs/tags/{}:refs/tags/{}", t, t);
-                if force { format!("+{}", r) } else { r }
+                if force {
+                    format!("+{}", r)
+                } else {
+                    r
+                }
             })
             .collect();
 
@@ -538,7 +571,8 @@ impl GitRepo {
         let callbacks = Self::auth_callbacks_for(&remote_url);
         let mut push_options = git2::PushOptions::new();
         push_options.remote_callbacks(callbacks);
-        remote.push(&refspec_refs, Some(&mut push_options))
+        remote
+            .push(&refspec_refs, Some(&mut push_options))
             .map_err(ToriiError::Git)?;
         Ok(())
     }
@@ -546,7 +580,8 @@ impl GitRepo {
     /// Get current branch name
     pub fn get_current_branch(&self) -> Result<String> {
         let head = self.repo.head()?;
-        let branch_name = head.shorthand()
+        let branch_name = head
+            .shorthand()
             .ok_or_else(|| ToriiError::Git(git2::Error::from_str("Could not get branch name")))?;
         Ok(branch_name.to_string())
     }
@@ -619,26 +654,44 @@ impl GitRepo {
 
         let branch = self.get_current_branch()?;
 
-        let head = self.repo.head().ok()
+        let head = self
+            .repo
+            .head()
+            .ok()
             .and_then(|h| h.peel_to_commit().ok())
             .map(|commit| HeadCommitInfo {
                 short_id: format!("{:.7}", commit.id()),
-                summary: commit.message().unwrap_or("").lines().next().unwrap_or("").to_string(),
+                summary: commit
+                    .message()
+                    .unwrap_or("")
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .to_string(),
                 seconds_since_epoch: commit.time().seconds(),
             });
 
         let remote = self.repo.find_remote("origin").ok().and_then(|remote| {
             let url = remote.url()?;
-            let name = url.split('/').last().unwrap_or("origin")
-                .trim_end_matches(".git").to_string();
-            let ahead_behind = self.repo.head().ok()
-                .and_then(|h| h.target())
-                .and_then(|local_oid| {
-                    let remote_ref = self.repo
-                        .find_reference(&format!("refs/remotes/origin/{}", branch)).ok()?;
-                    let remote_oid = remote_ref.target()?;
-                    self.repo.graph_ahead_behind(local_oid, remote_oid).ok()
-                });
+            let name = url
+                .split('/')
+                .next_back()
+                .unwrap_or("origin")
+                .trim_end_matches(".git")
+                .to_string();
+            let ahead_behind =
+                self.repo
+                    .head()
+                    .ok()
+                    .and_then(|h| h.target())
+                    .and_then(|local_oid| {
+                        let remote_ref = self
+                            .repo
+                            .find_reference(&format!("refs/remotes/origin/{}", branch))
+                            .ok()?;
+                        let remote_oid = remote_ref.target()?;
+                        self.repo.graph_ahead_behind(local_oid, remote_oid).ok()
+                    });
             Some(RemoteStatusInfo { name, ahead_behind })
         });
 
@@ -658,7 +711,10 @@ impl GitRepo {
                 } else {
                     ChangeKind::Deleted
                 };
-                staged.push(StatusEntry { kind, path: path.clone() });
+                staged.push(StatusEntry {
+                    kind,
+                    path: path.clone(),
+                });
             }
 
             if status.is_wt_modified() || status.is_wt_deleted() {
@@ -667,7 +723,10 @@ impl GitRepo {
                 } else {
                     ChangeKind::Deleted
                 };
-                unstaged.push(StatusEntry { kind, path: path.clone() });
+                unstaged.push(StatusEntry {
+                    kind,
+                    path: path.clone(),
+                });
             }
 
             if status.is_wt_new() {
@@ -675,7 +734,14 @@ impl GitRepo {
             }
         }
 
-        Ok(RepoStatus { branch, head, remote, staged, unstaged, untracked })
+        Ok(RepoStatus {
+            branch,
+            head,
+            remote,
+            staged,
+            unstaged,
+            untracked,
+        })
     }
 
     /// Get git signature using the unified resolver.
@@ -771,7 +837,8 @@ pub fn resolve_signature(repo: &git2::Repository) -> Result<Signature<'static>> 
     // Pre-0.7.14: only `load_global()` was consulted here, so `--local`
     // edits to user.name/user.email were silently ignored. That's the
     // bug fixed by switching to `load_local()`.
-    let tc = repo.workdir()
+    let tc = repo
+        .workdir()
         .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
         .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
 
@@ -866,7 +933,8 @@ pub(crate) fn commit_inner_split(
     // Cheap config read — load_local already merges global underneath
     // local, so a per-repo override of `git.sign_commits` works as
     // expected.
-    let tc = repo.workdir()
+    let tc = repo
+        .workdir()
         .and_then(|wd| crate::config::ToriiConfig::load_local(wd).ok())
         .unwrap_or_else(|| crate::config::ToriiConfig::load_global().unwrap_or_default());
 
@@ -877,9 +945,9 @@ pub(crate) fn commit_inner_split(
     // rewrite, the TUI's save action, …). Returned to its prior
     // state by the CLI guard after the commit.
     let should_sign = match std::env::var("TORII_SIGN_OVERRIDE").ok().as_deref() {
-        Some("true")  => true,
+        Some("true") => true,
         Some("false") => false,
-        _             => tc.git.sign_commits,
+        _ => tc.git.sign_commits,
     };
 
     if !should_sign {
@@ -887,27 +955,31 @@ pub(crate) fn commit_inner_split(
     }
 
     // Signing path: need a key id.
-    let key = tc.git.gpg_key.as_deref()
+    let key = tc
+        .git
+        .gpg_key
+        .as_deref()
         .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| ToriiError::InvalidConfig(
-            "git.sign_commits = true but git.gpg_key is not set. Configure with:\n  \
-             torii config set git.gpg_key <YOUR-KEY-ID>".to_string()
-        ))?;
+        .ok_or_else(|| {
+            ToriiError::InvalidConfig(
+                "git.sign_commits = true but git.gpg_key is not set. Configure with:\n  \
+             torii config set git.gpg_key <YOUR-KEY-ID>"
+                    .to_string(),
+            )
+        })?;
 
     // Build the commit object as bytes, sign it, then write the signed
     // commit object out.
     let buffer = repo.commit_create_buffer(author, committer, message, tree, parents)?;
-    let buffer_str = std::str::from_utf8(&buffer)
-        .map_err(|e| ToriiError::RepoState(format!(
-            "commit buffer not valid UTF-8 (cannot GPG-sign): {}", e
-        )))?;
+    let buffer_str = std::str::from_utf8(&buffer).map_err(|e| {
+        ToriiError::RepoState(format!(
+            "commit buffer not valid UTF-8 (cannot GPG-sign): {}",
+            e
+        ))
+    })?;
     // 0.7.35 — honour `git.gpg_program` so users on systems where gpg
     // is shipped as gpg2 (or under a custom path) can point at it.
-    let signature = crate::gpg::sign_blob(
-        &buffer,
-        key,
-        tc.git.gpg_program.as_deref(),
-    )?;
+    let signature = crate::gpg::sign_blob(&buffer, key, tc.git.gpg_program.as_deref())?;
     let new_oid = repo.commit_signed(buffer_str, &signature, Some("gpgsig"))?;
 
     // libgit2's commit_signed leaves ref updates to the caller. Move
@@ -919,7 +991,10 @@ pub(crate) fn commit_inner_split(
         // assume the caller passed a direct ref path.
         let target_ref = if name == "HEAD" {
             match repo.head() {
-                Ok(h) => h.name().map(String::from).unwrap_or_else(|| "refs/heads/main".to_string()),
+                Ok(h) => h
+                    .name()
+                    .map(String::from)
+                    .unwrap_or_else(|| "refs/heads/main".to_string()),
                 // Unborn HEAD: first commit. Use the default branch
                 // name from torii config so this matches `torii init`.
                 Err(_) => format!("refs/heads/{}", tc.git.default_branch),
@@ -952,19 +1027,30 @@ mod add_all_tests {
         fs::write(repo_path.join("README.md"), "hello").unwrap();
         // Bogus .torii/ content that must NEVER be staged by -a.
         fs::create_dir_all(repo_path.join(".torii/snapshots/x")).unwrap();
-        fs::write(repo_path.join(".torii/snapshots/x/big.bin"), vec![0u8; 1024]).unwrap();
+        fs::write(
+            repo_path.join(".torii/snapshots/x/big.bin"),
+            vec![0u8; 1024],
+        )
+        .unwrap();
         fs::write(repo_path.join(".torii/config.json"), "{}").unwrap();
 
         gitorii.add_all().unwrap();
 
         let index = gitorii.repo.index().unwrap();
-        let staged: Vec<String> = index.iter()
+        let staged: Vec<String> = index
+            .iter()
             .map(|e| String::from_utf8_lossy(&e.path).into_owned())
             .collect();
 
-        assert!(staged.iter().any(|p| p == "README.md"),
-                "README.md should be staged, got: {:?}", staged);
-        assert!(!staged.iter().any(|p| p.starts_with(".torii")),
-                ".torii/* must not be staged by add_all, got: {:?}", staged);
+        assert!(
+            staged.iter().any(|p| p == "README.md"),
+            "README.md should be staged, got: {:?}",
+            staged
+        );
+        assert!(
+            !staged.iter().any(|p| p.starts_with(".torii")),
+            ".torii/* must not be staged by add_all, got: {:?}",
+            staged
+        );
     }
 }

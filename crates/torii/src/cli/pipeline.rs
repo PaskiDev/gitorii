@@ -107,8 +107,8 @@ pub(crate) fn run(action: &PipelineCommands, remote: &String) -> Result<()> {
                 println!("No pipelines found.");
             } else {
                 println!(
-                    "{:<12} {:<12} {:<24} {:<10} {}",
-                    "ID", "STATUS", "BRANCH", "SHA", "CREATED"
+                    "{:<12} {:<12} {:<24} {:<10} CREATED",
+                    "ID", "STATUS", "BRANCH", "SHA"
                 );
                 for p in &pipelines {
                     let icon = match p.status.as_str() {
@@ -245,8 +245,8 @@ pub(crate) fn run_job(action: &JobCommands, remote: &String) -> Result<()> {
                 println!("No jobs found for pipeline {}.", pipeline);
             } else {
                 println!(
-                    "{:<14} {:<10} {:<24} {:<12} {}",
-                    "ID", "STATUS", "NAME", "STAGE", "DURATION"
+                    "{:<14} {:<10} {:<24} {:<12} DURATION",
+                    "ID", "STATUS", "NAME", "STAGE"
                 );
                 for j in &jobs {
                     let icon = match j.status.as_str() {

@@ -4,13 +4,13 @@
 //! Five entry points, the MVP cut requested for 0.6.8:
 //!
 //! - [`add`]    — create a new worktree at a path, optionally creating its
-//!                branch in the same call.
+//!   branch in the same call.
 //! - [`list`]   — show every worktree with branch + clean/dirty status.
 //! - [`remove`] — delete a worktree and its directory. Always takes a
-//!                safety snapshot first (per project decision).
+//!   safety snapshot first (per project decision).
 //! - [`prune`]  — clean up metadata of worktrees whose directory vanished.
 //! - [`open`]   — spawn `$SHELL` in the worktree directory. Pure UX
-//!                convenience that `git worktree` doesn't offer.
+//!   convenience that `git worktree` doesn't offer.
 //!
 //! Design notes:
 //!
@@ -580,6 +580,7 @@ pub fn unlock(repo_path: &Path, target: &Path) -> Result<()> {
 ///   2. Update `<new>/.git` so the gitdir pointer matches the new path.
 ///   3. Update `<repo>/.git/worktrees/<name>/gitdir` so the main repo's
 ///      back-reference stays in sync.
+///
 /// Cross-device renames fall back to copy+remove. Refuses if `new`
 /// already exists or `old` is the main worktree.
 pub fn move_wt(repo_path: &Path, old: &Path, new: &Path) -> Result<()> {
@@ -740,7 +741,7 @@ pub fn repair(repo_path: &Path) -> Result<()> {
 
 /// Resolve a user-supplied path to a libgit2 worktree handle. Errors with
 /// a helpful message when the path isn't a registered linked worktree.
-fn find_worktree_by_path<'a>(repo_path: &Path, target: &Path) -> Result<(String, git2::Worktree)> {
+fn find_worktree_by_path(repo_path: &Path, target: &Path) -> Result<(String, git2::Worktree)> {
     let canon = target
         .canonicalize()
         .map_err(|e| ToriiError::Fs(format!("{}: {}", target.display(), e)))?;

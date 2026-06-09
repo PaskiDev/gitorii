@@ -35,11 +35,9 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
         }
         HistoryConfirm::RemoveFile => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.history_view.input.trim().is_empty() {
-                        app.history_view.confirm = HistoryConfirm::None;
-                        return Some(Action::HistoryRemoveFile);
-                    }
+                (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {
+                    app.history_view.confirm = HistoryConfirm::None;
+                    return Some(Action::HistoryRemoveFile);
                 }
                 (_, KeyCode::Backspace) => {
                     app.history_view.input.pop();
@@ -52,11 +50,9 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
         }
         HistoryConfirm::Rebase => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.history_view.input.trim().is_empty() {
-                        app.history_view.confirm = HistoryConfirm::None;
-                        return Some(Action::HistoryRebase);
-                    }
+                (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {
+                    app.history_view.confirm = HistoryConfirm::None;
+                    return Some(Action::HistoryRebase);
                 }
                 (_, KeyCode::Backspace) => {
                     app.history_view.input.pop();
@@ -69,10 +65,8 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
         }
         HistoryConfirm::RewriteStart => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.history_view.input.trim().is_empty() {
-                        app.history_view.confirm = HistoryConfirm::RewriteEnd;
-                    }
+                (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {
+                    app.history_view.confirm = HistoryConfirm::RewriteEnd;
                 }
                 (_, KeyCode::Backspace) => {
                     app.history_view.input.pop();
@@ -85,11 +79,9 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
         }
         HistoryConfirm::RewriteEnd => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.history_view.input2.trim().is_empty() {
-                        app.history_view.confirm = HistoryConfirm::None;
-                        return Some(Action::HistoryRewrite);
-                    }
+                (_, KeyCode::Enter) if !app.history_view.input2.trim().is_empty() => {
+                    app.history_view.confirm = HistoryConfirm::None;
+                    return Some(Action::HistoryRewrite);
                 }
                 (_, KeyCode::Backspace) => {
                     app.history_view.input2.pop();
@@ -102,11 +94,9 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
         }
         HistoryConfirm::Blame => {
             match (key.modifiers, key.code) {
-                (_, KeyCode::Enter) => {
-                    if !app.history_view.input.trim().is_empty() {
-                        app.history_view.confirm = HistoryConfirm::None;
-                        return Some(Action::HistoryBlame);
-                    }
+                (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {
+                    app.history_view.confirm = HistoryConfirm::None;
+                    return Some(Action::HistoryBlame);
                 }
                 (_, KeyCode::Backspace) => {
                     app.history_view.input.pop();
@@ -137,15 +127,11 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
     }
     if app.history_view.ops_mode {
         match (key.modifiers, key.code) {
-            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
-                if app.history_view.ops_idx > 0 {
-                    app.history_view.ops_idx -= 1;
-                }
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.history_view.ops_idx > 0 => {
+                app.history_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
-                if app.history_view.ops_idx < 6 {
-                    app.history_view.ops_idx += 1;
-                }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.history_view.ops_idx < 6 => {
+                app.history_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
                 let idx = app.history_view.ops_idx;

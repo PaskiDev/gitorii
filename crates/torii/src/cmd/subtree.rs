@@ -11,7 +11,7 @@
 //! - [`pull`]  — fetch and merge upstream updates.
 //! - [`push`]  — extract the subdirectory's history and push it back.
 //! - [`split`] — extract the subdirectory's history into a new branch
-//!                without pushing.
+//!   without pushing.
 //! - [`merge`] — finish a manual conflict resolution after pull.
 //!
 //! **Why a wrapper, not a from-scratch reimplementation?**
