@@ -314,6 +314,7 @@ pub struct Stats {
     pub scanned: usize,
     pub matched: usize,
     pub rewritten: usize,
+    pub pruned: usize,
     pub refs_updated: usize,
     pub tags_rewritten: usize,
     pub snapshot_id: Option<String>,

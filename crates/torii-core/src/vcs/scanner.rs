@@ -314,6 +314,16 @@ pub fn staged_paths(repo_path: &Path) -> Result<Vec<String>> {
     Ok(out)
 }
 
+/// Return the name of the first built-in pattern that flags `line`, if any.
+/// Reused by `history replace-text --redact-secrets` to redact matching lines
+/// across history with the same detection logic the pre-save scanner uses.
+pub(crate) fn matching_pattern(line: &str) -> Option<&'static str> {
+    PATTERNS
+        .iter()
+        .find(|p| (p.detect)(line))
+        .map(|p| p.name)
+}
+
 /// Scan staged content using user-defined regex rules from .toriignore.
 /// Returns findings — empty if no rules or no matches.
 pub fn scan_staged_with_custom(

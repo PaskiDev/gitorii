@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-06-14
+
+### Added
+
+- **History content rewriting — the torii-semantic answer to `git filter-branch`
+  / `git filter-repo`.** All built on one tree-rewriting engine (pre-flight +
+  safety snapshot + ref/working-tree sync), preserving identity and dates by
+  default:
+  - `torii history replace-text` — replace text in file contents across all
+    history. `--literal`/`--regex` (repeatable, `OLD==>NEW`, default redaction to
+    `***REMOVED***`), `--rules <file>` (filter-repo expression format),
+    `--redact-secrets` (redact every line the built-in scanner flags), `--paths`
+    to scope.
+  - `torii history filter-path` — `--keep`/`--remove` paths, `--subdirectory`
+    (extract a subdir as the new root), `--rename OLD:NEW`.
+  - `torii history redate` — set author+committer date of specific commits
+    (`<hash> --date`, or `--map <file>`); the per-commit counterpart to
+    `history rewrite`.
+  - `torii history exec-filter '<cmd>'` — run a shell command against each
+    commit's materialized tree (classic `filter-branch --tree-filter`).
+  - `--prune-empty` on the content-rewriting commands drops commits that become
+    empty.
+
 ## [0.11.0] - 2026-06-14
 
 ### Added

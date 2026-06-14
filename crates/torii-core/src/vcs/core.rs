@@ -898,7 +898,7 @@ fn env_date(var: &str) -> Option<git2::Time> {
 /// Supports: git internal `@<unix> [<+-HHMM>]`, RFC 2822, RFC 3339 / ISO 8601
 /// with offset, `YYYY-MM-DD HH:MM:SS <+-HHMM>`, and bare `YYYY-MM-DD HH:MM:SS`
 /// (interpreted in the local timezone, as git does).
-fn parse_git_date(s: &str) -> Option<git2::Time> {
+pub(crate) fn parse_git_date(s: &str) -> Option<git2::Time> {
     let s = s.trim();
     if s.is_empty() {
         return None;

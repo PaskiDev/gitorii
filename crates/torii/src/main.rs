@@ -21,8 +21,8 @@ pub use torii_lib::{issue, package, pipeline, platforms_registry, pr, release, r
 
 // vcs/
 pub use torii_lib::{
-    commit_scan, core, core_extensions, core_tag, history_reauthor, history_reword, patch, scanner,
-    sign, snapshot, tag,
+    commit_scan, core, core_extensions, core_tag, history_filter, history_reauthor, history_reword,
+    patch, scanner, sign, snapshot, tag,
 };
 
 // workspace/

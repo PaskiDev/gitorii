@@ -8,6 +8,7 @@ pub mod commit_scan;
 pub mod core;
 pub mod core_extensions;
 pub mod core_tag;
+pub mod history_filter;
 pub mod history_reauthor;
 pub mod history_reword;
 pub mod patch;

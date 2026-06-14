@@ -204,6 +204,128 @@ rewritten in place — push with 'torii sync --push --force'.")]
         sign: bool,
     },
 
+    /// Replace text in file **contents** across all history (à la
+    /// `git filter-repo --replace-text` / `filter-branch --tree-filter` sed).
+    #[command(after_help = "Examples:
+  torii history replace-text --literal \"hunter2\"                 Redact a literal (→ ***REMOVED***)
+  torii history replace-text --literal \"old.com==>new.com\"       Literal replace
+  torii history replace-text --regex \"AKIA[0-9A-Z]{16}==>***\"    Regex replace
+  torii history replace-text --rules secrets.txt                 Rules file (filter-repo format)
+  torii history replace-text --redact-secrets                    Redact lines the scanner flags
+  torii history replace-text --literal X --paths src --dry-run   Scope + preview
+
+Rules file: one `literal:OLD[==>NEW]` or `regex:PAT[==>REPL]` per line; missing
+`==>` redacts to ***REMOVED***. History is rewritten in place — push --force.")]
+    ReplaceText {
+        /// Rules file (filter-repo expression format).
+        #[arg(long, value_name = "FILE")]
+        rules: Option<PathBuf>,
+        /// Literal replacement (repeatable): "OLD==>NEW" or "OLD" (→ ***REMOVED***).
+        #[arg(long, value_name = "RULE")]
+        literal: Vec<String>,
+        /// Regex replacement (repeatable): "PAT==>REPL" or "PAT" (→ ***REMOVED***).
+        #[arg(long, value_name = "RULE")]
+        regex: Vec<String>,
+        /// Redact every line flagged by the built-in secret scanner.
+        #[arg(long)]
+        redact_secrets: bool,
+        /// Limit to these paths (repeatable; prefix match).
+        #[arg(long, value_name = "PATH")]
+        paths: Vec<String>,
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        no_snapshot: bool,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        prune_empty: bool,
+    },
+
+    /// Filter **paths** across history: keep/remove/rename paths or extract a
+    /// subdirectory as the new root (`filter-repo --path`/`--subdirectory-filter`).
+    #[command(after_help = "Examples:
+  torii history filter-path --remove secrets/             Drop a path from all history
+  torii history filter-path --keep src --keep Cargo.toml  Keep only these paths
+  torii history filter-path --subdirectory crates/lib     Make a subdir the new root
+  torii history filter-path --rename old/:new/            Rename a path prefix")]
+    FilterPath {
+        /// Keep only these paths (repeatable). If set, everything else is dropped.
+        #[arg(long, value_name = "PATH")]
+        keep: Vec<String>,
+        /// Remove these paths (repeatable).
+        #[arg(long, value_name = "PATH")]
+        remove: Vec<String>,
+        /// Extract this subdirectory as the new repository root.
+        #[arg(long, value_name = "DIR")]
+        subdirectory: Option<String>,
+        /// Rename a path prefix, `OLD:NEW` (repeatable).
+        #[arg(long, value_name = "OLD:NEW")]
+        rename: Vec<String>,
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        no_snapshot: bool,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        prune_empty: bool,
+    },
+
+    /// Set the author + committer date of specific commits (per-commit, the
+    /// counterpart to `history rewrite`'s range interpolation).
+    #[command(after_help = "Examples:
+  torii history redate <hash> --date \"2026-06-01 10:00:00 +0000\"
+  torii history redate --map dates.txt        # '<hash> <date>' per line")]
+    Redate {
+        /// Commit to redate (omit with --map).
+        #[arg(value_name = "COMMIT", required_unless_present = "map")]
+        commit: Option<String>,
+        /// New date in any git format.
+        #[arg(long, value_name = "WHEN", conflicts_with = "map")]
+        date: Option<String>,
+        /// Batch map file: one `<hash> <date>` per line.
+        #[arg(long, value_name = "FILE", conflicts_with = "commit")]
+        map: Option<PathBuf>,
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        no_snapshot: bool,
+        #[arg(long)]
+        allow_dirty: bool,
+    },
+
+    /// Run a shell command against a checkout of **every** commit's tree — the
+    /// classic `filter-branch --tree-filter`. Slow and powerful; prefer the
+    /// declarative `replace-text` / `filter-path` when they suffice.
+    #[command(after_help = "Examples:
+  torii history exec-filter 'rm -f secret.txt'            Delete a file everywhere
+  torii history exec-filter 'sed -i s/foo/bar/g *.md'     Arbitrary transform
+
+The command runs with the commit's tree materialized as the working directory.
+Limitations: submodules aren't materialized; symlinks/exec-bits are Unix-only.")]
+    ExecFilter {
+        /// Shell command to run inside each commit's materialized tree.
+        #[arg(value_name = "COMMAND")]
+        command: String,
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        no_snapshot: bool,
+        #[arg(long)]
+        allow_dirty: bool,
+        #[arg(long)]
+        prune_empty: bool,
+    },
+
     /// Apply a `.mailmap` file (standard git format) across history.
     ///
     /// See <https://git-scm.com/docs/gitmailmap> for the format. Use this for
@@ -390,6 +512,127 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             };
             let stats = history_reword::reword(std::path::Path::new("."), &entries, &opts)?;
             history_reword::print_summary(&stats, *dry_run);
+        }
+        HistoryCommands::ReplaceText {
+            rules,
+            literal,
+            regex,
+            redact_secrets,
+            paths,
+            since,
+            dry_run,
+            no_snapshot,
+            allow_dirty,
+            prune_empty,
+        } => {
+            use crate::history_filter;
+            let mut inline: Vec<String> = Vec::new();
+            inline.extend(literal.iter().map(|s| format!("literal:{s}")));
+            inline.extend(regex.iter().map(|s| format!("regex:{s}")));
+            let path_filter = (!paths.is_empty()).then(|| paths.clone());
+            let mut f = history_filter::ReplaceText::new(
+                rules.as_deref(),
+                &inline,
+                *redact_secrets,
+                path_filter,
+            )?;
+            let opts = history_filter::FilterOptions {
+                since: since.clone(),
+                dry_run: *dry_run,
+                no_snapshot: *no_snapshot,
+                allow_dirty: *allow_dirty,
+                prune_empty: *prune_empty,
+            };
+            let stats = history_filter::run_filter(std::path::Path::new("."), &opts, &mut f)?;
+            history_filter::print_summary(&stats, "replace-text", *dry_run);
+        }
+        HistoryCommands::FilterPath {
+            keep,
+            remove,
+            subdirectory,
+            rename,
+            since,
+            dry_run,
+            no_snapshot,
+            allow_dirty,
+            prune_empty,
+        } => {
+            use crate::history_filter;
+            let mut rename_pairs = Vec::new();
+            for r in rename {
+                match r.split_once(':') {
+                    Some((a, b)) => rename_pairs.push((a.to_string(), b.to_string())),
+                    None => return Err(anyhow::anyhow!("--rename expects OLD:NEW, got {:?}", r)),
+                }
+            }
+            let mut f = history_filter::FilterPath::new(
+                keep.clone(),
+                remove.clone(),
+                subdirectory.clone(),
+                rename_pairs,
+            )?;
+            let opts = history_filter::FilterOptions {
+                since: since.clone(),
+                dry_run: *dry_run,
+                no_snapshot: *no_snapshot,
+                allow_dirty: *allow_dirty,
+                prune_empty: *prune_empty,
+            };
+            let stats = history_filter::run_filter(std::path::Path::new("."), &opts, &mut f)?;
+            history_filter::print_summary(&stats, "filter-path", *dry_run);
+        }
+        HistoryCommands::Redate {
+            commit,
+            date,
+            map,
+            since,
+            dry_run,
+            no_snapshot,
+            allow_dirty,
+        } => {
+            use crate::history_filter;
+            let entries: Vec<(String, String)> = if let Some(map_path) = map {
+                // Same '<hash> <value>' format as the reword map; here value is a date.
+                crate::history_reword::load_reword_map(map_path)?
+            } else {
+                let hash = commit
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("provide a commit (or --map)"))?;
+                let when = date
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("provide a date with --date"))?;
+                vec![(hash, when)]
+            };
+            let mut f = history_filter::Redate::new(&entries, std::path::Path::new("."))?;
+            let opts = history_filter::FilterOptions {
+                since: since.clone(),
+                dry_run: *dry_run,
+                no_snapshot: *no_snapshot,
+                allow_dirty: *allow_dirty,
+                prune_empty: false,
+            };
+            let stats = history_filter::run_filter(std::path::Path::new("."), &opts, &mut f)?;
+            history_filter::print_summary(&stats, "redate", *dry_run);
+        }
+        HistoryCommands::ExecFilter {
+            command,
+            since,
+            dry_run,
+            no_snapshot,
+            allow_dirty,
+            prune_empty,
+        } => {
+            use crate::history_filter;
+            let mut f = history_filter::ExecFilter::new(command.clone());
+            let opts = history_filter::FilterOptions {
+                since: since.clone(),
+                dry_run: *dry_run,
+                no_snapshot: *no_snapshot,
+                allow_dirty: *allow_dirty,
+                prune_empty: *prune_empty,
+            };
+            let stats = history_filter::run_filter(std::path::Path::new("."), &opts, &mut f)?;
+            history_filter::print_summary(&stats, "exec-filter", *dry_run);
         }
         HistoryCommands::Mailmap { action } => match action {
             MailmapCommands::Apply {
