@@ -57,6 +57,9 @@ pub(crate) fn save(
     sign: &bool,
     no_sign: &bool,
     yes: &bool,
+    keep_date: &bool,
+    reset_author: &bool,
+    date: &Option<String>,
 ) -> Result<()> {
     let repo = GitRepo::open(".")?;
 
@@ -164,10 +167,15 @@ pub(crate) fn save(
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("--message/-m is required for commit/amend"))?;
         if *amend {
-            repo.commit_amend(msg)?;
+            let opts = crate::core::AmendOpts {
+                keep_date: *keep_date,
+                reset_author: *reset_author,
+                date: date.clone(),
+            };
+            repo.commit_amend_opts(msg, &opts)?;
             println!("✅ Commit amended: {}", msg);
         } else {
-            repo.commit(msg)?;
+            repo.commit_opts(msg, date.as_deref())?;
             println!("✅ Changes saved: {}", msg);
         }
         if !*skip_hooks {

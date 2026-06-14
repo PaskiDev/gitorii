@@ -47,10 +47,17 @@ torii save --reset HEAD~1 --reset-mode hard  # Undo last commit, discard changes
 |------|-------------|
 | `-m` | Commit message (required) |
 | `-a` / `--all` | Stage all changes before committing |
-| `--amend` | Amend previous commit |
+| `--amend` | Amend previous commit (preserves the original author date) |
 | `--revert <hash>` | Revert a specific commit |
 | `--reset <hash>` | Reset to a specific commit |
 | `--reset-mode` | `soft` / `mixed` / `hard` (default: mixed) |
+| `--date <when>` | Author date for the commit (any git date format) |
+| `--keep-date` | With `--amend`: pin the committer date to the author date |
+| `--reset-author` | With `--amend`: reset author to your identity + committer date |
+
+`FILES` accepts directories (`torii save src/`) as well as individual files.
+`--amend` preserves the original author date by default; `GIT_AUTHOR_DATE` and
+`GIT_COMMITTER_DATE` are honoured for both new commits and amends.
 
 ---
 
@@ -319,6 +326,13 @@ torii history reauthor ... --allow-dirty                     # allow uncommitted
 torii history mailmap apply                                  # apply .mailmap at repo root
 torii history mailmap apply --file other.mailmap             # alternative path
 torii history mailmap apply --since v0.6.0 --dry-run         # preview a range
+
+# Message rewrite (reword) — preserves author, committer, dates and content
+torii history reword <hash> -m "feat: clearer subject"      # reword one commit
+torii history reword <hash> -F message.txt                  # read message from a file
+torii history reword --map rewords.txt                      # batch: '<hash> <message>' per line
+torii history reword <hash> -m "..." --dry-run              # preview, no changes
+torii history reword <hash> -m "..." -S                     # GPG-sign the rewritten commit
 
 # Inspection (also exposed as flags)
 torii log --reflog                     # HEAD movement history

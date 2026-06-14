@@ -121,11 +121,40 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Add specific files to staging
+    /// Add specific files to staging.
+    ///
+    /// Accepts file paths (force-staged via `add_path`, matching the explicit
+    /// `git add <file>` intent) and **directory pathspecs** (with or without a
+    /// trailing slash). `git2::Index::add_path` rejects directories with
+    /// `invalid path; class=Index (10)`, so directory args are expanded via
+    /// `add_all`, which recurses and honours `.gitignore` the way
+    /// `git add <dir>` does.
     pub fn add<P: AsRef<Path>>(&self, paths: &[P]) -> Result<()> {
         let mut index = self.repo.index()?;
         for path in paths {
-            index.add_path(path.as_ref())?;
+            let raw = path.as_ref();
+            // A trailing slash is a directory hint and trips up add_path even
+            // when the rest of the path is a valid file pathspec.
+            let as_str = raw.to_string_lossy();
+            let trimmed = as_str.trim_end_matches('/');
+            let trimmed_path = Path::new(trimmed);
+
+            // Resolve against the work tree so relative args are tested correctly.
+            let is_dir = self
+                .repo
+                .workdir()
+                .map(|wd| wd.join(trimmed_path).is_dir())
+                .unwrap_or_else(|| trimmed_path.is_dir());
+
+            if is_dir || as_str.ends_with('/') {
+                index.add_all(
+                    [trimmed].iter(),
+                    git2::IndexAddOption::DEFAULT,
+                    None,
+                )?;
+            } else {
+                index.add_path(trimmed_path)?;
+            }
         }
         index.write()?;
         Ok(())
@@ -165,9 +194,19 @@ impl GitRepo {
         self.unstage(&paths)
     }
 
-    /// Commit changes
+    /// Commit changes.
     pub fn commit(&self, message: &str) -> Result<()> {
-        let sig = self.get_signature()?;
+        self.commit_opts(message, None)
+    }
+
+    /// Commit changes, optionally pinning the author date.
+    ///
+    /// Date precedence for the author: `author_date` → `GIT_AUTHOR_DATE` →
+    /// "now". The committer date follows `GIT_COMMITTER_DATE` → "now". This
+    /// honours the standard git env vars so the timeline can be driven
+    /// non-interactively.
+    pub fn commit_opts(&self, message: &str, author_date: Option<&str>) -> Result<()> {
+        let base = self.get_signature()?;
         let mut index = self.repo.index()?;
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
@@ -180,14 +219,48 @@ impl GitRepo {
 
         let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
 
-        commit_inner(&self.repo, Some("HEAD"), &sig, message, &tree, &parents)?;
+        let author_when = author_date
+            .and_then(parse_git_date)
+            .or_else(|| env_date("GIT_AUTHOR_DATE"))
+            .unwrap_or_else(|| base.when());
+        let committer_when = env_date("GIT_COMMITTER_DATE").unwrap_or_else(|| base.when());
+
+        let author = sig_with_when(&base, author_when)?;
+        let committer = sig_with_when(&base, committer_when)?;
+
+        commit_inner_split(
+            &self.repo,
+            Some("HEAD"),
+            &author,
+            &committer,
+            message,
+            &tree,
+            &parents,
+        )?;
 
         Ok(())
     }
 
-    /// Amend the previous commit
+    /// Amend the previous commit, preserving the original timeline by default.
     pub fn commit_amend(&self, message: &str) -> Result<()> {
-        let sig = self.get_signature()?;
+        self.commit_amend_opts(message, &AmendOpts::default())
+    }
+
+    /// Amend the previous commit's message (and staged content) **without
+    /// rewriting the author date** by default — matching `git commit --amend`.
+    ///
+    /// Date resolution:
+    /// - **author**: `opts.date` → `GIT_AUTHOR_DATE` → the original commit's
+    ///   author date. The author identity (name/email) is preserved from the
+    ///   original commit unless `opts.reset_author` is set.
+    /// - **committer**: `GIT_COMMITTER_DATE` → "now" (or the author date when
+    ///   `opts.keep_date` is set). The committer identity is the current
+    ///   configured identity, as git does.
+    ///
+    /// Pre-0.10.x this collapsed both dates to "now" and ignored the env vars,
+    /// which made it unusable for history-preserving message edits.
+    pub fn commit_amend_opts(&self, message: &str, opts: &AmendOpts) -> Result<()> {
+        let base = self.get_signature()?;
         let mut index = self.repo.index()?;
         let tree_id = index.write_tree()?;
         let tree = self.repo.find_tree(tree_id)?;
@@ -199,11 +272,52 @@ impl GitRepo {
             .target()
             .ok_or_else(|| ToriiError::RepoState("HEAD has no target".to_string()))?;
         let head_commit = self.repo.find_commit(head_oid)?;
+        let orig_author = head_commit.author();
+
+        let committer_when = env_date("GIT_COMMITTER_DATE").unwrap_or_else(|| base.when());
+
+        // Author identity + date.
+        let (author_name, author_email, author_when) = if opts.reset_author {
+            (
+                base.name().unwrap_or("").to_string(),
+                base.email().unwrap_or("").to_string(),
+                committer_when,
+            )
+        } else {
+            let when = opts
+                .date
+                .as_deref()
+                .and_then(parse_git_date)
+                .or_else(|| env_date("GIT_AUTHOR_DATE"))
+                .unwrap_or_else(|| orig_author.when());
+            (
+                orig_author.name().unwrap_or("").to_string(),
+                orig_author.email().unwrap_or("").to_string(),
+                when,
+            )
+        };
+
+        let committer_when = if opts.keep_date {
+            author_when
+        } else {
+            committer_when
+        };
+
+        let author = git2::Signature::new(&author_name, &author_email, &author_when)?;
+        let committer = sig_with_when(&base, committer_when)?;
 
         let parents: Vec<_> = head_commit.parents().collect();
         let parent_refs: Vec<_> = parents.iter().collect();
 
-        let new_oid = commit_inner(&self.repo, None, &sig, message, &tree, &parent_refs)?;
+        let new_oid = commit_inner_split(
+            &self.repo,
+            None,
+            &author,
+            &committer,
+            message,
+            &tree,
+            &parent_refs,
+        )?;
 
         // Move HEAD (or the underlying branch ref) to the new commit explicitly,
         // bypassing libgit2's "first parent" check that fails when HEAD was
@@ -748,6 +862,100 @@ impl GitRepo {
     fn get_signature(&self) -> Result<Signature<'static>> {
         resolve_signature(&self.repo)
     }
+}
+
+/// Options for [`GitRepo::commit_amend_opts`].
+#[derive(Debug, Default, Clone)]
+pub struct AmendOpts {
+    /// Pin the committer date to the (preserved/overridden) author date, so the
+    /// whole timeline is preserved without setting both env vars.
+    pub keep_date: bool,
+    /// Reset the author to the current configured identity and the committer
+    /// date (matches `git commit --amend --reset-author`).
+    pub reset_author: bool,
+    /// Explicit author date in any git date format; takes precedence over
+    /// `GIT_AUTHOR_DATE`.
+    pub date: Option<String>,
+}
+
+/// Clone `base`'s identity (name/email) but stamp it with `when`.
+fn sig_with_when(base: &Signature, when: git2::Time) -> Result<Signature<'static>> {
+    Ok(Signature::new(
+        base.name().unwrap_or(""),
+        base.email().unwrap_or(""),
+        &when,
+    )?)
+}
+
+/// Read a git date env var (`GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE`) and parse
+/// it; returns `None` when unset or unparseable.
+fn env_date(var: &str) -> Option<git2::Time> {
+    std::env::var(var).ok().and_then(|s| parse_git_date(&s))
+}
+
+/// Parse the common git date formats into a [`git2::Time`].
+///
+/// Supports: git internal `@<unix> [<+-HHMM>]`, RFC 2822, RFC 3339 / ISO 8601
+/// with offset, `YYYY-MM-DD HH:MM:SS <+-HHMM>`, and bare `YYYY-MM-DD HH:MM:SS`
+/// (interpreted in the local timezone, as git does).
+fn parse_git_date(s: &str) -> Option<git2::Time> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    // git internal: @<unix> [<+-HHMM>]
+    if let Some(rest) = s.strip_prefix('@') {
+        let mut it = rest.split_whitespace();
+        let secs: i64 = it.next()?.parse().ok()?;
+        let offset_min = it.next().and_then(parse_tz_offset_minutes).unwrap_or(0);
+        return Some(git2::Time::new(secs, offset_min));
+    }
+
+    let from_fixed = |dt: chrono::DateTime<chrono::FixedOffset>| {
+        git2::Time::new(dt.timestamp(), dt.offset().local_minus_utc() / 60)
+    };
+
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(s) {
+        return Some(from_fixed(dt));
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(from_fixed(dt));
+    }
+    if let Ok(dt) = chrono::DateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S %z") {
+        return Some(from_fixed(dt));
+    }
+
+    // Bare local-time form, e.g. "2026-06-09 17:06:31".
+    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        use chrono::TimeZone;
+        if let chrono::LocalResult::Single(dt) = chrono::Local.from_local_datetime(&naive) {
+            return Some(git2::Time::new(
+                dt.timestamp(),
+                dt.offset().local_minus_utc() / 60,
+            ));
+        }
+    }
+
+    None
+}
+
+/// Parse a `+HHMM` / `-HHMM` timezone offset into minutes east of UTC.
+fn parse_tz_offset_minutes(s: &str) -> Option<i32> {
+    let s = s.trim();
+    let mut chars = s.chars();
+    let sign = match chars.next()? {
+        '+' => 1,
+        '-' => -1,
+        _ => return None,
+    };
+    let rest = chars.as_str();
+    if rest.len() != 4 || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let h: i32 = rest[..2].parse().ok()?;
+    let m: i32 = rest[2..].parse().ok()?;
+    Some(sign * (h * 60 + m))
 }
 
 /// What kind of change a status entry represents.
