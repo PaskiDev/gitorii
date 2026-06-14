@@ -57,6 +57,7 @@ pub use vcs::commit_scan;
 pub use vcs::core;
 pub use vcs::core_extensions;
 pub use vcs::core_tag;
+pub use vcs::history_filter;
 pub use vcs::history_reauthor;
 pub use vcs::history_reword;
 pub use vcs::patch;

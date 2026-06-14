@@ -334,6 +334,18 @@ torii history reword --map rewords.txt                      # batch: '<hash> <me
 torii history reword <hash> -m "..." --dry-run              # preview, no changes
 torii history reword <hash> -m "..." -S                     # GPG-sign the rewritten commit
 
+# Content rewrite (filter-branch / filter-repo equivalents) — preserves identity + dates
+torii history replace-text --literal "SECRET==>***REMOVED***"   # replace text in all history
+torii history replace-text --regex "AKIA[0-9A-Z]{16}==>***"     # regex replace
+torii history replace-text --rules secrets.txt                  # rules file (filter-repo format)
+torii history replace-text --redact-secrets                     # redact lines the scanner flags
+torii history filter-path --remove secrets/                     # drop a path from all history
+torii history filter-path --subdirectory crates/lib            # extract a subdir as new root
+torii history filter-path --rename old/:new/                    # rename a path prefix
+torii history redate <hash> --date "2026-06-01 10:00:00 +0000"  # set a commit's date
+torii history exec-filter 'rm -f secret.txt'                    # arbitrary --tree-filter (slow)
+torii history filter-path --remove x --prune-empty             # drop commits that become empty
+
 # Inspection (also exposed as flags)
 torii log --reflog                     # HEAD movement history
 torii sync --verify                    # Compare local vs remote HEAD
