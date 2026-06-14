@@ -58,6 +58,7 @@ pub use vcs::core;
 pub use vcs::core_extensions;
 pub use vcs::core_tag;
 pub use vcs::history_reauthor;
+pub use vcs::history_reword;
 pub use vcs::patch;
 pub use vcs::scanner;
 pub use vcs::sign;

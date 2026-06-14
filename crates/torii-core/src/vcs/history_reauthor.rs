@@ -344,7 +344,7 @@ pub fn mailmap_apply(repo_path: &Path, mailmap_path: &Path, opts: &Options) -> R
 fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats> {
     let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
 
-    pre_flight(&repo, opts)?;
+    pre_flight(&repo, opts.allow_dirty)?;
 
     // Optional: take a safety snapshot before touching anything.
     let snapshot_id = if !opts.no_snapshot && !opts.dry_run {
@@ -452,13 +452,14 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
     }
 
     // Update refs to point at the new OIDs.
-    update_refs(&repo, &remap, opts, &mut stats)?;
+    update_refs(&repo, &remap, &mut stats)?;
 
     Ok(stats)
 }
 
-/// Aborts on pending operations and (unless --allow-dirty) on a dirty tree.
-fn pre_flight(repo: &Repository, opts: &Options) -> Result<()> {
+/// Aborts on pending operations and (unless `allow_dirty`) on a dirty tree.
+/// Shared by `reauthor` and `reword`.
+pub(crate) fn pre_flight(repo: &Repository, allow_dirty: bool) -> Result<()> {
     if repo.state() != git2::RepositoryState::Clean {
         return Err(ToriiError::RepoState(format!(
             "refusing to rewrite: repository has a pending operation ({:?}). \
@@ -466,7 +467,7 @@ fn pre_flight(repo: &Repository, opts: &Options) -> Result<()> {
             repo.state()
         )));
     }
-    if !opts.allow_dirty {
+    if !allow_dirty {
         let statuses = repo
             .statuses(Some(
                 git2::StatusOptions::new()
@@ -488,7 +489,7 @@ fn pre_flight(repo: &Repository, opts: &Options) -> Result<()> {
     Ok(())
 }
 
-fn collect_commits(repo: &Repository, since: Option<&str>) -> Result<Vec<Oid>> {
+pub(crate) fn collect_commits(repo: &Repository, since: Option<&str>) -> Result<Vec<Oid>> {
     let mut walk = repo.revwalk().map_err(ToriiError::Git)?;
     walk.push_head().map_err(ToriiError::Git)?;
     walk.set_sorting(Sort::TOPOLOGICAL | Sort::REVERSE)
@@ -548,11 +549,10 @@ fn sig_with_time<'a>(
 }
 
 /// Move every local branch, lightweight tag, HEAD and annotated tag from
-/// any old OID to its remapped new OID.
-fn update_refs(
+/// any old OID to its remapped new OID. Shared by `reauthor` and `reword`.
+pub(crate) fn update_refs(
     repo: &Repository,
     remap: &HashMap<Oid, Oid>,
-    opts: &Options,
     stats: &mut Stats,
 ) -> Result<()> {
     // Collect refs up front — mutating during iteration is fragile.
@@ -575,7 +575,7 @@ fn update_refs(
         }
 
         if name.starts_with("refs/tags/") {
-            handle_tag_ref(repo, &r, &name, remap, opts, stats)?;
+            handle_tag_ref(repo, &r, &name, remap, stats)?;
             continue;
         }
 
@@ -619,7 +619,6 @@ fn handle_tag_ref(
     r: &Reference,
     name: &str,
     remap: &HashMap<Oid, Oid>,
-    _opts: &Options,
     stats: &mut Stats,
 ) -> Result<()> {
     let short = name.strip_prefix("refs/tags/").unwrap_or(name);

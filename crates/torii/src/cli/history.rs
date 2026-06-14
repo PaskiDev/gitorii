@@ -153,6 +153,57 @@ the rewrite. A safety snapshot is taken by default (revert with
         sign: bool,
     },
 
+    /// Rewrite commit **messages** across history, preserving author,
+    /// committer, dates and content. The message-equivalent of `reauthor`
+    /// (identity) and `rewrite` (dates).
+    #[command(after_help = "Examples:
+  torii history reword <hash> -m \"feat: clearer subject\"   Reword one commit
+  torii history reword <hash> -F message.txt               Read message from a file
+  torii history reword --map rewords.txt                   Batch: '<hash> <message>' per line
+  torii history reword <hash> -m \"...\" --dry-run           Preview, no changes
+
+Author, committer and all timestamps are preserved exactly. A safety snapshot is
+taken by default (revert with 'torii snapshot restore <id>'). History is
+rewritten in place — push with 'torii sync --push --force'.")]
+    Reword {
+        /// Commit to reword (any revision). Omit when using --map.
+        #[arg(value_name = "COMMIT", required_unless_present = "map")]
+        commit: Option<String>,
+
+        /// New commit message (single commit).
+        #[arg(short, long, conflicts_with_all = ["file", "map"])]
+        message: Option<String>,
+
+        /// Read the new message from a file (single commit; supports multi-line).
+        #[arg(short = 'F', long, value_name = "FILE", conflicts_with = "map")]
+        file: Option<PathBuf>,
+
+        /// Batch map file: one '<hash> <new single-line message>' per line.
+        #[arg(long, value_name = "FILE", conflicts_with = "commit")]
+        map: Option<PathBuf>,
+
+        /// Limit the walk to commits since this revision (exclusive).
+        #[arg(long, value_name = "REV")]
+        since: Option<String>,
+
+        /// Preview the rewrite without touching the repo.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip the safety snapshot taken before rewriting.
+        #[arg(long)]
+        no_snapshot: bool,
+
+        /// Proceed even if the working tree has uncommitted changes.
+        #[arg(long)]
+        allow_dirty: bool,
+
+        /// Force GPG signing of every rewritten commit, even if
+        /// `git.sign_commits` is `false`. Requires `git.gpg_key`.
+        #[arg(short = 'S', long)]
+        sign: bool,
+    },
+
     /// Apply a `.mailmap` file (standard git format) across history.
     ///
     /// See <https://git-scm.com/docs/gitmailmap> for the format. Use this for
@@ -295,6 +346,50 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             let stats =
                 history_reauthor::reauthor(std::path::Path::new("."), old_m, new_id, &opts)?;
             history_reauthor::print_summary(&stats, *dry_run);
+        }
+        HistoryCommands::Reword {
+            commit,
+            message,
+            file,
+            map,
+            since,
+            dry_run,
+            no_snapshot,
+            allow_dirty,
+            sign,
+        } => {
+            use crate::history_reword;
+            // `--sign` forces signing through the same env-var override used by
+            // `torii save -S`; commit_inner_split reads it for each recreated commit.
+            let _sign_guard = SignOverrideGuard::new(if *sign { Some(true) } else { None });
+
+            let entries: Vec<(String, String)> = if let Some(map_path) = map {
+                history_reword::load_reword_map(map_path)?
+            } else {
+                let hash = commit
+                    .clone()
+                    .ok_or_else(|| anyhow::anyhow!("provide a commit (or --map)"))?;
+                let msg = if let Some(m) = message {
+                    m.clone()
+                } else if let Some(f) = file {
+                    std::fs::read_to_string(f)
+                        .map_err(|e| anyhow::anyhow!("read {}: {}", f.display(), e))?
+                } else {
+                    return Err(anyhow::anyhow!(
+                        "provide a new message with -m/--message or -F/--file"
+                    ));
+                };
+                vec![(hash, msg)]
+            };
+
+            let opts = history_reword::RewordOptions {
+                since: since.clone(),
+                dry_run: *dry_run,
+                no_snapshot: *no_snapshot,
+                allow_dirty: *allow_dirty,
+            };
+            let stats = history_reword::reword(std::path::Path::new("."), &entries, &opts)?;
+            history_reword::print_summary(&stats, *dry_run);
         }
         HistoryCommands::Mailmap { action } => match action {
             MailmapCommands::Apply {

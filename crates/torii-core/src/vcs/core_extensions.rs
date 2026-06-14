@@ -268,13 +268,13 @@ impl GitRepo {
             base,
             todo_abs.display()
         );
-        let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
+        let (todo_for_git, reword_map, has_interactive) = preprocess_reword_todo(&todo_abs)?;
         let editor = format!("cp {}", todo_for_git.display());
         let mut cmd = std::process::Command::new("git");
         cmd.args(["rebase", "-i", base])
             .env("GIT_SEQUENCE_EDITOR", &editor)
             .current_dir(&repo_path);
-        install_message_editor(&mut cmd, &reword_map, &repo_path)?;
+        install_message_editor(&mut cmd, &reword_map, has_interactive, &repo_path)?;
         let status = cmd.status()?;
         report_rebase_outcome(&repo_path, status);
         Ok(())
@@ -371,13 +371,13 @@ impl GitRepo {
             "🔄 Rebasing from root using todo file: {}",
             todo_abs.display()
         );
-        let (todo_for_git, reword_map) = preprocess_reword_todo(&todo_abs)?;
+        let (todo_for_git, reword_map, has_interactive) = preprocess_reword_todo(&todo_abs)?;
         let editor = format!("cp {}", todo_for_git.display());
         let mut cmd = std::process::Command::new("git");
         cmd.args(["rebase", "-i", "--root"])
             .env("GIT_SEQUENCE_EDITOR", &editor)
             .current_dir(&repo_path);
-        install_message_editor(&mut cmd, &reword_map, &repo_path)?;
+        install_message_editor(&mut cmd, &reword_map, has_interactive, &repo_path)?;
         let status = cmd.status()?;
         report_rebase_outcome(&repo_path, status);
         Ok(())
@@ -1579,6 +1579,7 @@ fn preprocess_reword_todo(
 ) -> Result<(
     std::path::PathBuf,
     std::collections::HashMap<String, String>,
+    bool,
 )> {
     let raw = std::fs::read_to_string(src)
         .map_err(|e| crate::error::ToriiError::Fs(format!("read todo {}: {}", src.display(), e)))?;
@@ -1586,6 +1587,9 @@ fn preprocess_reword_todo(
     let mut out_lines: Vec<String> = Vec::with_capacity(raw.lines().count());
     let mut reword_map: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
+    // True when at least one `reword` has no inline message — those must open
+    // the user's editor, so a message shim that chains to it is required.
+    let mut has_interactive_reword = false;
 
     for line in raw.lines() {
         let trimmed = line.trim_start();
@@ -1607,22 +1611,22 @@ fn preprocess_reword_todo(
             }
         };
         let inline_msg = parts.next().unwrap_or("").trim().to_string();
+        // Keep `reword` either way so git invokes the editor. With an inline
+        // message our shim replaces the buffer; without one, the shim hands off
+        // to the user's editor (GIT_EDITOR / core.editor / EDITOR).
         if !inline_msg.is_empty() {
             reword_map.insert(sha.clone(), inline_msg);
-            // Keep `reword` so git invokes GIT_EDITOR; our shim replaces msg.
-            out_lines.push(format!("reword {}", sha));
         } else {
-            // No inline message → behave like a noop reword. Use `pick` so git
-            // doesn't pause asking for a message we can't supply.
-            out_lines.push(format!("pick {}", sha));
+            has_interactive_reword = true;
         }
+        out_lines.push(format!("reword {}", sha));
     }
 
     let dest = std::env::temp_dir().join(format!("torii-rebase-todo-{}.txt", std::process::id()));
     std::fs::write(&dest, out_lines.join("\n") + "\n")
         .map_err(|e| crate::error::ToriiError::Fs(format!("write todo: {}", e)))?;
 
-    Ok((dest, reword_map))
+    Ok((dest, reword_map, has_interactive_reword))
 }
 
 /// Install a GIT_EDITOR shim so that `reword` lines from the torii todo file
@@ -1640,11 +1644,27 @@ fn preprocess_reword_todo(
 fn install_message_editor(
     cmd: &mut std::process::Command,
     reword_map: &std::collections::HashMap<String, String>,
+    has_interactive_reword: bool,
     repo_path: &std::path::Path,
 ) -> Result<()> {
-    if reword_map.is_empty() {
+    // Nothing to reword at all → leave the editor untouched so squash/fixup/etc.
+    // still open the user's normal editor.
+    if reword_map.is_empty() && !has_interactive_reword {
         return Ok(());
     }
+
+    // The editor git would have used (honours GIT_EDITOR → core.editor →
+    // VISUAL → EDITOR → built-in default). We resolve it now, before hijacking
+    // GIT_EDITOR on the child, so bare `reword <sha>` lines can hand off to it.
+    let user_editor = std::process::Command::new("git")
+        .args(["var", "GIT_EDITOR"])
+        .current_dir(repo_path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "vi".to_string());
 
     // Resolve each todo-file sha to the original commit subject. The map is
     // (subject → new message). Tabs + newlines in the new message are encoded.
@@ -1663,7 +1683,8 @@ fn install_message_editor(
         }
         subject_map.push((subject, new_msg.clone()));
     }
-    if subject_map.is_empty() {
+    // No inline rewrites resolved AND no bare rewords → nothing for the shim.
+    if subject_map.is_empty() && !has_interactive_reword {
         return Ok(());
     }
 
@@ -1683,27 +1704,36 @@ fn install_message_editor(
 
     let shim_path =
         std::env::temp_dir().join(format!("torii-rebase-editor-{}.sh", std::process::id()));
+    // Escape single quotes so the editor command survives the single-quoted
+    // shell assignment below.
+    let editor_escaped = user_editor.replace('\'', "'\\''");
     let shim_body = format!(
         r#"#!/bin/sh
 # torii-generated rebase message editor.
 # Usage: GIT_EDITOR <commit-msg-file>
+# Inline-mapped commits get their new message written directly; any other
+# `reword` hands off to the user's own editor.
 set -e
 MSG_FILE="$1"
 [ -z "$MSG_FILE" ] && exit 0
 MAP="{map}"
-[ ! -f "$MAP" ] && exit 0
+USER_EDITOR='{editor}'
 # Read the first non-comment line of the message — that's the subject.
 SUBJ=$(awk '/^#/ {{ next }} /./ {{ print; exit }}' "$MSG_FILE")
-[ -z "$SUBJ" ] && exit 0
-while IFS=$(printf '\t') read -r KEY MSG; do
-    if [ "$KEY" = "$SUBJ" ]; then
-        printf '%b\n' "$(printf '%s' "$MSG" | sed 's/\\n/\n/g; s/\\\\/\\/g')" > "$MSG_FILE"
-        exit 0
-    fi
-done < "$MAP"
+if [ -n "$SUBJ" ] && [ -f "$MAP" ]; then
+    while IFS=$(printf '\t') read -r KEY MSG; do
+        if [ "$KEY" = "$SUBJ" ]; then
+            printf '%b\n' "$(printf '%s' "$MSG" | sed 's/\\n/\n/g; s/\\\\/\\/g')" > "$MSG_FILE"
+            exit 0
+        fi
+    done < "$MAP"
+fi
+# No inline mapping for this commit → open the user's editor.
+eval "$USER_EDITOR \"$MSG_FILE\""
 exit 0
 "#,
         map = map_path.display(),
+        editor = editor_escaped,
     );
     std::fs::write(&shim_path, shim_body)
         .map_err(|e| crate::error::ToriiError::Fs(format!("write shim: {}", e)))?;

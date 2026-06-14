@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-06-14
+
+### Added
+
+- **`torii history reword`** — rewrite commit **messages** across history
+  without changing content, author, committer or dates. The message-equivalent
+  of `history reauthor` (identity) and `history rewrite` (dates). Forms:
+  `reword <hash> -m "msg"`, `reword <hash> -F file`, and batch
+  `reword --map <file>` (one `<hash> <message>` per line). Takes a safety
+  snapshot by default and supports `--since`, `--dry-run`, `--no-snapshot`,
+  `--allow-dirty` and `-S/--sign`. Closes the gap that previously forced
+  `git filter-repo` for non-interactive message edits.
+- `torii save --date <when>` — set the author date for a new commit (any git
+  date format). With `--amend`, also `--keep-date` (pin committer date to the
+  author date) and `--reset-author`.
+
+### Fixed
+
+- **`torii save --amend` no longer collapses the author date to "now".** It now
+  preserves the original commit's author date by default (matching
+  `git commit --amend`) and honours `GIT_AUTHOR_DATE` / `GIT_COMMITTER_DATE`.
+  Regular `torii save` honours these env vars too. Previously every amend
+  rewrote the timeline, which made it unusable for history-preserving edits.
+- **`torii history rebase -i --todo-file` now honours bare `reword` lines.** A
+  `reword <sha>` without an inline message used to be silently downgraded to
+  `pick`; it now opens the user's editor (`GIT_EDITOR` → `core.editor` →
+  `EDITOR`), so the documented non-interactive rebase path can actually reword.
+- **`torii save <dir>/` no longer fails** with `invalid path; class=Index (10)`.
+  Directory pathspecs (with or without a trailing slash) are expanded and staged
+  like `git add <dir>`.
+
 ## [0.10.0] - 2026-06-05
 
 ### Added

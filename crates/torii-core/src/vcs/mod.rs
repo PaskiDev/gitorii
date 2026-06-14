@@ -9,6 +9,7 @@ pub mod core;
 pub mod core_extensions;
 pub mod core_tag;
 pub mod history_reauthor;
+pub mod history_reword;
 pub mod patch;
 pub mod scanner;
 pub mod sign;

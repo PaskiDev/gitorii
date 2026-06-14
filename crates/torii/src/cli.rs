@@ -173,6 +173,23 @@ enum Commands {
         /// hanging on a prompt nobody can answer.
         #[arg(short = 'y', long)]
         yes: bool,
+
+        /// With --amend: pin the committer date to the author date so the
+        /// full original timeline is preserved. No effect without --amend.
+        #[arg(long, requires = "amend")]
+        keep_date: bool,
+
+        /// With --amend: reset the author to your current identity and the
+        /// committer date, instead of preserving the original author/date.
+        #[arg(long, requires = "amend", conflicts_with = "date")]
+        reset_author: bool,
+
+        /// Author date in any git date format (e.g. "2026-06-09 17:06:31",
+        /// RFC2822, or @<unix>). Sets the author date for new commits and, with
+        /// --amend, overrides the preserved date. GIT_AUTHOR_DATE /
+        /// GIT_COMMITTER_DATE from the environment are also honoured.
+        #[arg(long, value_name = "WHEN")]
+        date: Option<String>,
     },
 
     /// Sync with remote (pull+push) or integrate a branch
@@ -1195,9 +1212,12 @@ impl Cli {
                 sign,
                 no_sign,
                 yes,
+                keep_date,
+                reset_author,
+                date,
             } => repo::save(
                 message, all, files, amend, revert, reset, reset_mode, unstage, skip_hooks, sign,
-                no_sign, yes,
+                no_sign, yes, keep_date, reset_author, date,
             ),
             Commands::Sync {
                 branch,
