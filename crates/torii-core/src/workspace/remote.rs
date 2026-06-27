@@ -106,6 +106,38 @@ impl GitHubClient {
                     .to_string(),
             })
     }
+
+    /// Map a GitHub repo JSON object (from the REST API) into a `RemoteRepo`.
+    fn parse_repo(json: &serde_json::Value) -> RemoteRepo {
+        let owner = json["owner"]["login"].as_str().unwrap_or("");
+        let name = json["name"].as_str().unwrap_or("").to_string();
+        let private = json["private"].as_bool().unwrap_or(true);
+        RemoteRepo {
+            name: name.clone(),
+            description: json["description"].as_str().map(|s| s.to_string()),
+            visibility: if private {
+                Visibility::Private
+            } else {
+                Visibility::Public
+            },
+            default_branch: json["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string(),
+            url: json["html_url"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("https://github.com/{}/{}", owner, name)),
+            ssh_url: json["ssh_url"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("git@github.com:{}/{}.git", owner, name)),
+            clone_url: json["clone_url"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("https://github.com/{}/{}.git", owner, name)),
+        }
+    }
 }
 
 impl PlatformClient for GitHubClient {
@@ -227,106 +259,129 @@ impl PlatformClient for GitHubClient {
     }
 
     fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
-        let repo_name = format!("{}/{}", owner, repo);
-        let mut args = vec!["repo", "edit", &repo_name];
+        // Native API call — no longer requires `gh` to be installed.
+        // Permissions: token needs `repo` scope (or fine-grained `Administration: write`).
+        let url = format!("{}/repos/{}/{}", self.base_url, owner, repo);
 
-        let mut temp_args = Vec::new();
-
+        let mut body = serde_json::json!({});
         if let Some(desc) = &settings.description {
-            temp_args.push("--description".to_string());
-            temp_args.push(desc.clone());
+            body["description"] = serde_json::Value::String(desc.clone());
         }
-
         if let Some(homepage) = &settings.homepage {
-            temp_args.push("--homepage".to_string());
-            temp_args.push(homepage.clone());
+            body["homepage"] = serde_json::Value::String(homepage.clone());
         }
-
         if let Some(vis) = &settings.visibility {
-            match vis {
-                Visibility::Public => temp_args.push("--visibility=public".to_string()),
-                Visibility::Private => temp_args.push("--visibility=private".to_string()),
-                Visibility::Internal => temp_args.push("--visibility=private".to_string()),
-            }
+            // GitHub takes a `private` bool; Internal (GitLab-only) maps to private.
+            let private = matches!(vis, Visibility::Private | Visibility::Internal);
+            body["private"] = serde_json::Value::Bool(private);
         }
-
         if let Some(branch) = &settings.default_branch {
-            temp_args.push("--default-branch".to_string());
-            temp_args.push(branch.clone());
+            body["default_branch"] = serde_json::Value::String(branch.clone());
         }
 
-        // Convert temp_args to string slices
-        let arg_refs: Vec<&str> = temp_args.iter().map(|s| s.as_str()).collect();
-        args.extend(arg_refs);
+        let resp = reqwest::blocking::Client::new()
+            .patch(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "torii-cli")
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
 
-        let output = std::process::Command::new("gh").args(&args).output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                println!("✅ Repository settings updated");
-                self.get_repo(owner, repo)
-            }
-            _ => Err(ToriiError::Subprocess {
-                tool: "gh".into(),
-                message: "Failed to update repository settings".to_string(),
-            }),
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let msg = resp.text().unwrap_or_default();
+            return Err(ToriiError::PlatformApi {
+                provider: "github".into(),
+                status,
+                message: msg,
+            });
         }
+
+        let json: serde_json::Value = resp.json().map_err(|e| ToriiError::MalformedResponse {
+            provider: "github".into(),
+            message: format!("Failed to parse GitHub response: {}", e),
+        })?;
+
+        println!("✅ Repository settings updated");
+        Ok(Self::parse_repo(&json))
     }
 
     fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
-        let repo_name = format!("{}/{}", owner, repo);
-        let output = std::process::Command::new("gh")
-            .args([
-                "repo",
-                "view",
-                &repo_name,
-                "--json",
-                "name,description,visibility,defaultBranchRef,url,sshUrl",
-            ])
-            .output();
+        // Native API call — no longer requires `gh` to be installed.
+        let url = format!("{}/repos/{}/{}", self.base_url, owner, repo);
 
-        match output {
-            Ok(out) if out.status.success() => {
-                // Parse JSON output (simplified)
-                Ok(RemoteRepo {
-                    name: repo.to_string(),
-                    description: None,
-                    visibility: Visibility::Private,
-                    default_branch: "main".to_string(),
-                    url: format!("https://github.com/{}/{}", owner, repo),
-                    ssh_url: format!("git@github.com:{}/{}.git", owner, repo),
-                    clone_url: format!("https://github.com/{}/{}.git", owner, repo),
-                })
-            }
-            _ => Err(ToriiError::Subprocess {
-                tool: "gh".into(),
-                message: "Failed to get repository information".to_string(),
-            }),
+        let resp = reqwest::blocking::Client::new()
+            .get(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "torii-cli")
+            .send()
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
+
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let msg = resp.text().unwrap_or_default();
+            return Err(ToriiError::PlatformApi {
+                provider: "github".into(),
+                status,
+                message: msg,
+            });
         }
+
+        let json: serde_json::Value = resp.json().map_err(|e| ToriiError::MalformedResponse {
+            provider: "github".into(),
+            message: format!("Failed to parse GitHub response: {}", e),
+        })?;
+
+        Ok(Self::parse_repo(&json))
     }
 
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        let output = std::process::Command::new("gh")
-            .args([
-                "repo",
-                "list",
-                "--json",
-                "name,description,visibility",
-                "--limit",
-                "100",
-            ])
-            .output();
+        // Native API call — no longer requires `gh` to be installed. Previously
+        // this shelled out to `gh` and then returned an empty Vec regardless.
+        let url = format!(
+            "{}/user/repos?per_page=100&affiliation=owner",
+            self.base_url
+        );
 
-        match output {
-            Ok(out) if out.status.success() => {
-                // Return empty list for now (would parse JSON in full implementation)
-                Ok(Vec::new())
-            }
-            _ => Err(ToriiError::Subprocess {
-                tool: "gh".into(),
-                message: "Failed to list repositories".to_string(),
-            }),
+        let resp = reqwest::blocking::Client::new()
+            .get(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "torii-cli")
+            .send()
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
+
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let msg = resp.text().unwrap_or_default();
+            return Err(ToriiError::PlatformApi {
+                provider: "github".into(),
+                status,
+                message: msg,
+            });
         }
+
+        let json: serde_json::Value = resp.json().map_err(|e| ToriiError::MalformedResponse {
+            provider: "github".into(),
+            message: format!("Failed to parse GitHub response: {}", e),
+        })?;
+
+        let repos = json
+            .as_array()
+            .map(|arr| arr.iter().map(Self::parse_repo).collect())
+            .unwrap_or_default();
+        Ok(repos)
     }
 
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
@@ -339,50 +394,49 @@ impl PlatformClient for GitHubClient {
     }
 
     fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
-        let repo_name = format!("{}/{}", owner, repo);
-        let mut args = vec!["repo", "edit", &repo_name];
+        // Native API call — no longer requires `gh` to be installed.
+        let url = format!("{}/repos/{}/{}", self.base_url, owner, repo);
 
-        let mut temp_args = Vec::new();
-
+        let mut body = serde_json::json!({});
         if let Some(issues) = features.issues {
-            temp_args.push(if issues {
-                "--enable-issues".to_string()
-            } else {
-                "--disable-issues".to_string()
-            });
+            body["has_issues"] = serde_json::Value::Bool(issues);
         }
-
         if let Some(wiki) = features.wiki {
-            temp_args.push(if wiki {
-                "--enable-wiki".to_string()
-            } else {
-                "--disable-wiki".to_string()
-            });
+            body["has_wiki"] = serde_json::Value::Bool(wiki);
         }
-
         if let Some(projects) = features.projects {
-            temp_args.push(if projects {
-                "--enable-projects".to_string()
-            } else {
-                "--disable-projects".to_string()
+            body["has_projects"] = serde_json::Value::Bool(projects);
+        }
+        if let Some(downloads) = features.downloads {
+            body["has_downloads"] = serde_json::Value::Bool(downloads);
+        }
+        // GitHub Discussions can't be toggled via the repos PATCH endpoint, so
+        // `features.discussions` is intentionally not sent here.
+
+        let resp = reqwest::blocking::Client::new()
+            .patch(&url)
+            .header("Authorization", format!("token {}", self.token))
+            .header("Accept", "application/vnd.github.v3+json")
+            .header("User-Agent", "torii-cli")
+            .json(&body)
+            .send()
+            .map_err(|e| ToriiError::Network {
+                provider: "github".into(),
+                message: e.to_string(),
+            })?;
+
+        let status = resp.status().as_u16();
+        if !resp.status().is_success() {
+            let msg = resp.text().unwrap_or_default();
+            return Err(ToriiError::PlatformApi {
+                provider: "github".into(),
+                status,
+                message: msg,
             });
         }
 
-        let arg_refs: Vec<&str> = temp_args.iter().map(|s| s.as_str()).collect();
-        args.extend(arg_refs);
-
-        let output = std::process::Command::new("gh").args(&args).output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                println!("✅ Repository features configured");
-                Ok(())
-            }
-            _ => Err(ToriiError::Subprocess {
-                tool: "gh".into(),
-                message: "Failed to configure repository features".to_string(),
-            }),
-        }
+        println!("✅ Repository features configured");
+        Ok(())
     }
 }
 
