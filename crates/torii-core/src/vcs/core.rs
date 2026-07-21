@@ -510,7 +510,7 @@ impl GitRepo {
         }
 
         Err(ToriiError::RepoState(format!(
-            "Pull not fast-forward on '{}'. Local and remote diverged. Use 'torii sync {} --merge' or 'torii sync {} --rebase' to integrate.",
+            "Pull not fast-forward on '{}'. Local and remote diverged. Use 'torii sync origin/{} --merge' or 'torii sync origin/{} --rebase' to integrate the remote branch.",
             branch, branch, branch
         )))
     }
