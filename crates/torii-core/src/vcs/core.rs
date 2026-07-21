@@ -217,7 +217,32 @@ impl GitRepo {
             Err(_) => None,
         };
 
-        let parents: Vec<&git2::Commit> = parent_commit.iter().collect();
+        // Mid-merge (MERGE_HEAD present — e.g. resolving the conflicts that
+        // `torii sync <branch> --merge` left behind): the commit must record
+        // the merged-in heads as extra parents and clear the merge state.
+        // Without this, resolving with `torii save` produced a SINGLE-parent
+        // commit that did not contain the upstream history, so a subsequent
+        // push kept being rejected as non-fast-forward.
+        let in_merge = self.repo.state() == git2::RepositoryState::Merge;
+        let mut merge_parents: Vec<git2::Commit> = Vec::new();
+        if in_merge {
+            // git2 (esta versión) no expone merge_head_foreach: MERGE_HEAD es
+            // un archivo con un OID por línea (varios en un octopus merge).
+            let contents = std::fs::read_to_string(self.repo.path().join("MERGE_HEAD"))
+                .unwrap_or_default();
+            for line in contents.lines() {
+                let Ok(oid) = git2::Oid::from_str(line.trim()) else {
+                    continue;
+                };
+                // No duplicar si MERGE_HEAD coincidiera con HEAD.
+                if parent_commit.as_ref().map(|p| p.id()) != Some(oid) {
+                    merge_parents.push(self.repo.find_commit(oid)?);
+                }
+            }
+        }
+
+        let parents: Vec<&git2::Commit> =
+            parent_commit.iter().chain(merge_parents.iter()).collect();
 
         let author_when = author_date
             .and_then(parse_git_date)
@@ -237,6 +262,10 @@ impl GitRepo {
             &tree,
             &parents,
         )?;
+
+        if in_merge {
+            self.repo.cleanup_state()?;
+        }
 
         Ok(())
     }
