@@ -1998,3 +1998,67 @@ mod branchish_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod merge_commit_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Resolving a conflicted merge with `commit` (the flow `torii save -m`
+    /// uses) must produce a TWO-parent merge commit and clear the merge state
+    /// — a single-parent commit does not contain the upstream history and
+    /// every subsequent push is rejected as non-fast-forward.
+    #[test]
+    fn commit_during_merge_records_both_parents() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let write = |name: &str, content: &str| {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        };
+        let commit_all = |repo: &git2::Repository, msg: &str, parents: &[git2::Oid]| {
+            let mut idx = repo.index().unwrap();
+            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            let pcs: Vec<git2::Commit> =
+                parents.iter().map(|&o| repo.find_commit(o).unwrap()).collect();
+            let prefs: Vec<&git2::Commit> = pcs.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs).unwrap()
+        };
+        write("f.txt", "base\n");
+        let base = commit_all(&repo, "base", &[]);
+        // Rama divergente con conflicto en f.txt, expuesta como remote-tracking.
+        write("f.txt", "theirs\n");
+        let theirs = commit_all(&repo, "theirs", &[base]);
+        repo.reference("refs/remotes/origin/main", theirs, true, "test")
+            .unwrap();
+        // HEAD vuelve a base y diverge con su propio cambio.
+        repo.reset(
+            repo.find_commit(base).unwrap().as_object(),
+            git2::ResetType::Hard,
+            None,
+        )
+        .unwrap();
+        write("f.txt", "ours\n");
+        let _ours = commit_all(&repo, "ours", &[base]);
+        drop(repo);
+
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.merge_branch("origin/main").unwrap(); // deja conflicto en el índice
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Merge);
+        // Resolución manual + el flujo de `torii save`.
+        write("f.txt", "resolved\n");
+        {
+            let mut idx = gr.repo.index().unwrap();
+            idx.add_path(std::path::Path::new("f.txt")).unwrap();
+            idx.write().unwrap();
+        }
+        gr.commit("merge").unwrap();
+
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.parent_count(), 2, "el commit debe tener DOS padres");
+        assert_eq!(head.parent(1).unwrap().id(), theirs);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+}
