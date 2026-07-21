@@ -8,6 +8,7 @@
 //! which is the canonical URL → (`platform`, `owner`, `repo`) parser
 //! shared by every CLI command that accepts `--remote`.
 
+pub mod contents;
 pub mod issue;
 pub mod package;
 pub mod pipeline;
