@@ -1225,18 +1225,31 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Merge a branch into current branch
+    /// Resolve a branch-ish name to a reference. Local branches win; then
+    /// remote-tracking branches (so `torii sync origin/main --merge` integrates
+    /// a diverged upstream — previously only `refs/heads/*` resolved and the
+    /// diverged-pull error suggested a command that could not work); finally
+    /// git's own short-name DWIM as a fallback.
+    pub fn resolve_branchish(&self, name: &str) -> Result<git2::Reference<'_>> {
+        if let Ok(r) = self.repo.find_reference(&format!("refs/heads/{}", name)) {
+            return Ok(r);
+        }
+        if let Ok(r) = self.repo.find_reference(&format!("refs/remotes/{}", name)) {
+            return Ok(r);
+        }
+        self.repo
+            .resolve_reference_from_short_name(name)
+            .map_err(crate::error::ToriiError::Git)
+    }
+
+    /// Merge a branch (local or remote-tracking, e.g. `origin/main`) into the
+    /// current branch
     pub fn merge_branch(&self, branch_name: &str) -> Result<()> {
-        let branch_ref = format!("refs/heads/{}", branch_name);
+        let resolved = self.resolve_branchish(branch_name)?;
         let annotated = self
             .repo
-            .find_reference(&branch_ref)
-            .map_err(crate::error::ToriiError::Git)
-            .and_then(|r| {
-                self.repo
-                    .reference_to_annotated_commit(&r)
-                    .map_err(crate::error::ToriiError::Git)
-            })?;
+            .reference_to_annotated_commit(&resolved)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let (analysis, _) = self
             .repo
@@ -1290,11 +1303,11 @@ impl GitRepo {
                 .map_err(crate::error::ToriiError::Git)?
                 .peel_to_commit()
                 .map_err(crate::error::ToriiError::Git)?;
+            // Second parent = the commit resolved above (NOT a fresh
+            // refs/heads lookup, which would fail for remote-tracking names).
             let branch_commit = self
                 .repo
-                .find_reference(&branch_ref)
-                .map_err(crate::error::ToriiError::Git)?
-                .peel_to_commit()
+                .find_commit(annotated.id())
                 .map_err(crate::error::ToriiError::Git)?;
             let msg = format!("Merge branch '{}'", branch_name);
             crate::core::commit_inner(
@@ -1315,19 +1328,14 @@ impl GitRepo {
         Ok(())
     }
 
-    /// Rebase current branch onto another branch
+    /// Rebase current branch onto another branch (local or remote-tracking)
     pub fn rebase_branch(&self, branch_name: &str) -> Result<()> {
         // git2's Rebase API is available — use it for non-interactive rebase
-        let branch_ref = format!("refs/heads/{}", branch_name);
+        let resolved = self.resolve_branchish(branch_name)?;
         let upstream = self
             .repo
-            .find_reference(&branch_ref)
-            .map_err(crate::error::ToriiError::Git)
-            .and_then(|r| {
-                self.repo
-                    .reference_to_annotated_commit(&r)
-                    .map_err(crate::error::ToriiError::Git)
-            })?;
+            .reference_to_annotated_commit(&resolved)
+            .map_err(crate::error::ToriiError::Git)?;
 
         let mut rebase = self
             .repo
@@ -1928,6 +1936,65 @@ mod fetch_tests {
             err.contains("no remotes"),
             "error should mention missing remotes: {}",
             err
+        );
+    }
+}
+
+#[cfg(test)]
+mod branchish_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// A temp repo with one commit on the default branch and a remote-tracking
+    /// ref `refs/remotes/origin/main` one commit ahead — the diverged-upstream
+    /// shape that `torii sync origin/main --merge` must resolve.
+    fn repo_with_remote_ref() -> (TempDir, GitRepo) {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        {
+            let sig = git2::Signature::now("t", "t@example.com").unwrap();
+            let tree_oid = repo.index().unwrap().write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let base = repo
+                .commit(Some("HEAD"), &sig, &sig, "base", &tree, &[])
+                .unwrap();
+            let base_commit = repo.find_commit(base).unwrap();
+            let upstream = repo
+                .commit(None, &sig, &sig, "upstream", &tree, &[&base_commit])
+                .unwrap();
+            repo.reference("refs/remotes/origin/main", upstream, true, "test")
+                .unwrap();
+        }
+        drop(repo);
+        let gr = GitRepo::open(dir.path()).unwrap();
+        (dir, gr)
+    }
+
+    #[test]
+    fn resolve_branchish_finds_local_remote_and_dwim() {
+        let (_dir, gr) = repo_with_remote_ref();
+        // Local branch resolves via refs/heads (whatever the default name is).
+        let local = gr
+            .resolve_branchish("main")
+            .or_else(|_| gr.resolve_branchish("master"));
+        assert!(local.is_ok(), "local branch must resolve");
+        // Remote-tracking name resolves (the bug: this returned NotFound).
+        let remote = gr.resolve_branchish("origin/main").unwrap();
+        assert_eq!(remote.name(), Some("refs/remotes/origin/main"));
+        // Unknown names still error.
+        assert!(gr.resolve_branchish("nope/nothing").is_err());
+    }
+
+    #[test]
+    fn merge_branch_accepts_remote_tracking_names() {
+        let (_dir, gr) = repo_with_remote_ref();
+        // HEAD is one commit behind refs/remotes/origin/main ⇒ fast-forward.
+        gr.merge_branch("origin/main").unwrap();
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(
+            head.message(),
+            Some("upstream"),
+            "HEAD must advance to the remote-tracking commit"
         );
     }
 }
