@@ -44,6 +44,7 @@ pub mod workspace;
 // should prefer the canonical `crate::platforms::pr` etc. paths.
 
 // platforms/
+pub use platforms::contents;
 pub use platforms::issue;
 pub use platforms::package;
 pub use platforms::pipeline;
