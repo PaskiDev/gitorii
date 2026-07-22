@@ -13,7 +13,7 @@ homepage = "https://gitorii.com"
 
 [workspace.dependencies]
 # Git operations — transports disabled, we provide custom reqwest+russh transports
-git2 = { version = "0.19", default-features = false }
+git2 = { version = "0.19", default-features = false, features = ["vendored-libgit2"] }
 
 # Error handling
 anyhow = "1.0"
