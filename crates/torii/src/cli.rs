@@ -114,17 +114,19 @@ enum Commands {
   torii save --revert abc1234 -m \"revert\"      Revert a specific commit
   torii save --reset HEAD~1 --reset-mode soft  Undo last commit, keep changes
   torii save --unstage src/secret.rs            Remove a path from the index
-  torii save --unstage --all                    Unstage everything")]
+  torii save --unstage --all                    Unstage everything
+  torii save --stage src/new.rs                 Stage a file without committing
+  torii save --stage --all                      Stage everything without committing")]
     Save {
-        /// Commit message (required for commit/amend; ignored with --reset/--revert/--unstage)
-        #[arg(short, long, required_unless_present_any = ["reset", "revert", "unstage"])]
+        /// Commit message (required for commit/amend; ignored with --reset/--revert/--unstage/--stage)
+        #[arg(short, long, required_unless_present_any = ["reset", "revert", "unstage", "stage"])]
         message: Option<String>,
 
-        /// Stage all changes before committing (or, with --unstage, unstage all paths)
+        /// Stage all changes before committing (or, with --unstage/--stage, apply to all paths)
         #[arg(short, long)]
         all: bool,
 
-        /// Specific files to stage before committing (or unstage with --unstage)
+        /// Specific files to stage before committing (or unstage/stage-only with those flags)
         #[arg(value_name = "FILES")]
         files: Vec<PathBuf>,
 
@@ -150,6 +152,12 @@ enum Commands {
         /// Unstage paths instead of committing (kept on disk). Use with FILES or --all.
         #[arg(long, conflicts_with_all = ["amend", "revert", "reset"])]
         unstage: bool,
+
+        /// Stage paths without committing (reverse of --unstage) — for
+        /// inspecting a change with `torii scan` / `torii diff --staged`
+        /// before deciding to commit. Use with FILES or --all.
+        #[arg(long, conflicts_with_all = ["unstage", "amend", "revert", "reset"])]
+        stage: bool,
 
         /// Skip pre-save / post-save hooks defined in .toriignore
         #[arg(long)]
@@ -1208,6 +1216,7 @@ impl Cli {
                 reset,
                 reset_mode,
                 unstage,
+                stage,
                 skip_hooks,
                 sign,
                 no_sign,
@@ -1216,8 +1225,22 @@ impl Cli {
                 reset_author,
                 date,
             } => repo::save(
-                message, all, files, amend, revert, reset, reset_mode, unstage, skip_hooks, sign,
-                no_sign, yes, keep_date, reset_author, date,
+                message,
+                all,
+                files,
+                amend,
+                revert,
+                reset,
+                reset_mode,
+                unstage,
+                stage,
+                skip_hooks,
+                sign,
+                no_sign,
+                yes,
+                keep_date,
+                reset_author,
+                date,
             ),
             Commands::Sync {
                 branch,
@@ -1400,6 +1423,7 @@ mod tests {
         assert!(parse(&["save", "--reset", "HEAD~1"]).is_ok());
         assert!(parse(&["save", "--revert", "abc1234"]).is_ok());
         assert!(parse(&["save", "--unstage", "--all"]).is_ok());
+        assert!(parse(&["save", "--stage", "--all"]).is_ok());
     }
 
     #[test]
@@ -1407,6 +1431,19 @@ mod tests {
         // --unstage excludes amend/revert/reset; --sign excludes --no-sign
         assert!(parse(&["save", "--unstage", "--amend", "-m", "x"]).is_err());
         assert!(parse(&["save", "-m", "x", "--sign", "--no-sign"]).is_err());
+        // --stage excludes amend/revert/reset/unstage — it only prepares the index
+        assert!(parse(&["save", "--stage", "--amend", "-m", "x"]).is_err());
+        assert!(parse(&["save", "--stage", "--unstage", "file.txt"]).is_err());
+    }
+
+    #[test]
+    fn save_stage_flag_parses_without_message() {
+        let cli = parse(&["save", "--stage", "file.txt"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Save { stage: true, ref message, ref files, .. }
+                if message.is_none() && files.len() == 1
+        ));
     }
 
     #[test]
