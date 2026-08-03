@@ -722,11 +722,30 @@ impl GitRepo {
 
     /// Get current branch name
     pub fn get_current_branch(&self) -> Result<String> {
-        let head = self.repo.head()?;
-        let branch_name = head
-            .shorthand()
-            .ok_or_else(|| ToriiError::Git(git2::Error::from_str("Could not get branch name")))?;
-        Ok(branch_name.to_string())
+        match self.repo.head() {
+            Ok(head) => {
+                let branch_name = head.shorthand().ok_or_else(|| {
+                    ToriiError::Git(git2::Error::from_str("Could not get branch name"))
+                })?;
+                Ok(branch_name.to_string())
+            }
+            // No commit yet — HEAD is a symbolic ref pointing at a branch
+            // that doesn't exist as a real ref (`refs/heads/main`) until
+            // the first commit lands. `repo.head()` refuses to resolve
+            // that, so read the symbolic target directly instead of
+            // treating "no commits yet" as an error.
+            Err(e) if e.code() == git2::ErrorCode::UnbornBranch => {
+                let head_ref = self.repo.find_reference("HEAD")?;
+                let target = head_ref.symbolic_target().ok_or_else(|| {
+                    ToriiError::Git(git2::Error::from_str("HEAD is not a symbolic reference"))
+                })?;
+                Ok(target
+                    .strip_prefix("refs/heads/")
+                    .unwrap_or(target)
+                    .to_string())
+            }
+            Err(e) => Err(ToriiError::Git(e)),
+        }
     }
 
     /// Get the underlying libgit2 repository handle. Crate-internal on
@@ -1288,6 +1307,50 @@ mod add_all_tests {
             !staged.iter().any(|p| p.starts_with(".torii")),
             ".torii/* must not be staged by add_all, got: {:?}",
             staged
+        );
+    }
+}
+
+#[cfg(test)]
+mod unborn_head_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Repos with no commit yet have an "unborn" HEAD — a symbolic ref
+    /// pointing at a branch that doesn't exist as a real ref. `torii save
+    /// --stage` makes it possible to stage content in this state (there is
+    /// no commit to fall back to), so `status`/`diff --staged` must not
+    /// assume HEAD resolves to a commit.
+    fn fresh_repo_with_staged_file() -> (TempDir, GitRepo) {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        let _ = git2::Repository::init(repo_path).unwrap();
+        let gitorii = GitRepo::open(repo_path).unwrap();
+        fs::write(repo_path.join("new.txt"), "hello\n").unwrap();
+        gitorii.add(&["new.txt"]).unwrap();
+        (tmp, gitorii)
+    }
+
+    #[test]
+    fn get_current_branch_on_unborn_head_returns_branch_name_not_error() {
+        let (_tmp, gitorii) = fresh_repo_with_staged_file();
+        let branch = gitorii
+            .get_current_branch()
+            .expect("branch name should be readable even with no commits yet");
+        assert!(!branch.is_empty());
+    }
+
+    #[test]
+    fn status_on_unborn_head_lists_staged_file_instead_of_erroring() {
+        let (_tmp, gitorii) = fresh_repo_with_staged_file();
+        let status = gitorii
+            .status()
+            .expect("status should work before the first commit");
+        assert!(
+            status.staged.iter().any(|e| e.path == "new.txt"),
+            "expected new.txt in staged entries, got: {:?}",
+            status.staged.iter().map(|e| &e.path).collect::<Vec<_>>()
         );
     }
 }
