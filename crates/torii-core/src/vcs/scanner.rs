@@ -43,6 +43,90 @@ fn max_blob_bytes() -> usize {
         .unwrap_or(DEFAULT_MAX_BLOB_BYTES)
 }
 
+/// Find a token starting with `prefix` anywhere in `line` — not just at a
+/// whitespace boundary. Real secrets are routinely glued directly to an
+/// assignment with no surrounding spaces (`KEY=ghp_xxx`, `-e
+/// KEY=AKIA...` container args, `.env` files, JSON/YAML one-liners), which
+/// turns `KEY=ghp_xxx` into a single whitespace-delimited word that does
+/// not itself *start with* the prefix — the bug this helper replaces.
+///
+/// `extra_token_chars` lets callers widen what counts as "part of the
+/// token" beyond alphanumeric/`_`/`-` (e.g. SendGrid keys use literal
+/// dots: `SG.xxx.yyy`).
+///
+/// Returns the full matched token (prefix + the following run of token
+/// characters) for the first occurrence whose total length is `> min_len`.
+fn find_prefixed_token(
+    line: &str,
+    prefix: &str,
+    min_len: usize,
+    extra_token_chars: &[char],
+) -> Option<String> {
+    let mut search_from = 0;
+    while let Some(rel) = line[search_from..].find(prefix) {
+        let idx = search_from + rel;
+        let candidate = &line[idx..];
+        let token: String = candidate
+            .chars()
+            .take_while(|c| {
+                c.is_alphanumeric() || c == &'_' || c == &'-' || extra_token_chars.contains(c)
+            })
+            .collect();
+        if token.len() > min_len {
+            return Some(token);
+        }
+        // Advance past this occurrence and keep looking — a short/bogus
+        // match here shouldn't hide a real one later on the same line.
+        search_from = idx + prefix.len();
+        if search_from >= line.len() {
+            break;
+        }
+    }
+    None
+}
+
+/// Does the authority section right after `scheme_marker` (e.g.
+/// `"postgresql://"`) actually carry a `user:password@` credential — not
+/// just a bare `user@host` (SSH-style, nothing secret to leak) and not an
+/// obvious placeholder password (`user:password@`, `user:pass@`,
+/// `<password>`, `${PASSWORD}`)?
+///
+/// Scoping the check to the authority segment (up to the first `/`, `?`,
+/// `#`, quote, or whitespace) — instead of asking "does `@` appear
+/// anywhere on the line" — is what lets this stay precise: a bare
+/// `scheme://user@host` never matches, no matter what else is on the line.
+fn url_has_real_password(line: &str, scheme_marker: &str) -> bool {
+    let lower = line.to_lowercase();
+    let Some(pos) = lower.find(scheme_marker) else {
+        return false;
+    };
+    let rest = &line[pos + scheme_marker.len()..];
+    let end = rest
+        .find(|c: char| matches!(c, '/' | '?' | '#' | '"' | '\'') || c.is_whitespace())
+        .unwrap_or(rest.len());
+    let authority = &rest[..end];
+    let Some(at) = authority.find('@') else {
+        return false; // no userinfo segment at all
+    };
+    let userinfo = &authority[..at];
+    let Some(colon) = userinfo.find(':') else {
+        return false; // `user@host` — no password, nothing to leak
+    };
+    let password = &userinfo[colon + 1..];
+    if password.is_empty() {
+        return false;
+    }
+    let pl = password.to_lowercase();
+    !(pl == "password"
+        || pl == "pass"
+        || pl == "changeme"
+        || pl == "xxx"
+        || pl == "yourpassword"
+        || pl.starts_with('<')
+        || pl.starts_with("${")
+        || pl.starts_with('$'))
+}
+
 const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Private key (PEM)",
@@ -72,12 +156,18 @@ const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "AWS access key",
         detect: |l| {
-            l.split_whitespace().any(|w| {
-                let w = w.trim_matches(|c: char| !c.is_alphanumeric());
-                (w.starts_with("AKIA") || w.starts_with("ASIA") || w.starts_with("AROA"))
-                    && w.len() == 20
-                    && w.chars()
-                        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+            ["AKIA", "ASIA", "AROA"].iter().any(|prefix| {
+                // Exact 20-char key ID: min_len 19 means "> 19", i.e. >= 20;
+                // the length==20 check below rejects anything longer.
+                match find_prefixed_token(l, prefix, 19, &[]) {
+                    Some(token) => {
+                        token.len() == 20
+                            && token
+                                .chars()
+                                .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+                    }
+                    None => false,
+                }
             })
         },
     },
@@ -98,30 +188,20 @@ const PATTERNS: &[Pattern] = &[
             if trimmed.starts_with('<') || trimmed.starts_with("//") || trimmed.starts_with("*") {
                 return false;
             }
-            l.split_whitespace().any(|w| {
-                let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-');
-                // Skip obvious placeholder/example tokens
-                if w.ends_with("xxx") || w.ends_with("_xxx") || w.contains("xxxx") {
-                    return false;
-                }
-                // Skip bare prefixes used in docs (ghp_, glpat-, etc.) — real tokens are longer
-                let is_prefix_only = (w.starts_with("ghp_") && w.len() <= 5)
-                    || (w.starts_with("gho_") && w.len() <= 5)
-                    || (w.starts_with("ghs_") && w.len() <= 5)
-                    || (w.starts_with("glpat-") && w.len() <= 7)
-                    || (w.starts_with("glptt-") && w.len() <= 7)
-                    || (w.starts_with("github_pat_") && w.len() <= 12);
-                if is_prefix_only {
-                    return false;
-                }
-                (w.starts_with("ghp_")
-                    || w.starts_with("gho_")
-                    || w.starts_with("ghs_")
-                    || w.starts_with("github_pat_")
-                    || w.starts_with("glpat-")
-                    || w.starts_with("glptt-"))
-                    && w.len() > 20
-            })
+            // min_len 20 ⇒ token must be > 20 chars — bare prefix mentions
+            // in docs (`ghp_xxx`, `glpat-xxx`) fall well under that, so the
+            // dedicated placeholder-length checks the old word-boundary
+            // version needed are redundant here.
+            const PREFIXES: &[&str] = &["ghp_", "gho_", "ghs_", "github_pat_", "glpat-", "glptt-"];
+            PREFIXES
+                .iter()
+                .any(|prefix| match find_prefixed_token(l, prefix, 20, &[]) {
+                    Some(token) => {
+                        let low = token.to_lowercase();
+                        !(low.ends_with("xxx") || low.contains("xxxx"))
+                    }
+                    None => false,
+                })
         },
     },
     Pattern {
@@ -157,6 +237,12 @@ const PATTERNS: &[Pattern] = &[
                         && !v.starts_with("env.")
                         && !v.starts_with("os.environ")
                         && !v.starts_with("<")
+                        // Type declarations, not values: `brevo_api_key:
+                        // Arc<RwLock<String>>` matches key-word + `:` +
+                        // "no spaces, long enough" — angle brackets are the
+                        // one thing an actual secret value never contains.
+                        && !v.contains('<')
+                        && !v.contains('>')
                         // English placeholders
                         && !vl.eq("your_secret_here")
                         && !vl.eq("changeme")
@@ -186,41 +272,85 @@ const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Database connection string with credentials",
         detect: |l| {
-            let lower = l.to_lowercase();
-            (lower.contains("postgresql://")
-                || lower.contains("mysql://")
-                || lower.contains("mongodb://")
-                || lower.contains("redis://")
-                || lower.contains("libsql://")
-                || lower.contains("turso://"))
-                && l.contains('@')
-                && !l.contains("user:password@")
-                && !l.contains("user:pass@")
-                && !l.contains("<password>")
+            const SCHEMES: &[&str] = &[
+                "postgresql://",
+                "mysql://",
+                "mongodb://",
+                "redis://",
+                "libsql://",
+                "turso://",
+            ];
+            SCHEMES
+                .iter()
+                .any(|scheme| url_has_real_password(l, scheme))
         },
     },
     Pattern {
         name: "Stripe key",
         detect: |l| {
-            l.split_whitespace().any(|w| {
-                let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_');
-                (w.starts_with("sk_live_")
-                    || w.starts_with("pk_live_")
-                    || w.starts_with("rk_live_"))
-                    && w.len() > 16
-            })
+            ["sk_live_", "pk_live_", "rk_live_"]
+                .iter()
+                .any(|prefix| find_prefixed_token(l, prefix, 16, &[]).is_some())
         },
     },
     Pattern {
         name: "Twilio / SendGrid / Brevo key",
         detect: |l| {
+            // SendGrid: "SG." is distinctive enough to scan anywhere in the
+            // line (glued to `KEY=SG....` with no spaces is common), and
+            // the token itself legitimately contains literal dots
+            // (`SG.xxxxxxxx.yyyyyyyy`).
+            if find_prefixed_token(l, "SG.", 40, &['.']).is_some() {
+                return true;
+            }
+            // Twilio Account SID ("AC" + 32 chars): the prefix is too
+            // short/common to scan as a free substring (plenty of ordinary
+            // identifiers start with "AC"), so this one stays anchored to
+            // a whole whitespace-delimited word.
             l.split_whitespace().any(|w| {
                 let w = w.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
-                // SG. prefix = SendGrid
-                (w.starts_with("SG.") && w.len() > 40) ||
-                // AC... = Twilio account SID
-                (w.starts_with("AC") && w.len() == 34 && w.chars().all(|c| c.is_ascii_alphanumeric()))
+                w.starts_with("AC") && w.len() == 34 && w.chars().all(|c| c.is_ascii_alphanumeric())
             })
+        },
+    },
+    Pattern {
+        name: "Bearer token with a literal value",
+        detect: |l| {
+            // Every other pattern with a vendor-specific prefix (JWT,
+            // Stripe, ghp_/glpat-, …) is tried first by the caller and
+            // wins the label — this one is the fallback for an opaque
+            // bearer token with no recognizable prefix at all, which
+            // nothing else here covers.
+            let mut search_from = 0;
+            while let Some(rel) = l[search_from..].find("Bearer ") {
+                let idx = search_from + rel;
+                let after = &l[idx + "Bearer ".len()..];
+                // A real token is a contiguous run of token-ish
+                // characters; a placeholder like `<TOKEN>`, `${TOKEN}`, or
+                // `$TOKEN` stops this run at position 0 (`<`/`$` aren't
+                // token chars), which already rejects those for free.
+                let token: String = after
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '+' | '/'))
+                    .collect();
+                if token.len() > 20 {
+                    let low = token.to_lowercase();
+                    let is_placeholder = low.starts_with("your_")
+                        || low.starts_with("my_")
+                        || low.contains("example")
+                        || low.contains("placeholder")
+                        || low.contains("xxxx")
+                        || low.contains("token_here");
+                    if !is_placeholder {
+                        return true;
+                    }
+                }
+                search_from = idx + "Bearer ".len();
+                if search_from >= l.len() {
+                    break;
+                }
+            }
+            false
         },
     },
 ];
@@ -593,4 +723,185 @@ pub fn scan_history(repo_path: &Path) -> Result<Vec<(String, Vec<Finding>)>> {
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod pattern_audit_tests {
+    use super::matching_pattern;
+
+    // ---- Real DB-connection-string credentials (the case that started
+    // this audit — already handled by the "Database connection string
+    // with credentials" pattern; kept here as a regression lock so a
+    // future refactor can't silently regress it). ----
+
+    #[test]
+    fn postgres_url_with_plaintext_password_is_flagged() {
+        // Split like the save_no_tty.rs fixture does, so this source file
+        // doesn't itself trip the scanner during `torii save`.
+        let scheme = concat!("postgresql", "://");
+        let creds_and_host = "quota:s3cr3tPass9@postgres:5432/quota_edge";
+        let line = format!(r#"        "-e", "DATABASE_URL={scheme}{creds_and_host}","#);
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    #[test]
+    fn db_url_without_credentials_is_not_flagged() {
+        assert!(matching_pattern("postgresql://postgres:5432/quota_edge").is_none());
+        assert!(matching_pattern("DATABASE_URL=postgres://host:5432/db").is_none());
+        assert!(matching_pattern("https://example.com/callback").is_none());
+    }
+
+    #[test]
+    fn url_with_user_but_no_password_is_not_flagged() {
+        // user@host with no `:password` segment — nothing secret to leak.
+        assert!(matching_pattern("ssh://git@github.com/org/repo.git").is_none());
+        assert!(matching_pattern("postgresql://quota@postgres:5432/quota_edge").is_none());
+    }
+
+    // ---- PEM private keys ----
+
+    // The PEM marker is split across a variable + a separate literal on
+    // each assert line, so no single raw source line ever carries both
+    // "-----BEGIN" and "PRIVATE KEY" together — exactly what the pattern
+    // requires to fire.
+    #[test]
+    fn pem_rsa_private_key_is_flagged() {
+        let begin = "-----BEGIN";
+        assert!(matching_pattern(&format!("{begin} RSA PRIVATE KEY-----")).is_some());
+    }
+
+    #[test]
+    fn pem_openssh_private_key_is_flagged() {
+        let begin = "-----BEGIN";
+        assert!(matching_pattern(&format!("{begin} OPENSSH PRIVATE KEY-----")).is_some());
+    }
+
+    #[test]
+    fn pem_encrypted_and_pgp_private_keys_are_flagged() {
+        let begin = "-----BEGIN";
+        assert!(matching_pattern(&format!("{begin} ENCRYPTED PRIVATE KEY-----")).is_some());
+        assert!(matching_pattern(&format!("{begin} PGP PRIVATE KEY BLOCK-----")).is_some());
+    }
+
+    // ---- AWS access keys ----
+
+    #[test]
+    fn aws_akia_key_is_flagged() {
+        // Split like the save_no_tty.rs fixture does, so this source file
+        // doesn't itself trip the scanner during `torii save`.
+        let key = concat!("AKIA", "IOSFODNN7EXAMPLE");
+        let line = format!("aws_access_key_id = {}", key);
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    // ---- GitHub / GitLab tokens ----
+
+    #[test]
+    fn github_classic_pat_is_flagged() {
+        let var_name = "GITHUB_TOKEN";
+        let token = concat!("ghp_", "1234567890abcdefghijklmnopqrstuvwxyz");
+        let line = format!("{var_name}={token}");
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    #[test]
+    fn gitlab_pat_is_flagged() {
+        let var_name = "GITLAB_TOKEN";
+        let token = concat!("glpat-", "abcdefghijklmnopqrst12");
+        let line = format!("{var_name}={token}");
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    // ---- Same "glued to KEY=value, no surrounding spaces" shape,
+    // checked against every other prefix-based pattern in the file — the
+    // GitHub/GitLab gap above isn't a one-off, it's the same root cause
+    // (prefix match requires the *whole* whitespace-delimited word to
+    // start with the prefix) wherever it's used. ----
+
+    #[test]
+    fn aws_key_glued_to_assignment_with_no_spaces_is_flagged() {
+        let key = concat!("AKIA", "IOSFODNN7EXAMPLE");
+        let line = format!("AWS_ACCESS_KEY_ID={}", key);
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    #[test]
+    fn stripe_key_glued_to_assignment_with_no_spaces_is_flagged() {
+        let var_name = concat!("STRIPE_SECRET", "_KEY");
+        let token = concat!("sk_live_", "51H8xyzABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        let line = format!("{var_name}={token}");
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    #[test]
+    fn sendgrid_key_glued_to_assignment_with_no_spaces_is_flagged() {
+        let var_name = concat!("SENDGRID_API", "_KEY");
+        let token = concat!(
+            "SG.",
+            "abcdefghijklmnopqrstuv.wxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123456"
+        );
+        let line = format!("{var_name}={token}");
+        assert!(matching_pattern(&line).is_some());
+    }
+
+    #[test]
+    fn bare_token_prefixes_in_docs_are_not_flagged() {
+        // Prefix-only mentions (docs/help text) — no real secret present.
+        assert!(matching_pattern("torii auth set github ghp_xxx").is_none());
+        assert!(matching_pattern("torii auth set gitlab glpat-xxx").is_none());
+    }
+
+    // ---- Bearer tokens with a literal value ----
+    //
+    // GAP found by this audit: a bare `Bearer <literal>` header value with
+    // no recognizable vendor prefix (not a JWT, not sk_live_, not ghp_/
+    // glpat-) was not covered by any pattern — "Generic API key / token"
+    // only fires on a `key_word = value` shape, and "Authorization" /
+    // "Bearer" aren't in its keyword list.
+
+    #[test]
+    fn bearer_with_opaque_literal_token_is_flagged() {
+        let word = concat!("Bear", "er ");
+        let token = concat!("4f8a9c2e1b3d7f6a", "5e0c9b8a7d6e5f4c3b2a1908");
+        let line = format!(r#"req.Header.Set("Authorization", "{word}{token}")"#);
+        assert!(
+            matching_pattern(&line).is_some(),
+            "a literal Bearer token should be flagged"
+        );
+    }
+
+    #[test]
+    fn bearer_placeholders_are_not_flagged() {
+        assert!(matching_pattern("Authorization: Bearer <YOUR_TOKEN>").is_none());
+        assert!(matching_pattern("Authorization: Bearer ${API_TOKEN}").is_none());
+        assert!(matching_pattern("Authorization: Bearer $TOKEN").is_none());
+        assert!(matching_pattern("Authorization: Bearer your_token_here_1234567890").is_none());
+        assert!(matching_pattern("curl -H 'Authorization: Bearer xxx'").is_none());
+    }
+
+    // ---- False positive: typed field declarations, no value present ----
+    //
+    // `pub brevo_api_key: Arc<RwLock<String>>` was flagged as "Generic API
+    // key / token" even though it holds no secret — it's a Rust struct
+    // field declaration. The rule keyed off `api_key` + `:` + a
+    // long/no-space "value", and `Arc<RwLock<String>>` happens to satisfy
+    // all of those.
+
+    #[test]
+    fn rust_type_declaration_is_not_flagged_as_a_secret() {
+        assert!(
+            matching_pattern("pub brevo_api_key: Arc<RwLock<String>>,").is_none(),
+            "a type declaration must not be flagged as a secret value"
+        );
+        assert!(matching_pattern("api_key: Option<String>,").is_none());
+        assert!(matching_pattern("secret_key: Box<dyn SecretStore>,").is_none());
+    }
+
+    #[test]
+    fn real_generic_api_key_assignment_is_still_flagged() {
+        // The fix for the type-declaration false positive must not blind
+        // the rule to actual secrets.
+        assert!(matching_pattern(r#"api_key = "sk_9f8e7d6c5b4a3210deadbeef""#).is_some());
+        assert!(matching_pattern(r#"password: "Tr0ub4dor&3xtraLong""#).is_some());
+    }
 }
