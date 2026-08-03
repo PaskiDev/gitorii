@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-08-03
+
+### Added
+
+- **`torii save --stage`** — stage paths without committing, so a change can
+  be inspected (`torii scan`, `torii diff --staged`) before deciding to
+  commit or back out. Reverses cleanly with the existing
+  `torii save --unstage`. Closes the gap that previously forced `git add -N`
+  as a workaround — which doesn't actually stage content, only records
+  intent-to-add, so a scanner reading the index sees nothing there.
+
+### Fixed
+
+- **Secret scanner: several real detection gaps, found by testing actual
+  glued-assignment shapes rather than assuming coverage.**
+  - GitHub/GitLab tokens (`ghp_`, `gho_`, `ghs_`, `github_pat_`, `glpat-`,
+    `glptt-`), AWS access keys (`AKIA…`/`ASIA…`/`AROA…`), Stripe keys, and
+    SendGrid keys (`SG.…`) were only detected when the token appeared as its
+    own whitespace-delimited word. The extremely common `KEY=token` shape
+    with no surrounding spaces (`.env` files, `-e KEY=value` container args)
+    turned the whole assignment into one word that didn't *start with* the
+    prefix, so it slipped through undetected.
+  - Added detection for a literal `Bearer <token>` header value with no
+    vendor-specific prefix — previously uncovered by any pattern.
+  - The "Database connection string with credentials" pattern flagged a bare
+    `scheme://user@host` (no password at all — SSH-style, nothing to leak)
+    as if it carried a real credential. It now checks the actual
+    userinfo segment for a `user:password@` shape.
+- **False positive: typed field declarations no longer flagged as secrets.**
+  `pub api_key: Arc<RwLock<String>>` (and similar generic-wrapped type
+  annotations) tripped the "Generic API key / token" rule even though no
+  value is present.
+- **`torii status` and `torii diff --staged` no longer crash before the
+  first commit.** A repo with staged content but no commits yet (an "unborn"
+  HEAD) — exactly the state `torii save --stage` can now put you in — used
+  to error with `reference 'refs/heads/main' not found`.
+
 ## [0.12.0] - 2026-06-14
 
 ### Added
