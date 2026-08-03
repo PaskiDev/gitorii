@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `scheme://user@host` (no password at all — SSH-style, nothing to leak)
     as if it carried a real credential. It now checks the actual
     userinfo segment for a `user:password@` shape.
+  - The connection-string scheme list was missing `postgres://` (the
+    short/libpq alias `postgresql://` — Heroku, sqlx, psycopg, node-postgres
+    all use it) and `mongodb+srv://` (MongoDB Atlas' standard form), so a
+    real credential under either spelling was invisible regardless of
+    length. There was never an actual length threshold on the user,
+    password, or host — verified by testing 1-character values against a
+    scheme that already matched — the missing scheme aliases were the whole
+    story. While in there: the word-based password-placeholder exclusions
+    (`password`, `pass`, `changeme`, `xxx`, `yourpassword`) were removed —
+    those are guessable strings a real weak password can collide with, so
+    now only *syntactic* placeholders (`${VAR}`, `$VAR`, `<placeholder>`)
+    are excluded. A doc example like `user:pass@localhost` will now be
+    flagged; clear it with `--yes` or silence it for good via
+    `.toriignore`'s `[secrets]` allowlist.
 - **False positive: typed field declarations no longer flagged as secrets.**
   `pub api_key: Arc<RwLock<String>>` (and similar generic-wrapped type
   annotations) tripped the "Generic API key / token" rule even though no
