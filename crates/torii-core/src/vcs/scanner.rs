@@ -87,14 +87,34 @@ fn find_prefixed_token(
 
 /// Does the authority section right after `scheme_marker` (e.g.
 /// `"postgresql://"`) actually carry a `user:password@` credential — not
-/// just a bare `user@host` (SSH-style, nothing secret to leak) and not an
-/// obvious placeholder password (`user:password@`, `user:pass@`,
-/// `<password>`, `${PASSWORD}`)?
+/// just a bare `user@host` (SSH-style, nothing secret to leak) and not a
+/// *syntactic* placeholder (`${PASSWORD}`, `$PASSWORD`, `<password>`) that
+/// can never be a real value in the first place?
 ///
 /// Scoping the check to the authority segment (up to the first `/`, `?`,
 /// `#`, quote, or whitespace) — instead of asking "does `@` appear
 /// anywhere on the line" — is what lets this stay precise: a bare
 /// `scheme://user@host` never matches, no matter what else is on the line.
+///
+/// **No minimum length, anywhere** — a 1-character user, password, or
+/// host is checked exactly like a 32-character one. A short leaked
+/// password is *more* dangerous (easier to guess/brute-force by whoever
+/// finds it), not less, so there is deliberately no threshold to lower.
+///
+/// **Word-based password placeholders are NOT excluded on purpose.**
+/// `user:password@host`, `user:pass@host`, `root:root@host`,
+/// `admin:changeme@host` are all flagged. A hardcoded allowlist of
+/// "obviously fake" words (`password`, `pass`, `changeme`, `root`,
+/// `xxx`, …) is exactly the list a real (if weak) password eventually
+/// collides with — excluding it would recreate the same "protects
+/// backwards" problem the missing-length-threshold bug had. The only
+/// values excluded here are ones that are *syntactically* not a value at
+/// all — a shell/template variable reference (`${PASSWORD}`,
+/// `$PASSWORD`) or an explicit placeholder marker (`<password>`) — so a
+/// false positive on a README's `user:pass@localhost` example is
+/// accepted as the cheaper failure mode; clear it with `--yes` for one
+/// commit or silence it for good via `.toriignore`'s `[secrets]`
+/// allowlist.
 fn url_has_real_password(line: &str, scheme_marker: &str) -> bool {
     let lower = line.to_lowercase();
     let Some(pos) = lower.find(scheme_marker) else {
@@ -116,15 +136,10 @@ fn url_has_real_password(line: &str, scheme_marker: &str) -> bool {
     if password.is_empty() {
         return false;
     }
-    let pl = password.to_lowercase();
-    !(pl == "password"
-        || pl == "pass"
-        || pl == "changeme"
-        || pl == "xxx"
-        || pl == "yourpassword"
-        || pl.starts_with('<')
-        || pl.starts_with("${")
-        || pl.starts_with('$'))
+    // Syntactic placeholders only — see doc comment above for why word
+    // guesses like "password"/"pass"/"changeme"/"root" are deliberately
+    // NOT on this list.
+    !(password.starts_with('<') || password.starts_with("${") || password.starts_with('$'))
 }
 
 const PATTERNS: &[Pattern] = &[
@@ -272,10 +287,21 @@ const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Database connection string with credentials",
         detect: |l| {
+            // Every scheme a real `DATABASE_URL`-style value is likely to
+            // use, including short/alternate spellings that are just as
+            // common in the wild as the canonical name — a missing alias
+            // here is a silent blind spot, not a narrower rule.
+            // `"postgres://"` (the libpq/Heroku/sqlx/psycopg/pg alias of
+            // `postgresql://`) and `"mongodb+srv://"` (MongoDB Atlas'
+            // standard form, which doesn't contain `"mongodb://"` as a
+            // substring because of the `+srv`) were missing before this
+            // fix and are the two most common real-world cases of it.
             const SCHEMES: &[&str] = &[
                 "postgresql://",
+                "postgres://",
                 "mysql://",
                 "mongodb://",
+                "mongodb+srv://",
                 "redis://",
                 "libsql://",
                 "turso://",
@@ -756,6 +782,84 @@ mod pattern_audit_tests {
         // user@host with no `:password` segment — nothing secret to leak.
         assert!(matching_pattern("ssh://git@github.com/org/repo.git").is_none());
         assert!(matching_pattern("postgresql://quota@postgres:5432/quota_edge").is_none());
+    }
+
+    // ---- Reported gap: "postgres://" (the short/libpq form — the one
+    // Heroku, Render, sqlx, psycopg, node-postgres etc. actually emit) was
+    // entirely missing from the recognized scheme list, so a real leaked
+    // credential under that spelling was invisible no matter how long the
+    // password was. There is no length minimum anywhere in this check —
+    // verified by testing 1-character user/password/host against a scheme
+    // that *is* recognized (`postgresql://`), which matches fine. The
+    // apparent "short credentials slip through" symptom was entirely the
+    // missing scheme alias, not a threshold on any of the three fields. ----
+
+    #[test]
+    fn short_postgres_scheme_with_any_length_credentials_is_flagged() {
+        let scheme = concat!("postgres", "://");
+        // Single-character user, password, host, db — the shortest
+        // possible real credential.
+        assert!(matching_pattern(&format!("{scheme}u:p@h/d")).is_some());
+        // The exact case reported: short scheme alias + short everything.
+        let creds = "u:p4ssw0rd@h:5432/d";
+        assert!(matching_pattern(&format!("{scheme}{creds}")).is_some());
+    }
+
+    #[test]
+    fn no_length_minimum_on_user_password_or_host() {
+        // Regression lock: each of user/password/host individually at
+        // 1 character, under the scheme that already worked before this
+        // fix — confirms the detector never had a length gate to begin
+        // with, only a missing-scheme gap.
+        let scheme = concat!("postgresql", "://");
+        assert!(matching_pattern(&format!("{scheme}u:p@h/d")).is_some());
+    }
+
+    #[test]
+    fn mongodb_atlas_srv_scheme_is_flagged() {
+        // "mongodb+srv://" (MongoDB Atlas' standard connection-string
+        // form) does not contain "mongodb://" as a contiguous substring
+        // (the "+srv" sits in between), so it was equally invisible.
+        let scheme = concat!("mongodb+srv", "://");
+        let creds = "dbuser:S3cr3tAtlas@cluster0.abcde.mongodb.net/mydb";
+        assert!(matching_pattern(&format!("{scheme}{creds}")).is_some());
+    }
+
+    // ---- Policy: mark documentation-style example URLs rather than
+    // allowlisting guessable password words.
+    //
+    // A hardcoded exclusion list ("password", "pass", "changeme", "root",
+    // "xxx", ...) is exactly the kind of list someone's *real* (if weak)
+    // password eventually matches — the same "shorter is worse, not
+    // safer" logic that motivated fixing the missing-scheme gap above
+    // applies here too. So this scanner only excludes *syntactic*
+    // placeholders that can never be a real leaked value no matter what
+    // — a template reference (`${PASSWORD}`, `$PASSWORD`) or a
+    // placeholder marker (`<password>`) — and flags literal word guesses
+    // like "password"/"pass"/"root"/"changeme". A README with
+    // `user:pass@localhost` in an example will get flagged; that's a
+    // false positive its author clears with `--yes` or silences for good
+    // with `.toriignore`'s `[secrets]` allowlist — cheaper than a real
+    // "changeme" or "root" password shipped in a container arg slipping
+    // through because it happened to spell a word on the exclusion list.
+
+    #[test]
+    fn doc_style_example_urls_with_guessable_passwords_are_flagged() {
+        let scheme = concat!("postgres", "://");
+        assert!(matching_pattern(&format!("{scheme}user:pass@localhost/db")).is_some());
+        let mysql_scheme = concat!("mysql", "://");
+        assert!(matching_pattern(&format!("{mysql_scheme}root:root@127.0.0.1/test")).is_some());
+        let word = concat!("change", "me");
+        assert!(matching_pattern(&format!("{scheme}admin:{word}@localhost/db")).is_some());
+    }
+
+    #[test]
+    fn syntactic_placeholders_are_still_not_flagged() {
+        // These can never be a real leaked value — they're a reference to
+        // config elsewhere, not a value at all.
+        assert!(matching_pattern("postgresql://user:${DB_PASSWORD}@host/db").is_none());
+        assert!(matching_pattern("postgresql://user:$DB_PASSWORD@host/db").is_none());
+        assert!(matching_pattern("postgresql://user:<password>@host/db").is_none());
     }
 
     // ---- PEM private keys ----
