@@ -533,11 +533,18 @@ impl GitRepo {
 
             self.print_diff(&diff)?;
         } else if staged {
-            // Show staged changes
-            let head = self.repository().head()?.peel_to_tree()?;
+            // Show staged changes. Before the first commit, HEAD is an
+            // unborn branch with no tree to peel to — diff against an
+            // empty tree instead of erroring, so everything staged shows
+            // as added (matches `git diff --staged` on a fresh repo).
+            let head_tree = match self.repository().head() {
+                Ok(h) => Some(h.peel_to_tree()?),
+                Err(e) if e.code() == git2::ErrorCode::UnbornBranch => None,
+                Err(e) => return Err(e.into()),
+            };
             let diff = self
                 .repository()
-                .diff_tree_to_index(Some(&head), None, None)?;
+                .diff_tree_to_index(head_tree.as_ref(), None, None)?;
             self.print_diff(&diff)?;
         } else {
             // Show unstaged changes
@@ -2060,5 +2067,29 @@ mod merge_commit_tests {
         assert_eq!(head.parent_count(), 2, "el commit debe tener DOS padres");
         assert_eq!(head.parent(1).unwrap().id(), theirs);
         assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+}
+
+#[cfg(test)]
+mod diff_unborn_head_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// `torii save --stage` can leave content staged before any commit
+    /// exists (`create_orphan_branch` already documents this as a
+    /// supported state: "Index and working tree are left intact so the
+    /// user can stage what they want before the first commit"). `torii
+    /// diff --staged` must be able to show that content instead of
+    /// erroring out because HEAD has nothing to peel to yet.
+    #[test]
+    fn diff_staged_on_unborn_head_does_not_error() {
+        let dir = TempDir::new().unwrap();
+        let _ = git2::Repository::init(dir.path()).unwrap();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        std::fs::write(dir.path().join("new.txt"), "hello\n").unwrap();
+        gr.add(&["new.txt"]).unwrap();
+
+        gr.diff(true, false)
+            .expect("diff --staged should work with no commits yet");
     }
 }
