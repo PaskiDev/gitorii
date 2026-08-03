@@ -53,6 +53,7 @@ pub(crate) fn save(
     reset: &Option<String>,
     reset_mode: &String,
     unstage: &bool,
+    stage: &bool,
     skip_hooks: &bool,
     sign: &bool,
     no_sign: &bool,
@@ -75,6 +76,24 @@ pub(crate) fn save(
     } else {
         None
     });
+
+    if *stage {
+        if *all {
+            if !files.is_empty() {
+                anyhow::bail!("Pass either --all or specific paths, not both");
+            }
+            repo.add_all()?;
+            println!("✅ Staged all paths");
+        } else {
+            if files.is_empty() {
+                anyhow::bail!("Provide at least one path or use --all");
+            }
+            repo.add(files)?;
+            println!("✅ Staged {} path(s)", files.len());
+        }
+        println!("💡 Inspect with `torii diff --staged` or `torii scan`, then `torii save -m \"...\"` to commit or `torii save --unstage` to undo.");
+        return Ok(());
+    }
 
     if *unstage {
         if *all {
