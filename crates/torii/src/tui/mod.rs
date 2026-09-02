@@ -1,6 +1,7 @@
 pub mod app;
 pub mod events;
 pub mod picker;
+pub mod theme;
 pub mod ui;
 pub mod views;
 
