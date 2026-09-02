@@ -1,13 +1,18 @@
+//! The sync view: which way the commits travel, and how the last run went.
+//!
+//! Two sections parted by a rule rather than two boxes; the operation being
+//! selected is marked by the caret, not by a coloured border.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, List, ListItem, Padding, Paragraph},
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_RED, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, SyncOp, SyncStatus};
+use crate::tui::theme;
 
 const OPS: &[SyncOp] = &[
     SyncOp::PullPush,
@@ -18,46 +23,62 @@ const OPS: &[SyncOp] = &[
 ];
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let chunks = Layout::default()
+    let focused = !app.sidebar_focused;
+
+    let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1), Constraint::Length(3)])
+        .constraints([
+            Constraint::Min(2),
+            Constraint::Length(1),
+            Constraint::Length(2),
+        ])
         .split(area);
 
-    render_ops(f, app, chunks[0]);
-    render_status(f, app, chunks[1]);
+    render_ops(f, app, rows[0], focused);
+    theme::hrule_content(f, rows[1], &[]);
+    render_status(f, app, rows[2]);
 }
 
-fn render_ops(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
+fn render_ops(f: &mut Frame, app: &App, area: Rect, active: bool) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("operation", None, active));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
     let items: Vec<ListItem> = OPS
         .iter()
         .map(|op| {
-            let is_sel = *op == app.sync_view.selected_op;
+            let is_sel = active && *op == app.sync_view.selected_op;
             let (label, desc) = op_label(op);
-            let style = if is_sel {
+            let label_color = if *op == SyncOp::ForcePush {
+                // The one entry that rewrites someone else's history says so
+                // in its colour, the way the branch view marks a delete.
+                theme::BAD
+            } else if is_sel {
+                theme::INK
+            } else {
+                theme::INK_DIM
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(format!("{:<14}", label), Style::default().fg(label_color)),
+                Span::styled(desc, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-            };
-            let prefix = if is_sel { "█ " } else { "  " };
-            let label_color = if is_sel { bc } else { C_WHITE };
-            let line = Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(format!("{:<14}", label), Style::default().fg(label_color)),
-                Span::styled(desc, Style::default().fg(C_DIM)),
-            ]);
-            ListItem::new(line).style(style)
+            })
         })
         .collect();
 
-    let block = Block::default()
-        .title(Span::styled(" operation ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(List::new(items).block(block), area);
+    f.render_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+    );
 }
 
 fn progress_bar(tick: usize) -> String {
@@ -71,45 +92,44 @@ fn progress_bar(tick: usize) -> String {
 }
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("status", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
     let line = match &app.sync_view.status {
         SyncStatus::Idle => Line::from(vec![
-            Span::raw(" "),
-            Span::styled("ready", Style::default().fg(C_DIM)),
+            Span::raw("  "),
+            Span::styled("ready", Style::default().fg(theme::INK_FAINT)),
         ]),
         SyncStatus::Running => {
             let bar = progress_bar(app.tick / 2);
             Line::from(vec![
-                Span::raw(" "),
-                Span::styled(bar, Style::default().fg(C_YELLOW)),
-                Span::styled("  syncing...", Style::default().fg(C_YELLOW)),
+                Span::raw("  "),
+                Span::styled(bar, Style::default().fg(theme::WARN)),
+                Span::styled("  syncing...", Style::default().fg(theme::WARN)),
             ])
         }
         SyncStatus::Done(msg) => Line::from(vec![
-            Span::raw(" "),
-            Span::styled("▰▰▰▰▰▰▰▰▰▰", Style::default().fg(C_GREEN)),
+            Span::raw("  "),
+            Span::styled("▰▰▰▰▰▰▰▰▰▰", Style::default().fg(theme::OK)),
             Span::styled(
                 format!("  ✓  {}", msg.lines().next().unwrap_or("")),
-                Style::default().fg(C_GREEN),
+                Style::default().fg(theme::OK),
             ),
         ]),
         SyncStatus::Error(msg) => Line::from(vec![
-            Span::raw(" "),
-            Span::styled("▰▰▰▰▰▰▰▰▰▰", Style::default().fg(C_RED)),
+            Span::raw("  "),
+            Span::styled("▰▰▰▰▰▰▰▰▰▰", Style::default().fg(theme::BAD)),
             Span::styled(
                 format!("  ✗  {}", msg.lines().next().unwrap_or("")),
-                Style::default().fg(C_RED),
+                Style::default().fg(theme::BAD),
             ),
         ]),
     };
 
-    let block = Block::default()
-        .title(Span::styled(" status ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(Paragraph::new(line).block(block), area);
+    f.render_widget(Paragraph::new(line), body);
 }
 
 fn op_label(op: &SyncOp) -> (&'static str, &'static str) {
