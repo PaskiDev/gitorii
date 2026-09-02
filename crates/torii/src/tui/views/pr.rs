@@ -2,211 +2,208 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
-use super::super::ui::{C_CYAN, C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, PrConfirm, PrStateFilter};
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
     let pr = &app.pr_view;
 
-    // Split: list (60%) | detail (40%)
-    let cols = Layout::default()
+    // list (60%) | detail (40%)
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
+    // The overlays below anchor on the list column, borders and all.
+    let cols = panes.clone();
 
-    // ── Filter badge ──────────────────────────────────────────────────────────
-    let filter_str = match pr.filter {
-        PrStateFilter::Open => "open",
-        PrStateFilter::Closed => "closed",
-        PrStateFilter::All => "all",
-    };
+    // The list carries the rule; the detail sits the other side of it.
+    let divider = theme::divider_right();
+    let list_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
 
-    // ── PR list ───────────────────────────────────────────────────────────────
+    let [list_heading, list_body] = theme::heading_and_body(list_pane);
+    let [detail_heading, detail_body] = theme::heading_and_body(panes[1]);
+
+    // ── The list ──────────────────────────────────────────────────────────────
     let items: Vec<ListItem> = if pr.loading {
-        vec![ListItem::new(Line::from(vec![Span::styled(
-            "  loading...",
-            Style::default().fg(C_SUBTLE),
-        )]))]
+        vec![ListItem::new(Span::styled(
+            "loading…",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
     } else if let Some(err) = &pr.error {
         let is_token = err.to_lowercase().contains("token");
-        // Split long error into multiple items for readability
         let mut err_items = vec![ListItem::new(Line::from(vec![
-            Span::styled("  ✗ ", Style::default().fg(C_RED)),
+            Span::styled("✗ ", Style::default().fg(theme::BAD)),
             Span::styled(
                 if is_token {
-                    "authentication required".to_string()
+                    "authentication required"
                 } else {
-                    "error".to_string()
+                    "error"
                 },
-                Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
             ),
         ]))];
         for chunk in err.chars().collect::<Vec<_>>().chunks(50) {
             let s: String = chunk.iter().collect();
-            err_items.push(ListItem::new(Line::from(vec![Span::styled(
-                format!("  {}", s),
-                Style::default().fg(C_SUBTLE),
-            )])));
+            err_items.push(ListItem::new(Span::styled(
+                s,
+                Style::default().fg(theme::INK_FAINT),
+            )));
         }
         err_items
     } else if pr.prs.is_empty() {
-        vec![ListItem::new(Line::from(vec![Span::styled(
-            "  no pull requests",
-            Style::default().fg(C_DIM),
-        )]))]
+        vec![ListItem::new(Span::styled(
+            "no pull requests",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
     } else {
         pr.prs
             .iter()
             .enumerate()
             .map(|(i, p)| {
-                let is_sel = i == pr.idx;
-                let style = if is_sel {
+                let is_sel = focused && i == pr.idx;
+                ListItem::new(Line::from(vec![
+                    theme::caret(app, is_sel),
+                    Span::styled(
+                        format!("#{}", p.number),
+                        Style::default().fg(state_color(&p.state)),
+                    ),
+                    Span::raw(" "),
+                    Span::styled(
+                        p.title.clone(),
+                        Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                    ),
+                    Span::styled(
+                        if p.draft { " draft" } else { "" },
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                ]))
+                .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
-                };
-                let prefix = if is_sel { "█ " } else { "  " };
-                let state_color = if p.state == "open" { C_GREEN } else { C_SUBTLE };
-                let draft_tag = if p.draft { " [draft]" } else { "" };
-                let num_str = format!("#{}", p.number);
-                let title_color = if is_sel { C_WHITE } else { C_SUBTLE };
-
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
-                    Span::styled(num_str, Style::default().fg(state_color)),
-                    Span::styled(" ", Style::default()),
-                    Span::styled(p.title.clone(), Style::default().fg(title_color)),
-                    Span::styled(draft_tag, Style::default().fg(C_DIM)),
-                ]))
-                .style(style)
+                })
             })
             .collect()
     };
 
-    let count = pr.prs.len();
-    let pr_label = if pr.platform == "gitlab" {
-        "merge requests"
-    } else {
-        "pull requests"
-    };
-    let title = format!(" {} — {} [{}] ", pr_label, count, filter_str);
     let mut list_state = ListState::default();
     if !pr.prs.is_empty() {
         list_state.select(Some(pr.idx));
     }
 
-    let list_block = Block::default()
-        .title(Span::styled(
-            title,
-            if focused {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        if pr.platform == "gitlab" {
+            "merge requests"
         } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), cols[0], &mut list_state);
+            "pull requests"
+        },
+        if pr.loading { None } else { Some(pr.prs.len()) },
+        focused,
+    ));
+    heading.push(Span::styled(
+        match pr.filter {
+            PrStateFilter::Open => "  open",
+            PrStateFilter::Closed => "  closed",
+            PrStateFilter::All => "  all",
+        },
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), list_heading);
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        list_body,
+        &mut list_state,
+    );
 
-    // ── Detail panel ──────────────────────────────────────────────────────────
-    let detail_block = Block::default()
-        .title(Span::styled(" detail ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
+    // ── The detail ────────────────────────────────────────────────────────────
+    let mut detail_title = vec![Span::raw(" ")];
+    detail_title.extend(theme::panel_title("detail", None, false));
+    f.render_widget(Paragraph::new(Line::from(detail_title)), detail_heading);
 
-    if let Some(p) = pr.prs.get(pr.idx) {
-        let state_color = if p.state == "open" { C_GREEN } else { C_SUBTLE };
-        let mergeable_str = match p.mergeable {
-            Some(true) => Span::styled("✓ mergeable", Style::default().fg(C_GREEN)),
-            Some(false) => Span::styled("✗ conflicts", Style::default().fg(C_RED)),
-            None => Span::styled("~ unknown", Style::default().fg(C_DIM)),
-        };
-
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("  #", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    p.number.to_string(),
-                    Style::default()
-                        .fg(state_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw("  "),
-                Span::styled(p.state.clone(), Style::default().fg(state_color)),
-                if p.draft {
-                    Span::styled("  draft", Style::default().fg(C_DIM))
-                } else {
-                    Span::raw("")
-                },
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(
+    let detail_lines: Vec<Line> = match pr.prs.get(pr.idx) {
+        Some(p) => {
+            let sc = state_color(&p.state);
+            let mut lines = vec![
+                Line::from(vec![
+                    Span::styled("#", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(
+                        p.number.to_string(),
+                        Style::default().fg(sc).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw("  "),
+                    Span::styled(p.state.clone(), Style::default().fg(sc)),
+                    if p.draft {
+                        Span::styled("  draft", Style::default().fg(theme::INK_FAINT))
+                    } else {
+                        Span::raw("")
+                    },
+                ]),
+                Line::from(""),
+                Line::from(Span::styled(
                     p.title.clone(),
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("  by  ", Style::default().fg(C_DIM)),
-                Span::styled(p.author.clone(), Style::default().fg(C_CYAN)),
-            ]),
-            Line::from(vec![
-                Span::styled("  ", Style::default().fg(C_DIM)),
-                Span::styled(p.head.clone(), Style::default().fg(C_YELLOW)),
-                Span::styled(" → ", Style::default().fg(C_DIM)),
-                Span::styled(p.base.clone(), Style::default().fg(C_SUBTLE)),
-            ]),
-            Line::from(vec![Span::styled("  ", Style::default()), mergeable_str]),
-            Line::from(vec![
-                Span::styled("  created  ", Style::default().fg(C_DIM)),
-                Span::styled(p.created_at.clone(), Style::default().fg(C_SUBTLE)),
-            ]),
-        ];
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                )),
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled("by  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(p.author.clone(), Style::default().fg(theme::INK_DIM)),
+                ]),
+                Line::from(vec![
+                    Span::styled(p.head.clone(), Style::default().fg(theme::WARN)),
+                    Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(p.base.clone(), Style::default().fg(theme::INK_DIM)),
+                ]),
+                Line::from(match p.mergeable {
+                    Some(true) => Span::styled("✓ mergeable", Style::default().fg(theme::OK)),
+                    Some(false) => Span::styled("✗ conflicts", Style::default().fg(theme::BAD)),
+                    None => Span::styled("~ unknown", Style::default().fg(theme::INK_FAINT)),
+                }),
+                Line::from(vec![
+                    Span::styled("created  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(p.created_at.clone(), Style::default().fg(theme::INK_DIM)),
+                ]),
+            ];
 
-        if let Some(body) = &p.body {
-            if !body.trim().is_empty() {
-                lines.push(Line::from(""));
-                lines.push(Line::from(vec![Span::styled(
-                    "  ─── description ───",
-                    Style::default().fg(C_DIM),
-                )]));
-                for l in body.lines().take(12) {
-                    lines.push(Line::from(vec![Span::styled(
-                        format!("  {}", l),
-                        Style::default().fg(C_SUBTLE),
-                    )]));
+            if let Some(body) = &p.body {
+                if !body.trim().is_empty() {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from(Span::styled(
+                        "description",
+                        Style::default().fg(theme::INK_FAINT),
+                    )));
+                    for l in body.lines().take(12) {
+                        lines.push(Line::from(Span::styled(
+                            l.to_string(),
+                            Style::default().fg(theme::INK_DIM),
+                        )));
+                    }
                 }
             }
+            lines
         }
-
-        let para = Paragraph::new(lines)
-            .block(detail_block)
-            .wrap(Wrap { trim: false });
-        f.render_widget(para, cols[1]);
-    } else {
-        let para = Paragraph::new(Line::from(vec![Span::styled(
-            "  select a PR",
-            Style::default().fg(C_DIM),
-        )]))
-        .block(detail_block);
-        f.render_widget(para, cols[1]);
-    }
+        None => vec![Line::from(Span::styled(
+            "nothing selected",
+            Style::default().fg(theme::INK_FAINT),
+        ))],
+    };
+    f.render_widget(
+        Paragraph::new(detail_lines)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        detail_body,
+    );
 
     // ── Confirm overlay ───────────────────────────────────────────────────────
     if pr.confirm == PrConfirm::Close {
@@ -218,17 +215,17 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         );
         f.render_widget(Clear, overlay);
         let p = Paragraph::new(Line::from(vec![
-            Span::styled("  close PR? ", Style::default().fg(C_RED)),
+            Span::styled("  close PR? ", Style::default().fg(theme::BAD)),
             Span::styled(
                 "[y]",
-                Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" / any", Style::default().fg(C_SUBTLE)),
+            Span::styled(" / any", Style::default().fg(theme::INK_DIM)),
         ]))
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(C_RED))
+                .border_style(Style::default().fg(theme::BAD))
                 .border_type(app.border_type()),
         );
         f.render_widget(p, overlay);
@@ -252,37 +249,37 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(
                         format!(" [{}] ", m),
                         Style::default()
-                            .fg(C_WHITE)
+                            .fg(theme::INK)
                             .add_modifier(Modifier::BOLD)
-                            .bg(app.selected_bg()),
+                            .bg(theme::selection(app)),
                     )
                 } else {
-                    Span::styled(format!("  {}  ", m), Style::default().fg(C_SUBTLE))
+                    Span::styled(format!("  {}  ", m), Style::default().fg(theme::INK_DIM))
                 }
             })
             .collect();
         let lines = vec![
             Line::from(vec![Span::styled(
                 "  merge method:",
-                Style::default().fg(C_SUBTLE),
+                Style::default().fg(theme::INK_DIM),
             )]),
             Line::from(method_spans),
             Line::from(vec![
-                Span::styled("  branch '", Style::default().fg(C_SUBTLE)),
-                Span::styled(head_branch.to_string(), Style::default().fg(C_YELLOW)),
-                Span::styled("' will be deleted", Style::default().fg(C_SUBTLE)),
+                Span::styled("  branch '", Style::default().fg(theme::INK_DIM)),
+                Span::styled(head_branch.to_string(), Style::default().fg(theme::WARN)),
+                Span::styled("' will be deleted", Style::default().fg(theme::INK_DIM)),
             ]),
             Line::from(vec![
-                Span::styled("  [←→]", Style::default().fg(bc)),
-                Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
-                Span::styled("[Enter]", Style::default().fg(bc)),
-                Span::styled(" confirm", Style::default().fg(C_SUBTLE)),
+                Span::styled("  [←→]", Style::default().fg(theme::accent(app))),
+                Span::styled(" select  ", Style::default().fg(theme::INK_DIM)),
+                Span::styled("[Enter]", Style::default().fg(theme::accent(app))),
+                Span::styled(" confirm", Style::default().fg(theme::INK_DIM)),
             ]),
         ];
         let p = Paragraph::new(lines).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(bc))
+                .border_style(Style::default().fg(theme::RULE))
                 .border_type(app.border_type()),
         );
         f.render_widget(p, overlay);
@@ -310,21 +307,21 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .rev()
             .collect();
         let at_limit = len >= TITLE_MAX;
-        let counter_color = if len > 230 { C_RED } else { C_DIM };
+        let counter_color = if len > 230 { theme::BAD } else { theme::INK_FAINT };
         let lines = vec![
             Line::from(vec![
                 Span::styled(
                     format!("  create {} — step 1/5: ", pr_label),
-                    Style::default().fg(C_SUBTLE),
+                    Style::default().fg(theme::INK_DIM),
                 ),
                 Span::styled(
                     "title",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![Span::styled(
                 format!("  {}█", display),
-                Style::default().fg(C_CYAN),
+                Style::default().fg(theme::INK_DIM),
             )]),
             Line::from(vec![
                 Span::styled(
@@ -332,16 +329,16 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(counter_color),
                 ),
                 if at_limit {
-                    Span::styled("  limit reached", Style::default().fg(C_RED))
+                    Span::styled("  limit reached", Style::default().fg(theme::BAD))
                 } else {
                     Span::raw("")
                 },
             ]),
             Line::from(vec![
-                Span::styled("  [Enter]", Style::default().fg(bc)),
-                Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
-                Span::styled("[Esc]", Style::default().fg(bc)),
-                Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                Span::styled("  [Enter]", Style::default().fg(theme::accent(app))),
+                Span::styled(" next  ", Style::default().fg(theme::INK_DIM)),
+                Span::styled("[Esc]", Style::default().fg(theme::accent(app))),
+                Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
             ]),
         ];
         f.render_widget(Clear, overlay);
@@ -349,7 +346,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(bc))
+                    .border_style(Style::default().fg(theme::RULE))
                     .border_type(app.border_type()),
             ),
             overlay,
@@ -368,15 +365,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, branch)| {
                 let is_sel = i == pr.branch_idx;
-                let color = if is_sel { C_WHITE } else { C_SUBTLE };
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(branch.clone(), Style::default().fg(color)),
                 ]))
                 .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -391,11 +388,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(Span::styled(
                         format!(" create {} — step 2/5: source branch ", pr_label),
-                        Style::default().fg(C_SUBTLE),
+                        Style::default().fg(theme::INK_DIM),
                     ))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
+                    .border_style(Style::default().fg(theme::RULE)),
             ),
             drop_area,
             &mut drop_state,
@@ -414,15 +411,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, branch)| {
                 let is_sel = i == pr.branch_idx;
-                let color = if is_sel { C_WHITE } else { C_SUBTLE };
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(branch.clone(), Style::default().fg(color)),
                 ]))
                 .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -437,11 +434,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(Span::styled(
                         format!(" create {} — step 3/5: base branch ", pr_label),
-                        Style::default().fg(C_SUBTLE),
+                        Style::default().fg(theme::INK_DIM),
                     ))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
+                    .border_style(Style::default().fg(theme::RULE)),
             ),
             drop_area,
             &mut drop_state,
@@ -464,25 +461,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let mut lines = vec![Line::from(vec![
             Span::styled(
                 format!("  create {} — step 4/5: ", pr_label),
-                Style::default().fg(C_SUBTLE),
+                Style::default().fg(theme::INK_DIM),
             ),
             Span::styled(
                 "description",
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" (optional)", Style::default().fg(C_DIM)),
+            Span::styled(" (optional)", Style::default().fg(theme::INK_FAINT)),
         ])];
         // accumulated lines
         for l in pr.create_desc.lines() {
             lines.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(l.to_string(), Style::default().fg(C_SUBTLE)),
+                Span::styled(l.to_string(), Style::default().fg(theme::INK_DIM)),
             ]));
         }
         // current input line with cursor
         lines.push(Line::from(vec![Span::styled(
             format!("  {}█", pr.create_input),
-            Style::default().fg(C_CYAN),
+            Style::default().fg(theme::INK_DIM),
         )]));
         // fill remaining space — saturating_sub protects against tiny
         // overlay heights (oh < 3) that would otherwise underflow usize
@@ -492,13 +489,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![
-            Span::styled("  [Enter]", Style::default().fg(bc)),
-            Span::styled(" new line  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[^S]", Style::default().fg(bc)),
-            Span::styled(" create  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[Esc]", Style::default().fg(bc)),
-            Span::styled(" cancel  ", Style::default().fg(C_SUBTLE)),
-            Span::styled(draft_hint, Style::default().fg(C_YELLOW)),
+            Span::styled("  [Enter]", Style::default().fg(theme::accent(app))),
+            Span::styled(" new line  ", Style::default().fg(theme::INK_DIM)),
+            Span::styled("[^S]", Style::default().fg(theme::accent(app))),
+            Span::styled(" create  ", Style::default().fg(theme::INK_DIM)),
+            Span::styled("[Esc]", Style::default().fg(theme::accent(app))),
+            Span::styled(" cancel  ", Style::default().fg(theme::INK_DIM)),
+            Span::styled(draft_hint, Style::default().fg(theme::WARN)),
         ]));
 
         f.render_widget(Clear, overlay);
@@ -506,7 +503,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(bc))
+                    .border_style(Style::default().fg(theme::RULE))
                     .border_type(app.border_type()),
             ),
             overlay,
@@ -526,22 +523,22 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Line::from(vec![
                 Span::styled(
                     format!("  edit {} — step 1/3: ", edit_label),
-                    Style::default().fg(C_SUBTLE),
+                    Style::default().fg(theme::INK_DIM),
                 ),
                 Span::styled(
                     "title",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ),
             ]),
             Line::from(vec![Span::styled(
                 format!("  {}█", pr.edit_input),
-                Style::default().fg(C_CYAN),
+                Style::default().fg(theme::INK_DIM),
             )]),
             Line::from(vec![
-                Span::styled("  [Enter]", Style::default().fg(bc)),
-                Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
-                Span::styled("[Esc]", Style::default().fg(bc)),
-                Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                Span::styled("  [Enter]", Style::default().fg(theme::accent(app))),
+                Span::styled(" next  ", Style::default().fg(theme::INK_DIM)),
+                Span::styled("[Esc]", Style::default().fg(theme::accent(app))),
+                Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
             ]),
         ];
         f.render_widget(Clear, overlay);
@@ -549,7 +546,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(bc))
+                    .border_style(Style::default().fg(theme::RULE))
                     .border_type(app.border_type()),
             ),
             overlay,
@@ -565,40 +562,40 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let mut lines = vec![Line::from(vec![
             Span::styled(
                 format!("  edit {} — step 2/3: ", edit_label),
-                Style::default().fg(C_SUBTLE),
+                Style::default().fg(theme::INK_DIM),
             ),
             Span::styled(
                 "description",
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
             ),
         ])];
         for l in pr.edit_desc.lines() {
             lines.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(l.to_string(), Style::default().fg(C_SUBTLE)),
+                Span::styled(l.to_string(), Style::default().fg(theme::INK_DIM)),
             ]));
         }
         lines.push(Line::from(vec![Span::styled(
             "  █",
-            Style::default().fg(C_CYAN),
+            Style::default().fg(theme::INK_DIM),
         )]));
         while lines.len() < (oh as usize - 3) {
             lines.push(Line::from(""));
         }
         lines.push(Line::from(vec![
-            Span::styled("  [Enter]", Style::default().fg(bc)),
-            Span::styled(" new line  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[^S]", Style::default().fg(bc)),
-            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
-            Span::styled("[Esc]", Style::default().fg(bc)),
-            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+            Span::styled("  [Enter]", Style::default().fg(theme::accent(app))),
+            Span::styled(" new line  ", Style::default().fg(theme::INK_DIM)),
+            Span::styled("[^S]", Style::default().fg(theme::accent(app))),
+            Span::styled(" next  ", Style::default().fg(theme::INK_DIM)),
+            Span::styled("[Esc]", Style::default().fg(theme::accent(app))),
+            Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
         ]));
         f.render_widget(Clear, overlay);
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(bc))
+                    .border_style(Style::default().fg(theme::RULE))
                     .border_type(app.border_type()),
             ),
             overlay,
@@ -618,15 +615,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, branch)| {
                 let is_sel = i == pr.branch_idx;
-                let color = if is_sel { C_WHITE } else { C_SUBTLE };
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(branch.clone(), Style::default().fg(color)),
                 ]))
                 .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -643,11 +640,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(Span::styled(
                         " step 4/4: base branch (edit) ",
-                        Style::default().fg(C_SUBTLE),
+                        Style::default().fg(theme::INK_DIM),
                     ))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
+                    .border_style(Style::default().fg(theme::RULE)),
             ),
             drop_area,
             &mut drop_state,
@@ -673,19 +670,19 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 let is_sel = i == pr.create_platform_idx;
                 let checked = pr.create_platform_selected.get(i).copied().unwrap_or(false);
                 let checkbox = if checked { "[✓] " } else { "[ ] " };
-                let color = if is_sel { C_WHITE } else { C_SUBTLE };
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(
                         checkbox,
-                        Style::default().fg(if checked { C_GREEN } else { C_DIM }),
+                        Style::default().fg(if checked { theme::OK } else { theme::INK_FAINT }),
                     ),
                     Span::styled(entry.label.clone(), Style::default().fg(color)),
                 ]))
                 .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -710,11 +707,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(Span::styled(
                         " select platforms ",
-                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
+                    .border_style(Style::default().fg(theme::RULE)),
             ),
             Rect::new(
                 drop_area.x,
@@ -733,11 +730,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         );
         f.render_widget(
             Paragraph::new(Line::from(vec![
-                Span::styled("[Space]", Style::default().fg(bc)),
-                Span::styled(" toggle  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(hint_a, Style::default().fg(bc)),
-                Span::styled("  [Enter]", Style::default().fg(bc)),
-                Span::styled(" create", Style::default().fg(C_SUBTLE)),
+                Span::styled("[Space]", Style::default().fg(theme::accent(app))),
+                Span::styled(" toggle  ", Style::default().fg(theme::INK_DIM)),
+                Span::styled(hint_a, Style::default().fg(theme::accent(app))),
+                Span::styled("  [Enter]", Style::default().fg(theme::accent(app))),
+                Span::styled(" create", Style::default().fg(theme::INK_DIM)),
             ])),
             hint_area,
         );
@@ -759,11 +756,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .map(|(i, entry)| {
                 let is_sel = i == pr.platform_idx;
                 let is_active = entry.platform == pr.platform && entry.owner == pr.owner;
-                let color = if is_sel { C_WHITE } else { C_SUBTLE };
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 let active_marker = if is_active { " ✓" } else { "" };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(
                         format!("{}{}", entry.label, active_marker),
                         Style::default().fg(color),
@@ -771,7 +768,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 ]))
                 .style(if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -788,11 +785,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Block::default()
                     .title(Span::styled(
                         " switch platform ",
-                        Style::default().fg(C_SUBTLE),
+                        Style::default().fg(theme::INK_DIM),
                     ))
                     .borders(Borders::ALL)
                     .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
+                    .border_style(Style::default().fg(theme::RULE)),
             ),
             drop_area,
             &mut drop_state,
@@ -838,24 +835,24 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 let is_sel = i == pr.ops_idx;
                 let dimmed = i == 2 && current_state != "open" && current_state != "opened";
                 let color = if dimmed {
-                    C_DIM
+                    theme::INK_FAINT
                 } else if *danger {
-                    C_RED
+                    theme::BAD
                 } else if is_sel {
-                    C_WHITE
+                    theme::INK
                 } else {
-                    C_SUBTLE
+                    theme::INK_DIM
                 };
                 let prefix = if is_sel { "▶ " } else { "  " };
                 let style = if is_sel && !dimmed {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
                     Span::styled(*label, Style::default().fg(color)),
                 ]))
                 .style(style)
@@ -868,7 +865,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let drop_block = Block::default()
             .borders(Borders::ALL)
             .border_type(app.border_type())
-            .border_style(Style::default().fg(bc));
+            .border_style(Style::default().fg(theme::RULE));
 
         f.render_widget(Clear, drop_area);
         f.render_stateful_widget(
@@ -876,5 +873,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             drop_area,
             &mut drop_state,
         );
+    }
+}
+
+/// Open is settled and green; anything else is closed, and closed is quiet.
+fn state_color(state: &str) -> ratatui::style::Color {
+    if state == "open" {
+        theme::OK
+    } else {
+        theme::INK_DIM
     }
 }
