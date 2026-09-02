@@ -6,12 +6,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, AuthEntry, AuthFocus, AuthState, OauthStatus};
+use crate::tui::theme;
 
 pub fn refresh(app: &mut App) {
     app.auth_view.items.clear();
@@ -62,103 +62,21 @@ fn describe_source(s: &crate::auth::TokenSource) -> String {
 }
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
 
-    let chunks = Layout::default()
+    // cloud | rule | tokens
+    let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(1)])
+        .constraints([
+            Constraint::Length(5),
+            Constraint::Length(1),
+            Constraint::Min(2),
+        ])
         .split(area);
 
-    // ── Cloud panel ──────────────────────────────────────────────────────
-    let cloud_lines: Vec<Line> = if app.auth_view.cloud_key_set {
-        vec![
-            Line::from(vec![
-                Span::styled("  ✓ ", Style::default().fg(C_GREEN)),
-                Span::styled(
-                    "gitorii.com API key set",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("    endpoint  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(&app.auth_view.cloud_endpoint, Style::default().fg(C_DIM)),
-            ]),
-            Line::from(vec![]),
-            Line::from(vec![Span::styled(
-                "    CLI: torii auth status / torii auth logout",
-                Style::default().fg(C_DIM),
-            )]),
-        ]
-    } else {
-        vec![
-            Line::from(vec![
-                Span::styled("  — ", Style::default().fg(C_DIM)),
-                Span::styled("gitorii.com API key not set", Style::default().fg(C_WHITE)),
-            ]),
-            Line::from(vec![]),
-            Line::from(vec![Span::styled(
-                "    CLI: torii auth login",
-                Style::default().fg(C_DIM),
-            )]),
-        ]
-    };
-    let cloud_block = Block::default()
-        .title(Span::styled(" cloud ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(Paragraph::new(cloud_lines).block(cloud_block), chunks[0]);
-
-    // ── Provider tokens list ─────────────────────────────────────────────
-    let items: Vec<ListItem> = app
-        .auth_view
-        .items
-        .iter()
-        .enumerate()
-        .map(|(i, e)| {
-            let is_sel = i == app.auth_view.idx;
-            let style = if is_sel {
-                Style::default()
-                    .bg(app.selected_bg())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let (value_str, color) = match &e.masked {
-                Some(m) => (m.clone(), C_GREEN),
-                None => ("—".to_string(), C_DIM),
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(format!(" {:<10}", e.provider), Style::default().fg(bc)),
-                Span::styled(format!(" {:<22}", value_str), Style::default().fg(color)),
-                Span::styled(&e.source, Style::default().fg(C_SUBTLE)),
-            ]))
-            .style(style)
-        })
-        .collect();
-
-    let mut state = ListState::default();
-    if !app.auth_view.items.is_empty() {
-        state.select(Some(app.auth_view.idx));
-    }
-    let list_block = Block::default()
-        .title(Span::styled(
-            " tokens ",
-            if focused {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), chunks[1], &mut state);
+    render_cloud(f, app, rows[0]);
+    theme::hrule_content(f, rows[1], &[]);
+    render_tokens(f, app, rows[2], focused);
 
     // Overlays — drawn after the body so they stack on top.
     match app.auth_view.focus {
@@ -168,6 +86,108 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         AuthFocus::OauthFlow => render_oauth_flow(f, app, area),
         AuthFocus::List => {}
     }
+}
+
+fn render_cloud(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("cloud", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let lines: Vec<Line> = if app.auth_view.cloud_key_set {
+        vec![
+            Line::from(vec![
+                Span::styled("  ✓ ", Style::default().fg(theme::OK)),
+                Span::styled(
+                    "gitorii.com API key set",
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled("    endpoint  ", Style::default().fg(theme::INK_FAINT)),
+                Span::styled(
+                    &app.auth_view.cloud_endpoint,
+                    Style::default().fg(theme::INK_DIM),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    CLI: torii auth status / torii auth logout",
+                Style::default().fg(theme::INK_FAINT),
+            )),
+        ]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::styled("  — ", Style::default().fg(theme::INK_FAINT)),
+                Span::styled(
+                    "gitorii.com API key not set",
+                    Style::default().fg(theme::INK),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled(
+                "    CLI: torii auth login",
+                Style::default().fg(theme::INK_FAINT),
+            )),
+        ]
+    };
+    f.render_widget(Paragraph::new(lines), body);
+}
+
+fn render_tokens(f: &mut Frame, app: &App, area: Rect, active: bool) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let items: Vec<ListItem> = app
+        .auth_view
+        .items
+        .iter()
+        .enumerate()
+        .map(|(i, e)| {
+            let is_sel = active && i == app.auth_view.idx;
+            // A set token is the thing worth reading here; a missing one is
+            // an em dash, not an error.
+            let (value, value_color) = match &e.masked {
+                Some(m) => (m.clone(), theme::OK),
+                None => ("—".to_string(), theme::INK_FAINT),
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(
+                    format!("{:<10}", e.provider),
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                ),
+                Span::styled(format!(" {:<22}", value), Style::default().fg(value_color)),
+                Span::styled(&e.source, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
+                Style::default()
+                    .bg(theme::selection(app))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            })
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    if !app.auth_view.items.is_empty() {
+        state.select(Some(app.auth_view.idx));
+    }
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        "tokens",
+        Some(app.auth_view.items.len()),
+        active,
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
 }
 
 /// Contextual operations for the selected provider. The list is built
@@ -212,7 +232,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     if ops.is_empty() {
         return;
     }
-    let bc = app.brand_color();
 
     let w: u16 = 44;
     let h: u16 = ops.len() as u16 + 2;
@@ -229,28 +248,25 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, (label, desc))| {
             let is_sel = i == app.auth_view.dropdown_idx;
-            let danger = label.starts_with("Remove");
-            let label_color = if danger {
-                C_RED
+            let label_color = if label.starts_with("Remove") {
+                theme::BAD
             } else if is_sel {
-                C_WHITE
+                theme::INK
             } else {
-                C_SUBTLE
+                theme::INK_DIM
             };
-            let style = if is_sel {
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-            };
-            let prefix = if is_sel { "▶ " } else { "  " };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
-                Span::styled(*desc, Style::default().fg(C_DIM)),
-            ]))
-            .style(style)
+            })
         })
         .collect();
 
@@ -265,11 +281,11 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     title,
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
         &mut state,
@@ -277,7 +293,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let w: u16 = 60;
     let h: u16 = 5;
     let popup = Rect {
@@ -295,13 +310,13 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
     let body = vec![
         Line::from(Span::styled(
             format!(" {}", app.auth_view.input_prompt),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
         Line::from(vec![
             Span::styled("  ", Style::default()),
-            Span::styled(dots, Style::default().fg(C_GREEN)),
-            Span::styled("█", Style::default().fg(bc)),
+            Span::styled(dots, Style::default().fg(theme::OK)),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
         ]),
     ];
     f.render_widget(
@@ -309,11 +324,11 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " paste · Enter save · Esc cancel ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
     );
@@ -326,7 +341,6 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
     let Some(state) = app.auth_view.oauth_flow.as_ref() else {
         return;
     };
-    let bc = app.brand_color();
 
     let w: u16 = 72.min(area.width.saturating_sub(4));
     let h: u16 = 13.min(area.height.saturating_sub(2));
@@ -340,15 +354,15 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
 
     let mut body: Vec<Line> = vec![
         Line::from(vec![
-            Span::styled("  provider  ", Style::default().fg(C_SUBTLE)),
+            Span::styled("  provider  ", Style::default().fg(theme::INK_FAINT)),
             Span::styled(
                 &state.provider,
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
             ),
             Span::raw("   "),
             Span::styled(
                 if state.rotate { "rotate" } else { "re-auth" },
-                Style::default().fg(C_DIM),
+                Style::default().fg(theme::INK_FAINT),
             ),
         ]),
         Line::from(""),
@@ -358,7 +372,7 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
         OauthStatus::Starting => {
             body.push(Line::from(Span::styled(
                 "  ▰▱▱▱▱▱▱▱▱▱  requesting device code…",
-                Style::default().fg(C_YELLOW),
+                Style::default().fg(theme::WARN),
             )));
         }
         OauthStatus::Waiting {
@@ -369,78 +383,83 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled("  ", Style::default()),
                 Span::styled(
                     "1. Open this URL in your browser:",
-                    Style::default().fg(C_WHITE),
+                    Style::default().fg(theme::INK),
                 ),
             ]));
             body.push(Line::from(vec![
                 Span::raw("     "),
                 Span::styled(
                     display_uri.clone(),
-                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::accent(app))
+                        .add_modifier(Modifier::BOLD),
                 ),
             ]));
             body.push(Line::from(""));
             body.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled("2. Confirm the user code:", Style::default().fg(C_WHITE)),
+                Span::styled(
+                    "2. Confirm the user code:",
+                    Style::default().fg(theme::INK),
+                ),
             ]));
             body.push(Line::from(vec![
                 Span::raw("     "),
                 Span::styled(
                     user_code.clone(),
-                    Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::OK).add_modifier(Modifier::BOLD),
                 ),
             ]));
             body.push(Line::from(""));
             let bar = progress_bar(app.tick / 2);
             body.push(Line::from(vec![
                 Span::raw("  "),
-                Span::styled(bar, Style::default().fg(C_YELLOW)),
+                Span::styled(bar, Style::default().fg(theme::WARN)),
                 Span::styled(
                     "  waiting for authorisation…",
-                    Style::default().fg(C_YELLOW),
+                    Style::default().fg(theme::WARN),
                 ),
             ]));
         }
         OauthStatus::Saving => {
             body.push(Line::from(Span::styled(
                 "  ▰▰▰▰▰▰▰▰▱▱  authorised, saving token…",
-                Style::default().fg(C_YELLOW),
+                Style::default().fg(theme::WARN),
             )));
         }
         OauthStatus::Done(masked) => {
             body.push(Line::from(Span::styled(
                 "  ▰▰▰▰▰▰▰▰▰▰",
-                Style::default().fg(C_GREEN),
+                Style::default().fg(theme::OK),
             )));
             body.push(Line::from(""));
             body.push(Line::from(vec![
-                Span::styled("  ✓ ", Style::default().fg(C_GREEN)),
+                Span::styled("  ✓ ", Style::default().fg(theme::OK)),
                 Span::styled(
                     format!("token saved: {}", masked),
-                    Style::default().fg(C_WHITE),
+                    Style::default().fg(theme::INK),
                 ),
             ]));
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
-                "  [any key] close",
-                Style::default().fg(C_DIM),
+                "  any key closes this",
+                Style::default().fg(theme::INK_FAINT),
             )));
         }
         OauthStatus::Error(msg) => {
             body.push(Line::from(Span::styled(
                 "  ▰▰▰▰▰▰▰▰▰▰",
-                Style::default().fg(C_RED),
+                Style::default().fg(theme::BAD),
             )));
             body.push(Line::from(""));
             body.push(Line::from(vec![
-                Span::styled("  ✗ ", Style::default().fg(C_RED)),
-                Span::styled(msg.clone(), Style::default().fg(C_WHITE)),
+                Span::styled("  ✗ ", Style::default().fg(theme::BAD)),
+                Span::styled(msg.clone(), Style::default().fg(theme::INK)),
             ]));
             body.push(Line::from(""));
             body.push(Line::from(Span::styled(
-                "  [any key] close",
-                Style::default().fg(C_DIM),
+                "  any key closes this",
+                Style::default().fg(theme::INK_FAINT),
             )));
         }
     }
@@ -456,11 +475,11 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     title,
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
     );
@@ -494,24 +513,27 @@ fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {
                 "  Remove `{}` token from auth.toml?",
                 app.auth_view.pending_provider
             ),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  [y] yes   [n] no",
-            Style::default().fg(C_DIM),
-        )),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("y", Style::default().fg(theme::accent(app))),
+            Span::styled("  yes   ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("n", Style::default().fg(theme::accent(app))),
+            Span::styled("  no", Style::default().fg(theme::INK_FAINT)),
+        ]),
     ];
     f.render_widget(
         Paragraph::new(body).block(
             Block::default()
                 .title(Span::styled(
                     " confirm ",
-                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_RED)),
+                .border_style(Style::default().fg(theme::BAD)),
         ),
         popup,
     );
