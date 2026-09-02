@@ -1,62 +1,70 @@
+//! The remote view: git remotes and mirrors in one list, and what the selected
+//! one points at.
+//!
+//! Two panes parted by a rule rather than two boxes. The ops dropdown and the
+//! url editor keep their boxes: a popup is a window.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
-use super::super::ui::{C_CYAN, C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::App;
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
 
-    let chunks = Layout::default()
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(area);
 
+    // The list carries the rule; the info pane sits the other side of it.
+    let divider = theme::divider_right();
+    let list_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
+
+    let [list_heading, list_body] = theme::heading_and_body(list_pane);
+    let [info_heading, info_body] = theme::heading_and_body(panes[1]);
+
     let remotes = &app.remote_view.remotes;
     let mirrors = &app.remote_view.mirrors;
 
-    // ── Build unified list ────────────────────────────────────────────────────
+    // ── The list: remotes, then mirrors, under their own headers ──────────────
     let mut items: Vec<ListItem> = vec![];
     let mut sel_list_pos = 0usize;
 
     if !remotes.is_empty() {
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            " git remotes ",
-            Style::default().fg(C_SUBTLE).add_modifier(Modifier::BOLD),
-        )])));
+        items.push(group_header("git remotes"));
         for (i, r) in remotes.iter().enumerate() {
-            let is_sel = i == app.remote_view.idx;
+            let is_sel = focused && i == app.remote_view.idx;
             if is_sel {
                 sel_list_pos = items.len();
             }
-            let style = if is_sel {
-                Style::default()
-                    .bg(app.selected_bg())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let prefix = if is_sel { "█ " } else { "  " };
             items.push(
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    theme::caret(app, is_sel),
                     Span::styled(
                         format!("{:<12} ", &r.name),
-                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
                         format!("{:<10}", &r.platform),
                         Style::default().fg(platform_color(&r.platform)),
                     ),
-                    Span::styled(truncate(&r.url, 30), Style::default().fg(C_DIM)),
+                    Span::styled(
+                        truncate(&r.url, 30),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
                 ]))
-                .style(style),
+                .style(row_style(app, is_sel)),
             );
         }
     }
@@ -65,298 +73,296 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         if !remotes.is_empty() {
             items.push(ListItem::new(Line::from(Span::raw(" "))));
         }
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            " mirrors ",
-            Style::default().fg(C_SUBTLE).add_modifier(Modifier::BOLD),
-        )])));
+        items.push(group_header("mirrors"));
         for (i, m) in mirrors.iter().enumerate() {
-            let abs_idx = remotes.len() + i;
-            let is_sel = abs_idx == app.remote_view.idx;
+            let is_sel = focused && remotes.len() + i == app.remote_view.idx;
             if is_sel {
                 sel_list_pos = items.len();
             }
-            let style = if is_sel {
-                Style::default()
-                    .bg(app.selected_bg())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
-            let prefix = if is_sel { "█ " } else { "  " };
-            let kind_color = if m.kind == "primary" {
-                C_YELLOW
-            } else {
-                C_SUBTLE
-            };
             items.push(
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    theme::caret(app, is_sel),
                     Span::styled(
                         format!("{:<12} ", &m.name),
-                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!("{:<9}", &m.kind), Style::default().fg(kind_color)),
+                    Span::styled(
+                        format!("{:<9}", &m.kind),
+                        Style::default().fg(kind_color(&m.kind)),
+                    ),
                     Span::styled(
                         format!(" {:<10}", &m.platform),
                         Style::default().fg(platform_color(&m.platform)),
                     ),
                 ]))
-                .style(style),
+                .style(row_style(app, is_sel)),
             );
         }
     }
 
     if remotes.is_empty() && mirrors.is_empty() {
         items.push(ListItem::new(Span::styled(
-            "  no remotes configured",
-            Style::default().fg(C_DIM),
+            "no remotes configured",
+            Style::default().fg(theme::INK_FAINT),
         )));
     }
 
-    let total = remotes.len() + mirrors.len();
-    let title = format!(
-        " remote — {} git  {} mirrors ",
-        remotes.len(),
-        mirrors.len()
-    );
-
     let mut state = ListState::default();
-    if total > 0 {
+    if !remotes.is_empty() || !mirrors.is_empty() {
         state.select(Some(sel_list_pos));
     }
 
-    let list_block = Block::default()
-        .title(Span::styled(
-            title,
-            if focused {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), chunks[0], &mut state);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("remotes", None, focused));
+    heading.push(Span::styled(
+        format!("  {} git  {} mirrors", remotes.len(), mirrors.len()),
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), list_heading);
 
-    // ── Info panel ────────────────────────────────────────────────────────────
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        list_body,
+        &mut state,
+    );
+
+    // ── Info pane ─────────────────────────────────────────────────────────────
+    let mut info_title = vec![Span::raw(" ")];
+    info_title.extend(theme::panel_title("info", None, false));
+    f.render_widget(Paragraph::new(Line::from(info_title)), info_heading);
+
     let info_lines: Vec<Line> = if app.remote_view.selected_is_mirror() {
-        if let Some(m) = app.remote_view.selected_mirror() {
-            let https_url = ssh_to_https(&m.url);
-            vec![
-                Line::from(vec![
-                    Span::styled("  name      ", Style::default().fg(C_SUBTLE)),
+        match app.remote_view.selected_mirror() {
+            Some(m) => vec![
+                field(
+                    "name",
                     Span::styled(
-                        &m.name,
-                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                        m.name.clone(),
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
-                ]),
-                Line::from(vec![
-                    Span::styled("  kind      ", Style::default().fg(C_SUBTLE)),
+                ),
+                field(
+                    "kind",
                     Span::styled(
-                        &m.kind,
+                        m.kind.clone(),
                         Style::default()
-                            .fg(if m.kind == "primary" {
-                                C_YELLOW
-                            } else {
-                                C_SUBTLE
-                            })
+                            .fg(kind_color(&m.kind))
                             .add_modifier(Modifier::BOLD),
                     ),
-                ]),
-                Line::from(vec![
-                    Span::styled("  platform  ", Style::default().fg(C_SUBTLE)),
+                ),
+                field(
+                    "platform",
                     Span::styled(
-                        &m.platform,
+                        m.platform.clone(),
                         Style::default().fg(platform_color(&m.platform)),
                     ),
-                ]),
-                Line::from(vec![
-                    Span::styled("  account   ", Style::default().fg(C_SUBTLE)),
-                    Span::styled(&m.account, Style::default().fg(C_WHITE)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  repo      ", Style::default().fg(C_SUBTLE)),
-                    Span::styled(&m.repo, Style::default().fg(C_CYAN)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  url       ", Style::default().fg(C_SUBTLE)),
-                    Span::styled(&m.url, Style::default().fg(C_DIM)),
-                ]),
-                Line::from(vec![
-                    Span::styled("  https     ", Style::default().fg(C_SUBTLE)),
-                    Span::styled(https_url, Style::default().fg(C_DIM)),
-                ]),
-            ]
-        } else {
-            vec![Line::from(Span::styled(
-                "  no mirror selected",
-                Style::default().fg(C_DIM),
-            ))]
+                ),
+                field(
+                    "account",
+                    Span::styled(m.account.clone(), Style::default().fg(theme::INK)),
+                ),
+                field(
+                    "repo",
+                    Span::styled(m.repo.clone(), Style::default().fg(theme::INK_DIM)),
+                ),
+                field(
+                    "url",
+                    Span::styled(m.url.clone(), Style::default().fg(theme::INK_FAINT)),
+                ),
+                field(
+                    "https",
+                    Span::styled(ssh_to_https(&m.url), Style::default().fg(theme::INK_FAINT)),
+                ),
+            ],
+            None => vec![empty("no mirror selected")],
         }
-    } else if let Some(r) = app.remote_view.selected_remote() {
-        let https_url = ssh_to_https(&r.url);
-        vec![
-            Line::from(vec![
-                Span::styled("  name      ", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    &r.name,
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  platform  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    &r.platform,
-                    Style::default().fg(platform_color(&r.platform)),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  url       ", Style::default().fg(C_SUBTLE)),
-                Span::styled(&r.url, Style::default().fg(C_CYAN)),
-            ]),
-            Line::from(vec![
-                Span::styled("  https     ", Style::default().fg(C_SUBTLE)),
-                Span::styled(https_url, Style::default().fg(C_DIM)),
-            ]),
-        ]
     } else {
-        vec![Line::from(Span::styled(
-            "  no remote selected",
-            Style::default().fg(C_DIM),
-        ))]
+        match app.remote_view.selected_remote() {
+            Some(r) => vec![
+                field(
+                    "name",
+                    Span::styled(
+                        r.name.clone(),
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                    ),
+                ),
+                field(
+                    "platform",
+                    Span::styled(
+                        r.platform.clone(),
+                        Style::default().fg(platform_color(&r.platform)),
+                    ),
+                ),
+                field(
+                    "url",
+                    Span::styled(r.url.clone(), Style::default().fg(theme::INK_DIM)),
+                ),
+                field(
+                    "https",
+                    Span::styled(ssh_to_https(&r.url), Style::default().fg(theme::INK_FAINT)),
+                ),
+            ],
+            None => vec![empty("no remote selected")],
+        }
     };
+    f.render_widget(Paragraph::new(info_lines), info_body);
 
-    let info_block = Block::default()
-        .title(Span::styled(" info ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(Paragraph::new(info_lines).block(info_block), chunks[1]);
-
-    // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.remote_view.ops_mode {
-        let is_mirror = app.remote_view.selected_is_mirror();
-        let (ops, dropdown_w): (&[(&str, bool)], u16) = if is_mirror {
-            (
-                &[
-                    ("sync all", false),
-                    ("force sync", false),
-                    ("add mirror", false),
-                    ("set primary", false),
-                    ("rename", false),
-                    ("remove ⚠", true),
-                ],
-                22,
-            )
-        } else {
-            (
-                &[
-                    ("fetch", false),
-                    ("add remote", false),
-                    ("add mirror", false),
-                    ("rename", false),
-                    ("edit url", false),
-                    ("remove ⚠", true),
-                    ("open in browser", false),
-                ],
-                22,
-            )
-        };
-
-        let dropdown_h = ops.len() as u16 + 2;
-        let entry_y = chunks[0].y + 1 + sel_list_pos as u16 + 1;
-        let drop_y = if entry_y + dropdown_h < chunks[0].y + chunks[0].height {
-            entry_y
-        } else {
-            chunks[0].y + chunks[0].height - dropdown_h
-        };
-        let drop_area = Rect::new(chunks[0].x + 3, drop_y, dropdown_w, dropdown_h);
-
-        let drop_items: Vec<ListItem> = ops
-            .iter()
-            .enumerate()
-            .map(|(i, (label, danger))| {
-                let is_sel = i == app.remote_view.ops_idx;
-                let color = if *danger {
-                    C_RED
-                } else if is_sel {
-                    C_WHITE
-                } else {
-                    C_SUBTLE
-                };
-                let prefix = if is_sel { "▶ " } else { "  " };
-                let style = if is_sel {
-                    Style::default()
-                        .bg(app.selected_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
-                    Span::styled(*label, Style::default().fg(color)),
-                ]))
-                .style(style)
-            })
-            .collect();
-
-        let mut drop_state = ListState::default();
-        drop_state.select(Some(app.remote_view.ops_idx));
-
-        let drop_block = Block::default()
-            .borders(Borders::ALL)
-            .border_type(app.border_type())
-            .border_style(Style::default().fg(bc));
-
-        f.render_widget(Clear, drop_area);
-        f.render_stateful_widget(
-            List::new(drop_items).block(drop_block),
-            drop_area,
-            &mut drop_state,
-        );
+        render_ops(f, app, list_body, sel_list_pos);
     }
 
-    // ── Edit URL overlay ──────────────────────────────────────────────────────
     use crate::tui::app::RemoteConfirm;
     if app.remote_view.confirm == RemoteConfirm::EditUrl {
-        let bc = app.brand_color();
-        let ow = 60u16;
-        let oh = 3u16;
-        let ox = area.x + area.width.saturating_sub(ow) / 2;
-        let oy = area.y + area.height.saturating_sub(oh) / 2;
-        let overlay = Rect::new(ox, oy, ow, oh);
-        f.render_widget(Clear, overlay);
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("  new url: ", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    format!("{}█", app.remote_view.new_url),
-                    Style::default().fg(C_WHITE),
-                ),
+        render_url_editor(f, app, area);
+    }
+}
+
+/// The ops dropdown, anchored under the selected entry.
+fn render_ops(f: &mut Frame, app: &App, body: Rect, sel_list_pos: usize) {
+    let ops: &[(&str, bool)] = if app.remote_view.selected_is_mirror() {
+        &[
+            ("sync all", false),
+            ("force sync", false),
+            ("add mirror", false),
+            ("set primary", false),
+            ("rename", false),
+            ("remove ⚠", true),
+        ]
+    } else {
+        &[
+            ("fetch", false),
+            ("add remote", false),
+            ("add mirror", false),
+            ("rename", false),
+            ("edit url", false),
+            ("remove ⚠", true),
+            ("open in browser", false),
+        ]
+    };
+
+    let dropdown_w = 22u16;
+    let dropdown_h = ops.len() as u16 + 2;
+    let entry_y = body.y + sel_list_pos as u16 + 1;
+    let drop_y = if entry_y + dropdown_h < body.y + body.height {
+        entry_y
+    } else {
+        body.y + body.height.saturating_sub(dropdown_h)
+    };
+    let drop_area = Rect::new(body.x + 3, drop_y, dropdown_w, dropdown_h);
+
+    let items: Vec<ListItem> = ops
+        .iter()
+        .enumerate()
+        .map(|(i, (label, danger))| {
+            let is_sel = i == app.remote_view.ops_idx;
+            let color = if *danger {
+                theme::BAD
+            } else if is_sel {
+                theme::INK
+            } else {
+                theme::INK_DIM
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(*label, Style::default().fg(color)),
             ]))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(bc))
-                    .border_type(app.border_type()),
+            .style(row_style(app, is_sel))
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.remote_view.ops_idx));
+
+    f.render_widget(Clear, drop_area);
+    f.render_stateful_widget(
+        List::new(items).block(popup(app)),
+        drop_area,
+        &mut state,
+    );
+}
+
+fn render_url_editor(f: &mut Frame, app: &App, area: Rect) {
+    let ow = 60u16;
+    let oh = 3u16;
+    let ox = area.x + area.width.saturating_sub(ow) / 2;
+    let oy = area.y + area.height.saturating_sub(oh) / 2;
+    let overlay = Rect::new(ox, oy, ow, oh);
+
+    f.render_widget(Clear, overlay);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  new url: ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                app.remote_view.new_url.clone(),
+                Style::default().fg(theme::INK),
             ),
-            overlay,
-        );
+            Span::styled("█", Style::default().fg(theme::accent(app))),
+        ]))
+        .block(popup(app)),
+        overlay,
+    );
+}
+
+/// A popup keeps its box: it is a window, not a column.
+fn popup(app: &App) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.border_type())
+        .border_style(Style::default().fg(theme::RULE))
+}
+
+fn row_style(app: &App, selected: bool) -> Style {
+    if selected {
+        Style::default()
+            .bg(theme::selection(app))
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+    }
+}
+
+/// The `git remotes` / `mirrors` divider inside the list.
+fn group_header(label: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    )))
+}
+
+fn field(label: &str, value: Span<'static>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:<10}", label),
+            Style::default().fg(theme::INK_FAINT),
+        ),
+        value,
+    ])
+}
+
+fn empty(text: &'static str) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {}", text),
+        Style::default().fg(theme::INK_FAINT),
+    ))
+}
+
+fn kind_color(kind: &str) -> ratatui::style::Color {
+    if kind == "primary" {
+        theme::WARN
+    } else {
+        theme::INK_DIM
     }
 }
 
 fn platform_color(platform: &str) -> ratatui::style::Color {
     match platform.to_lowercase().as_str() {
-        "github" => C_WHITE,
-        "gitlab" => C_YELLOW,
-        "bitbucket" => C_CYAN,
-        "codeberg" => C_GREEN,
-        _ => C_DIM,
+        "github" => theme::INK,
+        "gitlab" => theme::WARN,
+        "codeberg" => theme::OK,
+        "bitbucket" => theme::INK_DIM,
+        _ => theme::INK_FAINT,
     }
 }
 
