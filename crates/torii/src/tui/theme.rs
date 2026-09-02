@@ -99,8 +99,15 @@ pub fn hrule(f: &mut Frame, area: Rect, ticks: &[(u16, Tick)]) {
     }
     let style = Style::default().fg(RULE);
 
+    // A rule laid over a column rule cuts the junction rather than erasing
+    // it. The chrome draws its bottom rule after the views have drawn their
+    // columns, so without this every column would stop a row short of it.
     for x in area.left()..area.right() {
-        put(f, x, area.y, "─", style);
+        let over_column = f
+            .buffer_mut()
+            .cell((x, area.y))
+            .is_some_and(|c| c.symbol() == "│");
+        put(f, x, area.y, if over_column { "┴" } else { "─" }, style);
     }
     // The window's own border columns become junctions: a rule that stops one
     // cell short of the frame reads as a line dropped inside a box.
@@ -148,6 +155,16 @@ pub fn tie_above(f: &mut Frame, area: Rect, xs: &[u16]) {
     }
 }
 
+/// The same for the rule directly below the content. The chrome draws both of
+/// its body rules before handing the body to a view, so a view can reach into
+/// either of them.
+pub fn tie_below(f: &mut Frame, area: Rect, xs: &[u16]) {
+    let y = area.y + area.height;
+    for x in xs {
+        tie(f, *x, y, Tick::Up);
+    }
+}
+
 /// A rule across a view's content, tied into the chrome on both sides.
 ///
 /// A view is handed its content inset by one column from the sidebar's rule
@@ -177,6 +194,19 @@ fn put(f: &mut Frame, x: u16, y: u16, symbol: &str, style: Style) {
 }
 
 // ── Content ──────────────────────────────────────────────────────────────────
+
+/// Split a pane into its heading row and the body below it — the shape a
+/// boxed title used to give for free.
+pub fn heading_and_body(area: Rect) -> [Rect; 2] {
+    let rows = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Min(0),
+        ])
+        .split(area);
+    [rows[0], rows[1]]
+}
 
 /// The heading of a de-boxed panel: a word, a count, and nothing drawn around
 /// it. The active panel is the one in full ink.
