@@ -11,7 +11,6 @@ use ratatui::{
     Frame,
 };
 
-use super::super::ui::{C_CYAN, C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::App;
 use crate::tui::theme;
 
@@ -90,7 +89,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 let glyphs = row.map(|r| r.commit_line.as_str()).unwrap_or("");
                 let color = row
                     .map(|r| ratatui::style::Color::Indexed(crate::graph::lane_color(r.lane)))
-                    .unwrap_or(C_CYAN);
+                    .unwrap_or(theme::INK_DIM);
                 // Explicitly cancel BOLD here — the parent ListItem style applies
                 // BOLD when selected, but many monospace fonts ship narrower
                 // bullseye/half-circle glyphs in bold (or fall back to a thinner
@@ -112,12 +111,12 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     .copied()
                     .unwrap_or('…');
                 let color = match letter {
-                    'G' => C_GREEN,
-                    'U' => C_YELLOW,
-                    'B' => C_RED,
-                    '?' => C_SUBTLE,
-                    'N' => C_DIM,
-                    _ => C_SUBTLE,
+                    'G' => theme::OK,
+                    'U' => theme::WARN,
+                    'B' => theme::BAD,
+                    '?' => theme::INK_DIM,
+                    'N' => theme::INK_FAINT,
+                    _ => theme::INK_DIM,
                 };
                 spans.push(Span::styled(
                     format!("{} ", letter),
@@ -342,7 +341,7 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
             format!(" signature · {} · loading… ", &oid[..oid.len().min(8)]),
             vec![Line::from(Span::styled(
                 "  ▰▱▱▱▱▱▱▱▱▱  verifying signature…",
-                Style::default().fg(C_YELLOW),
+                Style::default().fg(theme::WARN),
             ))],
         ),
         SignatureOverlay::Done {
@@ -352,14 +351,14 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
             verdict_color,
         } => {
             let vcolor = match verdict_color {
-                SignatureVerdictColor::Good => C_GREEN,
-                SignatureVerdictColor::Unknown => C_YELLOW,
-                SignatureVerdictColor::Bad => C_RED,
-                SignatureVerdictColor::Other => C_SUBTLE,
+                SignatureVerdictColor::Good => theme::OK,
+                SignatureVerdictColor::Unknown => theme::WARN,
+                SignatureVerdictColor::Bad => theme::BAD,
+                SignatureVerdictColor::Other => theme::INK_DIM,
             };
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(vec![
-                Span::styled("  verdict   ", Style::default().fg(C_SUBTLE)),
+                Span::styled("  verdict   ", Style::default().fg(theme::INK_DIM)),
                 Span::styled(
                     verdict.clone(),
                     Style::default().fg(vcolor).add_modifier(Modifier::BOLD),
@@ -369,13 +368,13 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
             for line in armor.lines().take((h as usize).saturating_sub(6)) {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
-                    Style::default().fg(C_WHITE),
+                    Style::default().fg(theme::INK),
                 )));
             }
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 "  [any key] close",
-                Style::default().fg(C_DIM),
+                Style::default().fg(theme::INK_FAINT),
             )));
             (format!(" signature · {} ", &oid[..oid.len().min(8)]), lines)
         }
@@ -383,13 +382,13 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
             format!(" signature · {} ", &oid[..oid.len().min(8)]),
             vec![
                 Line::from(vec![
-                    Span::styled("  ✗ ", Style::default().fg(C_RED)),
-                    Span::styled(message.clone(), Style::default().fg(C_WHITE)),
+                    Span::styled("  ✗ ", Style::default().fg(theme::BAD)),
+                    Span::styled(message.clone(), Style::default().fg(theme::INK)),
                 ]),
                 Line::from(""),
                 Line::from(Span::styled(
                     "  [any key] close",
-                    Style::default().fg(C_DIM),
+                    Style::default().fg(theme::INK_FAINT),
                 )),
             ],
         ),
@@ -400,11 +399,11 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     title,
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::INK)),
         ),
         popup,
     );
