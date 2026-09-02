@@ -29,35 +29,45 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap},
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, PlatformFocus, PlatformSubTab};
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3), // header: Tabs
+            Constraint::Length(1), // sub-tab strip
+            Constraint::Length(1), // rule
             Constraint::Min(1),    // body
         ])
         .split(area);
 
-    render_header(f, app, rows[0]);
+    render_tab_strip(f, app, rows[0]);
 
-    // Drill-down: job log takes the whole body
+    // Drill-down: the job log takes the whole body.
     if app.platform_view.focus == PlatformFocus::JobLog {
-        render_job_log(f, app, rows[1]);
+        theme::hrule_content(f, rows[1], &[]);
+        render_job_log(f, app, rows[2]);
     } else {
-        // Body = list (60%) + detail (40%)
-        let cols = Layout::default()
+        let panes = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-            .split(rows[1]);
-        render_list(f, app, cols[0]);
-        render_detail(f, app, cols[1]);
+            .split(rows[2]);
+
+        // The list carries the rule; the detail sits the other side of it.
+        let divider = theme::divider_right();
+        let list_pane = divider.inner(panes[0]);
+        f.render_widget(divider, panes[0]);
+        let spine = panes[0].right().saturating_sub(1);
+        theme::hrule_content(f, rows[1], &[(spine, theme::Tick::Down)]);
+        theme::tie_below(f, rows[2], &[spine]);
+
+        render_list(f, app, list_pane);
+        render_detail(f, app, panes[1]);
     }
 
     // Overlays — drawn last so they sit on top of body content.
@@ -89,38 +99,14 @@ fn col(s: &str, width: usize) -> String {
     }
 }
 
-fn render_header(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
+/// The five sub-tabs as a strip of words. What used to be a boxed `Tabs`
+/// widget with the remote in its title: the remote moved to the list heading,
+/// which has the room for it.
+fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
     let focused = !app.sidebar_focused;
 
-    // Title carries the active remote + resolved platform/owner/repo
-    // so it doesn't compete with the Tabs widget for horizontal space.
-    // Trailing markers show the active filter / live state in the same
-    // line so the user has them in eye-shot without dragging attention
-    // away from the body.
-    let mut title_text = if pv.platform.is_empty() {
-        format!(" platform · {} ", pv.remote)
-    } else {
-        format!(" platform · {} → {}/{} ", pv.remote, pv.owner, pv.repo_name)
-    };
-    if let Some(s) = &pv.filter_status {
-        title_text.push_str(&format!("· status:{} ", s));
-    }
-    if pv.filter_branch_only {
-        title_text.push_str("· branch-only ");
-    }
-    if pv.auto_refresh {
-        title_text.push_str("· ⟳ live ");
-    }
-
-    let titles: Vec<&'static str> = vec![
-        " 1 pipelines ",
-        " 2 jobs ",
-        " 3 releases ",
-        " 4 packages ",
-        " 5 runners ",
-    ];
+    let titles = ["1 pipelines", "2 jobs", "3 releases", "4 packages", "5 runners"];
     let active_idx = match pv.sub_tab {
         PlatformSubTab::Pipelines => 0,
         PlatformSubTab::Jobs => 1,
@@ -129,55 +115,61 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
         PlatformSubTab::Runners => 4,
     };
 
-    // Match the per-view title color convention used in log.rs / branch.rs:
-    // C_WHITE when focused, bc otherwise. Same for the border.
-    let title_color = if focused { C_WHITE } else { bc };
-    let border_color = if focused { C_WHITE } else { bc };
-
-    let tabs = Tabs::new(titles)
+    let tabs = Tabs::new(titles.to_vec())
         .select(active_idx)
-        .style(Style::default().fg(bc))
-        .highlight_style(
-            Style::default()
-                .fg(C_WHITE)
-                .bg(app.selected_bg())
-                .add_modifier(Modifier::BOLD),
-        )
-        .divider(Span::styled("·", Style::default().fg(C_DIM)))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_type(app.border_type())
-                .border_style(Style::default().fg(border_color))
-                .title(Span::styled(
-                    title_text,
-                    Style::default()
-                        .fg(title_color)
-                        .add_modifier(Modifier::BOLD),
-                )),
-        );
+        .style(Style::default().fg(theme::INK_DIM))
+        .highlight_style(if focused {
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::INK_DIM).add_modifier(Modifier::BOLD)
+        })
+        .divider(Span::styled("·", Style::default().fg(theme::RULE)))
+        .padding(" ", " ");
 
     f.render_widget(tabs, area);
 }
 
-fn render_list(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let focused = !app.sidebar_focused;
-    let pv = &app.platform_view;
+/// Where the data comes from, and what is filtering it — said once, in the
+/// list heading, rather than in a box title.
+fn context_spans(pv: &crate::tui::app::PlatformState) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        if pv.platform.is_empty() {
+            format!("  {}", pv.remote)
+        } else {
+            format!("  {} → {}/{}", pv.remote, pv.owner, pv.repo_name)
+        },
+        Style::default().fg(theme::INK_FAINT),
+    )];
+    if let Some(status) = &pv.filter_status {
+        spans.push(Span::styled(
+            format!("  status:{}", status),
+            Style::default().fg(theme::INK_FAINT),
+        ));
+    }
+    if pv.filter_branch_only {
+        spans.push(Span::styled(
+            "  branch-only",
+            Style::default().fg(theme::INK_FAINT),
+        ));
+    }
+    if pv.auto_refresh {
+        spans.push(Span::styled("  ⟳ live", Style::default().fg(theme::OK)));
+    }
+    spans
+}
 
-    let border = if focused && pv.focus == PlatformFocus::List {
-        Style::default().fg(C_WHITE)
-    } else {
-        Style::default().fg(bc)
-    };
+fn render_list(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+    let pv = &app.platform_view;
+    let active = !app.sidebar_focused && pv.focus == PlatformFocus::List;
 
     let (title, items, selected): (String, Vec<ListItem>, usize) = if pv.loading {
         (
             list_title(pv),
-            vec![ListItem::new(Line::from(Span::styled(
-                "  loading...",
-                Style::default().fg(C_SUBTLE),
-            )))],
+            vec![ListItem::new(Span::styled(
+                "loading…",
+                Style::default().fg(theme::INK_FAINT),
+            ))],
             0,
         )
     } else if let Some(err) = &pv.error {
@@ -197,27 +189,30 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         state.select(Some(selected));
     }
 
-    let title_color = if focused && pv.focus == PlatformFocus::List {
-        C_WHITE
-    } else {
-        bc
-    };
+    let (label, count) = split_title(&title);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(&label, count, active));
+    heading.extend(context_spans(pv));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
     f.render_stateful_widget(
-        List::new(items).block(
-            Block::default()
-                .title(Span::styled(
-                    title,
-                    Style::default()
-                        .fg(title_color)
-                        .add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_type(app.border_type())
-                .border_style(border),
-        ),
-        area,
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
         &mut state,
     );
+}
+
+/// `list_title` still yields the old " label (n) " string, which several
+/// call sites share. The heading wants the two halves apart.
+fn split_title(title: &str) -> (String, Option<usize>) {
+    let t = title.trim();
+    match (t.rfind('('), t.rfind(')')) {
+        (Some(open), Some(close)) if close > open => {
+            let n = t[open + 1..close].parse().ok();
+            (t[..open].trim().to_string(), n)
+        }
+        _ => (t.to_string(), None),
+    }
 }
 
 fn list_title(pv: &crate::tui::app::PlatformState) -> String {
@@ -246,24 +241,24 @@ fn render_pipelines_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) 
             let is_sel = i == pv.pipelines_idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
+
             let id = format!("#{}", p.id);
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.brand_color())),
-                Span::styled(col(&id, 13), Style::default().fg(app.brand_color())),
+                theme::caret(app, is_sel),
+                Span::styled(col(&id, 13), Style::default().fg(theme::accent(app))),
                 Span::styled(
                     col(&p.status, 10),
                     Style::default().fg(status_color(&p.status)),
                 ),
-                Span::styled(col(&p.branch, 18), Style::default().fg(C_WHITE)),
+                Span::styled(col(&p.branch, 18), Style::default().fg(theme::INK)),
                 Span::styled(
                     col(&short_time(&p.created_at), 18),
-                    Style::default().fg(C_DIM),
+                    Style::default().fg(theme::INK_FAINT),
                 ),
             ]))
             .style(style)
@@ -282,27 +277,27 @@ fn render_jobs_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             let is_sel = i == pv.jobs_idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
+
             let dur = j
                 .duration_seconds
                 .map(|s| format!("{}s", s as u64))
                 .unwrap_or_else(|| "—".into());
             let id = format!("#{}", j.id);
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.brand_color())),
-                Span::styled(col(&id, 13), Style::default().fg(app.brand_color())),
+                theme::caret(app, is_sel),
+                Span::styled(col(&id, 13), Style::default().fg(theme::accent(app))),
                 Span::styled(
                     col(&j.status, 10),
                     Style::default().fg(status_color(&j.status)),
                 ),
-                Span::styled(col(&j.stage, 10), Style::default().fg(C_DIM)),
-                Span::styled(col(&j.name, 24), Style::default().fg(C_WHITE)),
-                Span::styled(col(&dur, 8), Style::default().fg(C_DIM)),
+                Span::styled(col(&j.stage, 10), Style::default().fg(theme::INK_FAINT)),
+                Span::styled(col(&j.name, 24), Style::default().fg(theme::INK)),
+                Span::styled(col(&dur, 8), Style::default().fg(theme::INK_FAINT)),
             ]))
             .style(style)
         })
@@ -320,19 +315,19 @@ fn render_releases_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             let is_sel = i == pv.releases_idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
+
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.brand_color())),
-                Span::styled(col(&r.tag, 16), Style::default().fg(C_GREEN)),
-                Span::styled(col(&r.name, 28), Style::default().fg(C_WHITE)),
+                theme::caret(app, is_sel),
+                Span::styled(col(&r.tag, 16), Style::default().fg(theme::OK)),
+                Span::styled(col(&r.name, 28), Style::default().fg(theme::INK)),
                 Span::styled(
                     col(&short_time(&r.created_at), 18),
-                    Style::default().fg(C_DIM),
+                    Style::default().fg(theme::INK_FAINT),
                 ),
             ]))
             .style(style)
@@ -351,20 +346,20 @@ fn render_packages_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             let is_sel = i == pv.packages_idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
+
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.brand_color())),
-                Span::styled(col(&p.name, 22), Style::default().fg(C_WHITE)),
-                Span::styled(col(&p.version, 14), Style::default().fg(C_GREEN)),
-                Span::styled(col(&p.package_type, 10), Style::default().fg(C_DIM)),
+                theme::caret(app, is_sel),
+                Span::styled(col(&p.name, 22), Style::default().fg(theme::INK)),
+                Span::styled(col(&p.version, 14), Style::default().fg(theme::OK)),
+                Span::styled(col(&p.package_type, 10), Style::default().fg(theme::INK_FAINT)),
                 Span::styled(
                     col(&short_time(&p.created_at), 18),
-                    Style::default().fg(C_DIM),
+                    Style::default().fg(theme::INK_FAINT),
                 ),
             ]))
             .style(style)
@@ -383,17 +378,17 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
             let is_sel = i == pv.runners_idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
+
             let status_color = match r.status.as_str() {
-                "online" | "active" => C_GREEN,
-                "offline" | "stale" => C_DIM,
-                "paused" => C_DIM,
-                _ => C_SUBTLE,
+                "online" | "active" => theme::OK,
+                "offline" | "stale" => theme::INK_FAINT,
+                "paused" => theme::INK_FAINT,
+                _ => theme::INK_DIM,
             };
             // 0.8.1 — distinguish online platform runners from torii-
             // spawned Docker containers on this host. `🌐` for online,
@@ -409,9 +404,9 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
                 "online"
             };
             let scope_color = if r.runner_type == "local-docker" {
-                C_YELLOW
+                theme::WARN
             } else {
-                app.brand_color()
+                theme::accent(app)
             };
             let tags_str = if r.tags.is_empty() {
                 "—".to_string()
@@ -426,16 +421,16 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
                 format!("#{}", r.id)
             };
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(app.brand_color())),
+                theme::caret(app, is_sel),
                 Span::styled(
                     format!("{} ", scope_glyph),
                     Style::default().fg(scope_color),
                 ),
                 Span::styled(col(scope_label, 7), Style::default().fg(scope_color)),
-                Span::styled(col(&id_disp, 18), Style::default().fg(app.brand_color())),
+                Span::styled(col(&id_disp, 18), Style::default().fg(theme::accent(app))),
                 Span::styled(col(&r.status, 10), Style::default().fg(status_color)),
-                Span::styled(col(&r.description, 22), Style::default().fg(C_WHITE)),
-                Span::styled(col(&tags_str, 24), Style::default().fg(C_DIM)),
+                Span::styled(col(&r.description, 22), Style::default().fg(theme::INK)),
+                Span::styled(col(&tags_str, 24), Style::default().fg(theme::INK_FAINT)),
             ]))
             .style(style)
         })
@@ -444,7 +439,6 @@ fn render_runners_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let pv = &app.platform_view;
 
     // Value column width = panel inner width − 2 side borders − key
@@ -458,7 +452,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     match pv.sub_tab {
         PlatformSubTab::Pipelines => {
             if let Some(p) = pv.pipelines.get(pv.pipelines_idx) {
-                kv(&mut body, "id", &format!("#{}", p.id), bc, value_w);
+                kv(&mut body, "id", &format!("#{}", p.id), theme::INK_DIM, value_w);
                 kv(
                     &mut body,
                     "status",
@@ -466,12 +460,12 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     status_color(&p.status),
                     value_w,
                 );
-                kv(&mut body, "branch", &p.branch, C_WHITE, value_w);
-                kv(&mut body, "sha", &short_sha(&p.sha), C_DIM, value_w);
-                kv(&mut body, "created", &p.created_at, C_DIM, value_w);
-                kv(&mut body, "updated", &p.updated_at, C_DIM, value_w);
+                kv(&mut body, "branch", &p.branch, theme::INK, value_w);
+                kv(&mut body, "sha", &short_sha(&p.sha), theme::INK_FAINT, value_w);
+                kv(&mut body, "created", &p.created_at, theme::INK_FAINT, value_w);
+                kv(&mut body, "updated", &p.updated_at, theme::INK_FAINT, value_w);
                 body.push(Line::from(""));
-                kv(&mut body, "url", &p.web_url, bc, value_w);
+                kv(&mut body, "url", &p.web_url, theme::INK_DIM, value_w);
             }
         }
         PlatformSubTab::Jobs => {
@@ -480,12 +474,12 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     .duration_seconds
                     .map(|s| format!("{}s", s as u64))
                     .unwrap_or_default();
-                kv(&mut body, "id", &format!("#{}", j.id), bc, value_w);
+                kv(&mut body, "id", &format!("#{}", j.id), theme::INK_DIM, value_w);
                 kv(
                     &mut body,
                     "pipeline",
                     &format!("#{}", j.pipeline_id),
-                    bc,
+                    theme::INK_DIM,
                     value_w,
                 );
                 kv(
@@ -495,28 +489,28 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     status_color(&j.status),
                     value_w,
                 );
-                kv(&mut body, "stage", &j.stage, C_DIM, value_w);
-                kv(&mut body, "name", &j.name, C_WHITE, value_w);
-                kv(&mut body, "duration", &dur, C_DIM, value_w);
+                kv(&mut body, "stage", &j.stage, theme::INK_FAINT, value_w);
+                kv(&mut body, "name", &j.name, theme::INK, value_w);
+                kv(&mut body, "duration", &dur, theme::INK_FAINT, value_w);
                 body.push(Line::from(""));
-                kv(&mut body, "url", &j.web_url, bc, value_w);
+                kv(&mut body, "url", &j.web_url, theme::INK_DIM, value_w);
             }
         }
         PlatformSubTab::Releases => {
             if let Some(r) = pv.releases.get(pv.releases_idx) {
-                kv(&mut body, "tag", &r.tag, C_GREEN, value_w);
-                kv(&mut body, "name", &r.name, C_WHITE, value_w);
-                kv(&mut body, "created", &r.created_at, C_DIM, value_w);
+                kv(&mut body, "tag", &r.tag, theme::OK, value_w);
+                kv(&mut body, "name", &r.name, theme::INK, value_w);
+                kv(&mut body, "created", &r.created_at, theme::INK_FAINT, value_w);
                 body.push(Line::from(""));
-                kv(&mut body, "url", &r.web_url, bc, value_w);
+                kv(&mut body, "url", &r.web_url, theme::INK_DIM, value_w);
             }
         }
         PlatformSubTab::Packages => {
             if let Some(p) = pv.packages.get(pv.packages_idx) {
-                kv(&mut body, "name", &p.name, C_WHITE, value_w);
-                kv(&mut body, "version", &p.version, C_GREEN, value_w);
-                kv(&mut body, "type", &p.package_type, C_DIM, value_w);
-                kv(&mut body, "created", &p.created_at, C_DIM, value_w);
+                kv(&mut body, "name", &p.name, theme::INK, value_w);
+                kv(&mut body, "version", &p.version, theme::OK, value_w);
+                kv(&mut body, "type", &p.package_type, theme::INK_FAINT, value_w);
+                kv(&mut body, "created", &p.created_at, theme::INK_FAINT, value_w);
             }
         }
         PlatformSubTab::Runners => {
@@ -527,26 +521,26 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     r.tags.join(", ")
                 };
                 let status_c = match r.status.as_str() {
-                    "online" | "active" => C_GREEN,
-                    "offline" | "stale" => C_DIM,
-                    "paused" => C_DIM,
-                    _ => C_SUBTLE,
+                    "online" | "active" => theme::OK,
+                    "offline" | "stale" => theme::INK_FAINT,
+                    "paused" => theme::INK_FAINT,
+                    _ => theme::INK_DIM,
                 };
-                kv(&mut body, "id", &format!("#{}", r.id), bc, value_w);
+                kv(&mut body, "id", &format!("#{}", r.id), theme::INK_DIM, value_w);
                 kv(&mut body, "status", &r.status, status_c, value_w);
-                kv(&mut body, "description", &r.description, C_WHITE, value_w);
-                kv(&mut body, "type", &r.runner_type, C_DIM, value_w);
-                kv(&mut body, "os", &r.os, C_DIM, value_w);
+                kv(&mut body, "description", &r.description, theme::INK, value_w);
+                kv(&mut body, "type", &r.runner_type, theme::INK_FAINT, value_w);
+                kv(&mut body, "os", &r.os, theme::INK_FAINT, value_w);
                 if !r.ip_address.is_empty() {
-                    kv(&mut body, "ip", &r.ip_address, C_DIM, value_w);
+                    kv(&mut body, "ip", &r.ip_address, theme::INK_FAINT, value_w);
                 }
                 if !r.version.is_empty() {
-                    kv(&mut body, "version", &r.version, C_DIM, value_w);
+                    kv(&mut body, "version", &r.version, theme::INK_FAINT, value_w);
                 }
-                kv(&mut body, "tags", &tags, C_DIM, value_w);
+                kv(&mut body, "tags", &tags, theme::INK_FAINT, value_w);
                 if !r.web_url.is_empty() {
                     body.push(Line::from(""));
-                    kv(&mut body, "url", &r.web_url, bc, value_w);
+                    kv(&mut body, "url", &r.web_url, theme::INK_DIM, value_w);
                 }
             }
         }
@@ -555,7 +549,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     if body.is_empty() {
         body.push(Line::from(Span::styled(
             "no selection",
-            Style::default().fg(C_DIM),
+            Style::default().fg(theme::INK_FAINT),
         )));
     }
 
@@ -564,23 +558,17 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     // App-wide `status_msg` line, like every other view does.
     // 0.7.28: no Paragraph wrap — we wrap manually above so the
     // continuation lines stay indented to the value column.
+    let [heading_row, body_area] = theme::heading_and_body(area);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("detail", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
     f.render_widget(
-        Paragraph::new(body).block(
-            Block::default()
-                .title(Span::styled(
-                    " detail ",
-                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_type(app.border_type())
-                .border_style(Style::default().fg(bc)),
-        ),
-        area,
+        Paragraph::new(body).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body_area,
     );
 }
 
 fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let pv = &app.platform_view;
     let log = pv.job_log.as_deref().unwrap_or(if pv.loading {
         "loading log..."
@@ -594,35 +582,34 @@ fn render_job_log(f: &mut Frame, app: &App, area: Rect) {
     } else {
         "manual"
     };
-    // Title: "job log · <live?> · <follow|manual>". Same C_WHITE bold
+    // Title: "job log · <live?> · <follow|manual>". Same theme::INK bold
     // as the rest of the focused-view titles (log.rs / branch.rs). The
     // live indicator is a coloured prefix span, not a colour-shifted
     // title — keeps the chrome consistent across sub-tabs.
-    let mut title_spans: Vec<Span> = vec![Span::styled(
-        " job log ",
-        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-    )];
+    let mut title_spans: Vec<Span> = vec![
+        Span::raw(" "),
+        Span::styled(
+            "job log",
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+        ),
+    ];
     if pv.job_log_live {
-        title_spans.push(Span::styled("· ● live ", Style::default().fg(C_GREEN)));
+        title_spans.push(Span::styled("  ● live", Style::default().fg(theme::OK)));
     }
     title_spans.push(Span::styled(
-        format!("· {} ", follow),
-        Style::default().fg(C_DIM),
+        format!("  {}", follow),
+        Style::default().fg(theme::INK_FAINT),
     ));
     let _ = live;
 
+    let [heading_row, body_area] = theme::heading_and_body(area);
+    f.render_widget(Paragraph::new(Line::from(title_spans)), heading_row);
     f.render_widget(
         Paragraph::new(log)
             .scroll((pv.job_log_scroll, 0))
             .wrap(Wrap { trim: false })
-            .block(
-                Block::default()
-                    .title(Line::from(title_spans))
-                    .borders(Borders::ALL)
-                    .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
-            ),
-        area,
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body_area,
     );
 }
 
@@ -651,7 +638,6 @@ pub fn ops_for(pv: &crate::tui::app::PlatformState) -> Vec<(&'static str, &'stat
 
 fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
-    let bc = app.brand_color();
     let ops = ops_for(pv);
     if ops.is_empty() {
         return;
@@ -674,24 +660,24 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
             let is_sel = i == pv.dropdown_idx;
             let danger = label.starts_with("remove");
             let label_color = if danger {
-                C_RED
+                theme::BAD
             } else if is_sel {
-                C_WHITE
+                theme::INK
             } else {
-                C_SUBTLE
+                theme::INK_DIM
             };
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
             let prefix = if is_sel { "▶ " } else { "  " };
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
+                Span::styled(prefix, Style::default().fg(theme::accent(app))),
                 Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
-                Span::styled(*desc, Style::default().fg(C_DIM)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
             ]))
             .style(style)
         })
@@ -705,11 +691,11 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " ops — Enter to run · Esc to close ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::INK)),
         ),
         popup,
         &mut state,
@@ -742,7 +728,6 @@ pub fn filters_for(pv: &crate::tui::app::PlatformState) -> Vec<(&'static str, &'
 
 fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
-    let bc = app.brand_color();
     let rows = filters_for(pv);
 
     let w: u16 = 40;
@@ -774,20 +759,20 @@ fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
             let marker = if active { "●" } else { " " };
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
             let prefix = if is_sel { "▶ " } else { "  " };
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(format!("{} ", marker), Style::default().fg(C_GREEN)),
+                Span::styled(prefix, Style::default().fg(theme::accent(app))),
+                Span::styled(format!("{} ", marker), Style::default().fg(theme::OK)),
                 Span::styled(
                     format!("{:<18}", label),
-                    Style::default().fg(if is_sel { C_WHITE } else { C_SUBTLE }),
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                 ),
-                Span::styled(*desc, Style::default().fg(C_DIM)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
             ]))
             .style(style)
         })
@@ -801,11 +786,11 @@ fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     format!(" filters — status: {} ", cur_status),
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::INK)),
         ),
         popup,
         &mut state,
@@ -814,7 +799,6 @@ fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
 
 fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
-    let bc = app.brand_color();
 
     // Centred popup ~30 cols wide, height grows with list (max 14).
     let w: u16 = 36;
@@ -832,7 +816,7 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
     let items: Vec<ListItem> = if pv.remotes.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             "  (no remotes)",
-            Style::default().fg(C_DIM),
+            Style::default().fg(theme::INK_FAINT),
         )))]
     } else {
         pv.remotes
@@ -843,18 +827,18 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
                 let is_cur = name == &pv.remote;
                 let style = if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 let marker = if is_cur { "●" } else { " " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(bc)),
-                    Span::styled(format!("{} ", marker), Style::default().fg(C_GREEN)),
+                    Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(theme::accent(app))),
+                    Span::styled(format!("{} ", marker), Style::default().fg(theme::OK)),
                     Span::styled(
                         name.clone(),
-                        Style::default().fg(if is_sel { C_WHITE } else { C_SUBTLE }),
+                        Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                     ),
                 ]))
                 .style(style)
@@ -872,11 +856,11 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " select remote ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::INK)),
         ),
         popup,
         &mut state,
@@ -887,12 +871,12 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
 
 fn status_color(s: &str) -> ratatui::style::Color {
     match s {
-        "success" => C_GREEN,
-        "failed" => C_RED,
-        "running" => C_YELLOW,
-        "pending" => C_DIM,
-        "canceled" => C_DIM,
-        _ => C_SUBTLE,
+        "success" => theme::OK,
+        "failed" => theme::BAD,
+        "running" => theme::WARN,
+        "pending" => theme::INK_FAINT,
+        "canceled" => theme::INK_FAINT,
+        _ => theme::INK_DIM,
     }
 }
 
@@ -917,7 +901,7 @@ fn kv(body: &mut Vec<Line<'static>>, k: &str, v: &str, vc: ratatui::style::Color
             indent.clone()
         };
         body.push(Line::from(vec![
-            Span::styled(prefix, Style::default().fg(C_SUBTLE)),
+            Span::styled(prefix, Style::default().fg(theme::INK_DIM)),
             Span::styled(chunk, Style::default().fg(vc)),
         ]));
     }
@@ -970,17 +954,17 @@ fn short_sha(s: &str) -> String {
 
 fn wrap_error(err: &str) -> Vec<ListItem<'static>> {
     let mut items = vec![ListItem::new(Line::from(vec![
-        Span::styled("  ✗ ", Style::default().fg(C_RED)),
+        Span::styled("  ✗ ", Style::default().fg(theme::BAD)),
         Span::styled(
             "error",
-            Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
         ),
     ]))];
     for chunk in err.chars().collect::<Vec<_>>().chunks(50) {
         let s: String = chunk.iter().collect();
         items.push(ListItem::new(Line::from(vec![Span::styled(
             format!("  {}", s),
-            Style::default().fg(C_SUBTLE),
+            Style::default().fg(theme::INK_DIM),
         )])));
     }
     items
