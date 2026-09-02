@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
@@ -314,34 +314,34 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
         for (label, desc) in ops_for(pv) {
             body.push(Line::from(vec![
                 Span::styled(
-                    format!("  {:<16}", label),
+                    format!("{:<16}", label),
                     Style::default().fg(theme::INK_DIM),
                 ),
                 Span::styled(desc, Style::default().fg(theme::INK_FAINT)),
             ]));
         }
     } else {
-        for line in [
-            "  Mark a known-bad and one or more known-good",
-            "  commits. torii (via libgit2) bisects between",
-            "  them, checks out a candidate, and asks you to",
-            "  mark it good / bad / skip.",
-        ] {
-            body.push(Line::from(Span::styled(
-                line,
-                Style::default().fg(theme::INK),
-            )));
-        }
+        // One paragraph, wrapped by the widget: the pane is no longer a fixed
+        // box, so hard-broken lines would wrap twice at narrow widths.
+        body.push(Line::from(Span::styled(
+            "Mark a known-bad and one or more known-good commits. torii (via \
+             libgit2) bisects between them, checks out a candidate, and asks \
+             you to mark it good / bad / skip.",
+            Style::default().fg(theme::INK),
+        )));
         body.push(Line::from(""));
         body.push(Line::from(vec![
-            Span::raw("  "),
             Span::styled("o", Style::default().fg(theme::accent(app))),
             Span::styled("  → Start", Style::default().fg(theme::INK_FAINT)),
         ]));
     }
 
+    // The pane pads itself, so a wrapped line keeps the same left edge as the
+    // first one.
     f.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }),
+        Paragraph::new(body)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         body_area,
     );
 }
