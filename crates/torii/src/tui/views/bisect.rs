@@ -14,10 +14,10 @@ use ratatui::{
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{
     App, BisectFocus, BisectState, RefEntry, RefKind, RefPickerOp, RefPickerTab,
 };
+use crate::tui::theme;
 
 pub fn refresh(app: &mut App) {
     let prev_focus = app.bisect_view.focus.clone();
@@ -65,18 +65,21 @@ pub fn refresh(app: &mut App) {
 }
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let focused = !app.sidebar_focused;
-    let pv = &app.bisect_view;
-
-    let cols = Layout::default()
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    render_status(f, app, cols[0]);
-    render_detail(f, app, cols[1]);
-    let _ = (bc, focused, pv);
+    // The status pane carries the rule; the detail sits the other side of it.
+    let divider = theme::divider_right();
+    let status_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
+
+    render_status(f, app, status_pane);
+    render_detail(f, app, panes[1]);
 
     // Overlays — drawn last so they sit on top.
     match app.bisect_view.focus {
@@ -94,7 +97,6 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 /// strings, so the user can narrow ~100 refs into a couple in a few
 /// keystrokes.
 fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let picker = &app.bisect_view.picker;
 
     let w: u16 = 72.min(area.width.saturating_sub(4));
@@ -114,7 +116,6 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
     for (visible, &orig_idx) in filtered_idx.iter().enumerate() {
         let e = &picker.all[orig_idx];
         let is_sel = visible == sel;
-        let prefix = if is_sel { "▶ " } else { "  " };
         let kind_label = match e.kind {
             RefKind::Head => "HEAD  ",
             RefKind::Branch => "branch",
@@ -123,34 +124,34 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
             RefKind::Commit => "commit",
         };
         let kind_color = match e.kind {
-            RefKind::Head => C_GREEN,
-            RefKind::Branch => bc,
-            RefKind::Tag => C_WHITE,
-            RefKind::Remote => C_DIM,
-            RefKind::Commit => C_DIM,
+            RefKind::Head => theme::OK,
+            RefKind::Branch => theme::INK,
+            RefKind::Tag => theme::WARN,
+            RefKind::Remote => theme::INK_FAINT,
+            RefKind::Commit => theme::INK_FAINT,
         };
         // For Start in Good tab, mark already-picked good refs with ✓.
         let marker = if matches!(picker.op, RefPickerOp::Start)
             && picker.tab == RefPickerTab::Good
             && picker.good_picks.iter().any(|g| g.target == e.target)
         {
-            Span::styled("✓ ", Style::default().fg(C_GREEN))
+            Span::styled("✓ ", Style::default().fg(theme::OK))
         } else {
             Span::raw("  ")
         };
         let style = if is_sel {
             Style::default()
-                .bg(app.selected_bg())
+                .bg(theme::selection(app))
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
         };
         items.push(
             ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
+                theme::caret(app, is_sel),
                 marker,
                 Span::styled(format!("{}  ", kind_label), Style::default().fg(kind_color)),
-                Span::styled(e.display.clone(), Style::default().fg(C_WHITE)),
+                Span::styled(e.display.clone(), Style::default().fg(theme::INK)),
             ]))
             .style(style),
         );
@@ -158,7 +159,7 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
     if items.is_empty() {
         items.push(ListItem::new(Line::from(Span::styled(
             "  no match",
-            Style::default().fg(C_DIM),
+            Style::default().fg(theme::INK_FAINT),
         ))));
     }
 
@@ -167,36 +168,36 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
     let mut title: Vec<Span> = Vec::new();
     title.push(Span::styled(
         " ref picker ",
-        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
     ));
-    title.push(Span::styled("· ", Style::default().fg(C_DIM)));
+    title.push(Span::styled("· ", Style::default().fg(theme::INK_FAINT)));
     match picker.op {
         RefPickerOp::Start => {
             let (bad_style, good_style) = match picker.tab {
                 RefPickerTab::Bad => (
-                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
-                    Style::default().fg(C_DIM),
+                    Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK_FAINT),
                 ),
                 RefPickerTab::Good => (
-                    Style::default().fg(C_DIM),
-                    Style::default().fg(C_GREEN).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK_FAINT),
+                    Style::default().fg(theme::OK).add_modifier(Modifier::BOLD),
                 ),
             };
             title.push(Span::styled("Bad", bad_style));
-            title.push(Span::styled(" · ", Style::default().fg(C_DIM)));
+            title.push(Span::styled(" · ", Style::default().fg(theme::INK_FAINT)));
             title.push(Span::styled("Good", good_style));
         }
         RefPickerOp::MarkGood => {
-            title.push(Span::styled("mark good", Style::default().fg(C_GREEN)))
+            title.push(Span::styled("mark good", Style::default().fg(theme::OK)))
         }
-        RefPickerOp::MarkBad => title.push(Span::styled("mark bad", Style::default().fg(C_RED))),
-        RefPickerOp::Skip => title.push(Span::styled("skip", Style::default().fg(C_YELLOW))),
+        RefPickerOp::MarkBad => title.push(Span::styled("mark bad", Style::default().fg(theme::BAD))),
+        RefPickerOp::Skip => title.push(Span::styled("skip", Style::default().fg(theme::WARN))),
     }
     if !picker.filter.is_empty() {
-        title.push(Span::styled("  /", Style::default().fg(C_DIM)));
+        title.push(Span::styled("  /", Style::default().fg(theme::INK_FAINT)));
         title.push(Span::styled(
             picker.filter.clone(),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         ));
     }
     title.push(Span::raw(" "));
@@ -214,7 +215,7 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
                 .title(Line::from(title))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
         &mut state,
@@ -222,133 +223,126 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let focused = !app.sidebar_focused;
+    let [heading_row, body] = theme::heading_and_body(area);
+    let active = !app.sidebar_focused;
     let pv = &app.bisect_view;
 
     let mut lines: Vec<Line> = Vec::new();
     if pv.in_progress {
-        lines.push(Line::from(vec![Span::styled(
+        lines.push(Line::from(Span::styled(
             "  ● bisecting",
-            Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
-        )]));
+            Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+        )));
         lines.push(Line::from(""));
         if let Some(h) = &pv.current_hash {
             lines.push(Line::from(vec![
-                Span::styled("  testing   ", Style::default().fg(C_SUBTLE)),
+                Span::styled("  testing   ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled(
                     h.clone(),
-                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ),
             ]));
         }
         lines.push(Line::from(vec![
-            Span::styled("  good      ", Style::default().fg(C_SUBTLE)),
+            Span::styled("  good      ", Style::default().fg(theme::INK_FAINT)),
             Span::styled(
                 format!("{}", pv.good_refs.len()),
-                Style::default().fg(C_GREEN),
+                Style::default().fg(theme::OK),
             ),
-            Span::styled(" ref(s)", Style::default().fg(C_DIM)),
+            Span::styled(" ref(s)", Style::default().fg(theme::INK_FAINT)),
         ]));
         lines.push(Line::from(vec![
-            Span::styled("  bad       ", Style::default().fg(C_SUBTLE)),
-            Span::styled(format!("{}", pv.bad_refs.len()), Style::default().fg(C_RED)),
-            Span::styled(" ref(s)", Style::default().fg(C_DIM)),
+            Span::styled("  bad       ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                format!("{}", pv.bad_refs.len()),
+                Style::default().fg(theme::BAD),
+            ),
+            Span::styled(" ref(s)", Style::default().fg(theme::INK_FAINT)),
         ]));
         lines.push(Line::from(""));
         for r in pv.good_refs.iter().take(8) {
             lines.push(Line::from(vec![
-                Span::styled("    ✓ ", Style::default().fg(C_GREEN)),
-                Span::styled(short(r), Style::default().fg(C_DIM)),
+                Span::styled("    ✓ ", Style::default().fg(theme::OK)),
+                Span::styled(short(r), Style::default().fg(theme::INK_DIM)),
             ]));
         }
         for r in pv.bad_refs.iter().take(8) {
             lines.push(Line::from(vec![
-                Span::styled("    ✗ ", Style::default().fg(C_RED)),
-                Span::styled(short(r), Style::default().fg(C_DIM)),
+                Span::styled("    ✗ ", Style::default().fg(theme::BAD)),
+                Span::styled(short(r), Style::default().fg(theme::INK_DIM)),
             ]));
         }
     } else {
-        lines.push(Line::from(vec![Span::styled(
+        lines.push(Line::from(Span::styled(
             "  no bisect in progress",
-            Style::default().fg(C_DIM),
-        )]));
+            Style::default().fg(theme::INK_FAINT),
+        )));
         lines.push(Line::from(""));
-        lines.push(Line::from(vec![Span::styled(
-            "  press [o] → Start to begin",
-            Style::default().fg(C_SUBTLE),
-        )]));
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled("o", Style::default().fg(theme::accent(app))),
+            Span::styled("  Start begins one", Style::default().fg(theme::INK_FAINT)),
+        ]));
     }
 
-    let title_color = if focused { C_WHITE } else { bc };
-    let border_color = if focused { C_WHITE } else { bc };
-    let block = Block::default()
-        .title(Span::styled(
-            " bisect ",
-            Style::default()
-                .fg(title_color)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(border_color));
-    f.render_widget(Paragraph::new(lines).block(block), area);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("bisect", None, active));
+    if pv.in_progress {
+        heading.push(Span::styled(
+            "  in progress",
+            Style::default().fg(theme::WARN),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+    f.render_widget(Paragraph::new(lines), body);
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
+    let [heading_row, body_area] = theme::heading_and_body(area);
     let pv = &app.bisect_view;
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        if pv.in_progress { "ops" } else { "detail" },
+        None,
+        false,
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
     let mut body: Vec<Line> = Vec::new();
     if pv.in_progress {
-        body.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled("ops cheatsheet", Style::default().fg(C_DIM)),
-        ]));
-        body.push(Line::from(""));
         for (label, desc) in ops_for(pv) {
             body.push(Line::from(vec![
-                Span::styled(format!("  {:<16}", label), Style::default().fg(bc)),
-                Span::styled(desc, Style::default().fg(C_DIM)),
+                Span::styled(
+                    format!("  {:<16}", label),
+                    Style::default().fg(theme::INK_DIM),
+                ),
+                Span::styled(desc, Style::default().fg(theme::INK_FAINT)),
             ]));
         }
     } else {
-        body.push(Line::from(Span::styled(
+        for line in [
             "  Mark a known-bad and one or more known-good",
-            Style::default().fg(C_WHITE),
-        )));
-        body.push(Line::from(Span::styled(
             "  commits. torii (via libgit2) bisects between",
-            Style::default().fg(C_WHITE),
-        )));
-        body.push(Line::from(Span::styled(
             "  them, checks out a candidate, and asks you to",
-            Style::default().fg(C_WHITE),
-        )));
-        body.push(Line::from(Span::styled(
             "  mark it good / bad / skip.",
-            Style::default().fg(C_WHITE),
-        )));
+        ] {
+            body.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(theme::INK),
+            )));
+        }
         body.push(Line::from(""));
         body.push(Line::from(vec![
-            Span::styled("  ", Style::default()),
-            Span::styled("[o]", Style::default().fg(bc)),
-            Span::styled(" → Start", Style::default().fg(C_DIM)),
+            Span::raw("  "),
+            Span::styled("o", Style::default().fg(theme::accent(app))),
+            Span::styled("  → Start", Style::default().fg(theme::INK_FAINT)),
         ]));
     }
 
     f.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(Span::styled(
-                    " detail ",
-                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_type(app.border_type())
-                .border_style(Style::default().fg(bc)),
-        ),
-        area,
+        Paragraph::new(body).wrap(Wrap { trim: false }),
+        body_area,
     );
 }
 
@@ -509,7 +503,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     if ops.is_empty() {
         return;
     }
-    let bc = app.brand_color();
 
     let w: u16 = 50;
     let h: u16 = ops.len() as u16 + 2;
@@ -526,28 +519,25 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, (label, desc))| {
             let is_sel = i == app.bisect_view.dropdown_idx;
-            let danger = label.starts_with("Reset");
-            let label_color = if danger {
-                C_RED
+            let label_color = if label.starts_with("Reset") {
+                theme::BAD
             } else if is_sel {
-                C_WHITE
+                theme::INK
             } else {
-                C_SUBTLE
+                theme::INK_DIM
             };
-            let style = if is_sel {
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(format!("{:<18}", label), Style::default().fg(label_color)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-            };
-            let prefix = if is_sel { "▶ " } else { "  " };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(format!("{:<18}", label), Style::default().fg(label_color)),
-                Span::styled(*desc, Style::default().fg(C_DIM)),
-            ]))
-            .style(style)
+            })
         })
         .collect();
 
@@ -558,11 +548,11 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " ops — Enter run · Esc close ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
         &mut state,
@@ -570,7 +560,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let w: u16 = 70.min(area.width.saturating_sub(4));
     let h: u16 = 5;
     let popup = Rect {
@@ -584,13 +573,16 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
     let body = vec![
         Line::from(Span::styled(
             format!(" {}", app.bisect_view.input_prompt),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
-            Span::styled(&app.bisect_view.input_buffer, Style::default().fg(C_WHITE)),
-            Span::styled("█", Style::default().fg(bc)),
+            Span::styled(
+                &app.bisect_view.input_buffer,
+                Style::default().fg(theme::INK),
+            ),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
         ]),
     ];
     f.render_widget(
@@ -598,11 +590,11 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " input · Enter run · Esc cancel ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
     );
@@ -621,24 +613,27 @@ fn render_confirm_reset(f: &mut Frame, app: &App, area: Rect) {
     let body = vec![
         Line::from(Span::styled(
             "  Reset bisect and restore original HEAD?",
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  [y] yes   [n] no",
-            Style::default().fg(C_DIM),
-        )),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("y", Style::default().fg(theme::accent(app))),
+            Span::styled("  yes   ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("n", Style::default().fg(theme::accent(app))),
+            Span::styled("  no", Style::default().fg(theme::INK_FAINT)),
+        ]),
     ];
     f.render_widget(
         Paragraph::new(body).block(
             Block::default()
                 .title(Span::styled(
                     " confirm ",
-                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_RED)),
+                .border_style(Style::default().fg(theme::BAD)),
         ),
         popup,
     );
