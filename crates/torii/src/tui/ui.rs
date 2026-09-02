@@ -1808,6 +1808,31 @@ mod tests {
         println!("{}", screen(100, 30).join("\n"));
     }
 
+    /// No rule may cross another without a junction. A `│` sitting directly
+    /// on a `─` is a column that starts out of thin air, which is what the
+    /// grid looked like before the views tied themselves into the chrome.
+    #[test]
+    fn rules_never_cross_without_a_junction() {
+        let lines = screen(100, 30);
+        let at = |row: usize, col: usize| lines[row].chars().nth(col).unwrap_or(' ');
+        for row in 1..lines.len() {
+            for col in 0..lines[row].chars().count() {
+                let here = at(row, col);
+                let above = at(row - 1, col);
+                assert!(
+                    !(here == '│' && above == '─'),
+                    "column at {col} starts on a rule at row {row}:\n{}",
+                    lines.join("\n")
+                );
+                assert!(
+                    !(here == '─' && above == '│'),
+                    "column at {col} ends on a rule at row {row}:\n{}",
+                    lines.join("\n")
+                );
+            }
+        }
+    }
+
     #[test]
     fn brackets_are_stripped_from_key_hints() {
         let lines = screen(100, 30);
