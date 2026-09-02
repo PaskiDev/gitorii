@@ -6,12 +6,12 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, SubmoduleEntry, SubmoduleFocus, SubmoduleState};
+use crate::tui::theme;
 
 pub fn refresh(app: &mut App) {
     let prev_focus = app.submodule_view.focus.clone();
@@ -93,17 +93,21 @@ fn describe_state(repo: &git2::Repository, name: &str) -> String {
 }
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let focused = !app.sidebar_focused;
-
-    let cols = Layout::default()
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(area);
 
-    render_list(f, app, cols[0]);
-    render_detail(f, app, cols[1]);
-    let _ = (bc, focused);
+    // The list carries the rule; the detail pane sits the other side of it.
+    let divider = theme::divider_right();
+    let list_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
+
+    render_list(f, app, list_pane);
+    render_detail(f, app, panes[1]);
 
     match app.submodule_view.focus {
         SubmoduleFocus::OpsDropdown => render_ops_dropdown(f, app, area),
@@ -114,12 +118,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_list(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let focused = !app.sidebar_focused;
+    let [heading_row, body] = theme::heading_and_body(area);
+    let active = !app.sidebar_focused && app.submodule_view.focus == SubmoduleFocus::List;
+
     let items: Vec<ListItem> = if app.submodule_view.items.is_empty() {
         vec![ListItem::new(Span::styled(
-            "  no submodules",
-            Style::default().fg(C_DIM),
+            "no submodules",
+            Style::default().fg(theme::INK_FAINT),
         ))]
     } else {
         app.submodule_view
@@ -127,107 +132,111 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
             .iter()
             .enumerate()
             .map(|(i, s)| {
-                let is_sel = i == app.submodule_view.idx;
-                let style = if is_sel {
-                    Style::default()
-                        .bg(app.selected_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                let color = if s.state == "clean" {
-                    C_GREEN
-                } else {
-                    C_YELLOW
-                };
+                let is_sel = active && i == app.submodule_view.idx;
+                // A submodule with no working copy is the hollow marker.
                 let marker = if s.workdir_oid.starts_with('(') {
                     "○"
                 } else {
                     "●"
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!(" {} ", marker), Style::default().fg(bc)),
+                    theme::caret(app, is_sel),
+                    Span::styled(
+                        format!("{} ", marker),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
                     Span::styled(
                         format!("{:<22}", s.name),
-                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(if is_sel { theme::INK } else { theme::INK_DIM })
+                            .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!(" {:<10}", s.workdir_oid), Style::default().fg(bc)),
-                    Span::styled(format!(" {}", s.state), Style::default().fg(color)),
+                    Span::styled(
+                        format!(" {:<10}", s.workdir_oid),
+                        Style::default().fg(theme::INK_DIM),
+                    ),
+                    Span::styled(
+                        format!(" {}", s.state),
+                        Style::default().fg(state_color(&s.state)),
+                    ),
                 ]))
-                .style(style)
+                .style(if is_sel {
+                    Style::default()
+                        .bg(theme::selection(app))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                })
             })
             .collect()
     };
+
     let mut state = ListState::default();
     if !app.submodule_view.items.is_empty() {
         state.select(Some(app.submodule_view.idx));
     }
-    let title_color = if focused && app.submodule_view.focus == SubmoduleFocus::List {
-        C_WHITE
-    } else {
-        bc
-    };
-    let block = Block::default()
-        .title(Span::styled(
-            format!(" submodules — {} ", app.submodule_view.items.len()),
-            Style::default()
-                .fg(title_color)
-                .add_modifier(Modifier::BOLD),
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(title_color));
-    f.render_stateful_widget(List::new(items).block(block), area, &mut state);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        "submodules",
+        Some(app.submodule_view.items.len()),
+        active,
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
-    let body: Vec<Line> = if let Some(s) = app.submodule_view.items.get(app.submodule_view.idx) {
-        vec![
-            kv("name", &s.name, C_WHITE),
-            kv("path", &s.path, C_DIM),
-            kv("url", &s.url, C_DIM),
-            kv("head", &s.head_oid, bc),
-            kv("working", &s.workdir_oid, bc),
-            kv(
-                "state",
-                &s.state,
-                if s.state == "clean" {
-                    C_GREEN
-                } else {
-                    C_YELLOW
-                },
-            ),
+    let [heading_row, body_area] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("detail", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let body: Vec<Line> = match app.submodule_view.items.get(app.submodule_view.idx) {
+        Some(s) => vec![
+            kv("name", &s.name, theme::INK),
+            kv("path", &s.path, theme::INK_FAINT),
+            kv("url", &s.url, theme::INK_FAINT),
+            kv("head", &s.head_oid, theme::INK_DIM),
+            kv("working", &s.workdir_oid, theme::INK_DIM),
+            kv("state", &s.state, state_color(&s.state)),
             Line::from(""),
-            Line::from(Span::styled(
-                "  [o] open ops menu",
-                Style::default().fg(C_DIM),
-            )),
-        ]
-    } else {
-        vec![Line::from(Span::styled(
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("o", Style::default().fg(theme::accent(app))),
+                Span::styled("  open ops menu", Style::default().fg(theme::INK_FAINT)),
+            ]),
+        ],
+        None => vec![Line::from(Span::styled(
             "  no selection",
-            Style::default().fg(C_DIM),
-        ))]
+            Style::default().fg(theme::INK_FAINT),
+        ))],
     };
     f.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }).block(
-            Block::default()
-                .title(Span::styled(
-                    " detail ",
-                    Style::default().fg(bc).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_type(app.border_type())
-                .border_style(Style::default().fg(bc)),
-        ),
-        area,
+        Paragraph::new(body).wrap(Wrap { trim: false }),
+        body_area,
     );
+}
+
+fn state_color(state: &str) -> ratatui::style::Color {
+    if state == "clean" {
+        theme::OK
+    } else {
+        theme::WARN
+    }
 }
 
 fn kv<'a>(k: &'a str, v: &str, vc: ratatui::style::Color) -> Line<'a> {
     Line::from(vec![
-        Span::styled(format!("  {:<8} ", k), Style::default().fg(C_SUBTLE)),
+        Span::styled(
+            format!("  {:<8} ", k),
+            Style::default().fg(theme::INK_FAINT),
+        ),
         Span::styled(v.to_string(), Style::default().fg(vc)),
     ])
 }
@@ -255,7 +264,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
     if ops.is_empty() {
         return;
     }
-    let bc = app.brand_color();
 
     let w: u16 = 54;
     let h: u16 = ops.len() as u16 + 2;
@@ -272,28 +280,25 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         .enumerate()
         .map(|(i, (label, desc))| {
             let is_sel = i == app.submodule_view.dropdown_idx;
-            let danger = label.starts_with("Remove");
-            let label_color = if danger {
-                C_RED
+            let label_color = if label.starts_with("Remove") {
+                theme::BAD
             } else if is_sel {
-                C_WHITE
+                theme::INK
             } else {
-                C_SUBTLE
+                theme::INK_DIM
             };
-            let style = if is_sel {
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-            };
-            let prefix = if is_sel { "▶ " } else { "  " };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(format!("{:<22}", label), Style::default().fg(label_color)),
-                Span::styled(*desc, Style::default().fg(C_DIM)),
-            ]))
-            .style(style)
+            })
         })
         .collect();
 
@@ -304,11 +309,11 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " ops — Enter run · Esc close ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
         &mut state,
@@ -316,7 +321,6 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let w: u16 = 70.min(area.width.saturating_sub(4));
     let h: u16 = 5;
     let popup = Rect {
@@ -330,16 +334,16 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
     let body = vec![
         Line::from(Span::styled(
             format!(" {}", app.submodule_view.input_prompt),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
         Line::from(vec![
             Span::raw("  "),
             Span::styled(
                 &app.submodule_view.input_buffer,
-                Style::default().fg(C_WHITE),
+                Style::default().fg(theme::INK),
             ),
-            Span::styled("█", Style::default().fg(bc)),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
         ]),
     ];
     f.render_widget(
@@ -347,11 +351,11 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .title(Span::styled(
                     " input · Enter next/run · Esc cancel ",
-                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_WHITE)),
+                .border_style(Style::default().fg(theme::RULE)),
         ),
         popup,
     );
@@ -376,24 +380,27 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
     let body = vec![
         Line::from(Span::styled(
             format!("  Remove submodule `{}`?", name),
-            Style::default().fg(C_WHITE),
+            Style::default().fg(theme::INK),
         )),
         Line::from(""),
-        Line::from(Span::styled(
-            "  [y] yes   [n] no",
-            Style::default().fg(C_DIM),
-        )),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled("y", Style::default().fg(theme::accent(app))),
+            Span::styled("  yes   ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("n", Style::default().fg(theme::accent(app))),
+            Span::styled("  no", Style::default().fg(theme::INK_FAINT)),
+        ]),
     ];
     f.render_widget(
         Paragraph::new(body).block(
             Block::default()
                 .title(Span::styled(
                     " confirm ",
-                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                    Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
                 ))
                 .borders(Borders::ALL)
                 .border_type(app.border_type())
-                .border_style(Style::default().fg(C_RED)),
+                .border_style(Style::default().fg(theme::BAD)),
         ),
         popup,
     );
