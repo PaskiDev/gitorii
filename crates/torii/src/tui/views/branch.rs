@@ -1,22 +1,20 @@
+//! The branch view: one list, grouped into local and remote.
+
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
-use super::super::ui::{C_GREEN, C_RED, C_SUBTLE, C_WHITE};
 use crate::tui::app::App;
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(1)])
-        .split(area);
+    let [heading_row, body] = theme::heading_and_body(area);
 
     // ── Branch list ───────────────────────────────────────────────────────────
     let locals: Vec<(usize, &crate::tui::app::BranchEntry)> = app
@@ -37,23 +35,17 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let mut items: Vec<ListItem> = vec![];
 
     if !locals.is_empty() {
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            " local ",
-            Style::default().fg(C_SUBTLE).add_modifier(Modifier::BOLD),
-        )])));
+        items.push(group_header("local"));
         for (i, b) in &locals {
-            items.push(branch_item(app, *i, b, bc));
+            items.push(branch_item(app, *i, b));
         }
     }
 
     if !remotes.is_empty() {
         items.push(ListItem::new(Line::from(vec![Span::raw(" ")])));
-        items.push(ListItem::new(Line::from(vec![Span::styled(
-            " remote ",
-            Style::default().fg(C_SUBTLE).add_modifier(Modifier::BOLD),
-        )])));
+        items.push(group_header("remote"));
         for (i, b) in &remotes {
-            items.push(branch_item(app, *i, b, bc));
+            items.push(branch_item(app, *i, b));
         }
     }
 
@@ -75,35 +67,28 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         }
     };
 
-    let local_count = locals.len();
-    let remote_count = remotes.len();
-    let title = format!(
-        " branches — {} local  {} remote ",
-        local_count, remote_count
-    );
-
     let mut state = ListState::default();
     if !app.branch_view.branches.is_empty() {
         state.select(Some(sel_list_pos));
     }
 
-    let list_block = Block::default()
-        .title(Span::styled(
-            title,
-            if focused {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), chunks[0], &mut state);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        "branches",
+        Some(app.branch_view.branches.len()),
+        focused,
+    ));
+    heading.push(Span::styled(
+        format!("  {} local  {} remote", locals.len(), remotes.len()),
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
 
     // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.branch_view.ops_mode {
@@ -122,13 +107,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
         let dropdown_w = 18u16;
         let dropdown_h = ops.len() as u16 + 2;
-        let entry_y = chunks[0].y + 1 + sel_list_pos as u16 + 1;
-        let drop_y = if entry_y + dropdown_h < chunks[0].y + chunks[0].height {
+        let entry_y = body.y + sel_list_pos as u16 + 1;
+        let drop_y = if entry_y + dropdown_h < body.y + body.height {
             entry_y
         } else {
-            chunks[0].y + chunks[0].height - dropdown_h
+            body.y + body.height.saturating_sub(dropdown_h)
         };
-        let drop_area = Rect::new(chunks[0].x + 3, drop_y, dropdown_w, dropdown_h);
+        let drop_area = Rect::new(body.x + 3, drop_y, dropdown_w, dropdown_h);
 
         let items: Vec<ListItem> = ops
             .iter()
@@ -137,24 +122,23 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 let is_sel = i == app.branch_view.ops_idx;
                 let dimmed = (i == 2 && push_disabled) || (i == 3 && !can_delete);
                 let color = if dimmed {
-                    super::super::ui::C_DIM
+                    theme::INK_FAINT
                 } else if *danger {
-                    C_RED
+                    theme::BAD
                 } else if is_sel {
-                    C_WHITE
+                    theme::INK
                 } else {
-                    C_SUBTLE
+                    theme::INK_DIM
                 };
-                let prefix = if is_sel { "▶ " } else { "  " };
                 let style = if is_sel && !dimmed {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    theme::caret(app, is_sel && !dimmed),
                     Span::styled(*label, Style::default().fg(color)),
                 ]))
                 .style(style)
@@ -164,10 +148,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let mut drop_state = ListState::default();
         drop_state.select(Some(app.branch_view.ops_idx));
 
+        // A popup keeps its box: it is a window, not a column.
         let drop_block = Block::default()
             .borders(Borders::ALL)
             .border_type(app.border_type())
-            .border_style(Style::default().fg(bc));
+            .border_style(Style::default().fg(theme::RULE));
 
         f.render_widget(Clear, drop_area);
         f.render_stateful_widget(
@@ -178,33 +163,39 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-fn branch_item<'a>(
-    app: &App,
-    idx: usize,
-    b: &'a crate::tui::app::BranchEntry,
-    bc: ratatui::style::Color,
-) -> ListItem<'a> {
+/// The `local` / `remote` divider inside the list.
+fn group_header(label: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    )))
+}
+
+fn branch_item<'a>(app: &App, idx: usize, b: &'a crate::tui::app::BranchEntry) -> ListItem<'a> {
     let is_sel = idx == app.branch_view.idx;
     let style = if is_sel {
         Style::default()
-            .bg(app.selected_bg())
+            .bg(theme::selection(app))
             .add_modifier(Modifier::BOLD)
     } else {
         Style::default()
     };
-    let prefix = if is_sel { "█ " } else { "  " };
-    let current = if b.is_current { "* " } else { "  " };
     let name_color = if b.is_current {
-        C_GREEN
+        theme::OK
     } else if is_sel {
-        C_WHITE
+        theme::INK
     } else {
-        C_SUBTLE
+        theme::INK_DIM
     };
 
     ListItem::new(Line::from(vec![
-        Span::styled(prefix, Style::default().fg(bc)),
-        Span::styled(current, Style::default().fg(C_GREEN)),
+        theme::caret(app, is_sel),
+        Span::styled(
+            if b.is_current { "* " } else { "  " },
+            Style::default().fg(theme::OK),
+        ),
         Span::styled(b.name.clone(), Style::default().fg(name_color)),
     ]))
     .style(style)

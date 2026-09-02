@@ -28,11 +28,16 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let divider = theme::divider_right();
     let list_pane = divider.inner(panes[0]);
     f.render_widget(divider, panes[0]);
-    theme::tie_above(f, area, &[panes[0].right().saturating_sub(1)]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
 
     // Each pane is a heading row and a body, the way a boxed title used to be
     // a border and its inside.
-    let chunks = [heading_and_body(list_pane), heading_and_body(panes[1])];
+    let chunks = [
+        theme::heading_and_body(list_pane),
+        theme::heading_and_body(panes[1]),
+    ];
 
     // ── Commit list ───────────────────────────────────────────────────────────
     let inner_width = chunks[0][1].width.saturating_sub(4) as usize;
@@ -436,16 +441,6 @@ pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
         ("scan history", "find secrets across every commit", false),
         ("compact", "gc + reflog expire (recovers space)", false),
     ]
-}
-
-/// Split a pane into its heading row and the body below it — the shape a
-/// boxed title used to give for free.
-fn heading_and_body(area: Rect) -> [Rect; 2] {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(0)])
-        .split(area);
-    [rows[0], rows[1]]
 }
 
 fn file_basename(path: &str) -> String {

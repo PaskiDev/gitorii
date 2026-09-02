@@ -178,7 +178,10 @@ pub fn render(f: &mut Frame, app: &App) {
     };
 
     render_header(f, app, rows[0]);
+    // Both body rules are drawn before the view, so the view can tie its own
+    // columns into either of them; the sidebar's spine crosses both.
     theme::hrule(f, rows[1], &[(spine, theme::Tick::Down)]);
+    theme::hrule(f, rows[3], &[(spine, theme::Tick::Up)]);
     render_sidebar(f, app, cols[0]);
 
     let content_rows = [content];
@@ -209,7 +212,6 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Diff | View::Help => {}
     }
 
-    theme::hrule(f, rows[3], &[(spine, theme::Tick::Up)]);
     render_hint(f, app, rows[4]);
 
     if app.show_event_log {
@@ -1732,7 +1734,17 @@ mod tests {
 
     /// Render the chrome once and hand back the screen as text.
     fn screen(width: u16, height: u16) -> Vec<String> {
-        let app = App::new().expect("a repository to look at");
+        screen_of(View::Dashboard, width, height)
+    }
+
+    /// The same, for a named view with its focus in the view rather than the
+    /// sidebar — which is how a view is actually looked at.
+    fn screen_of(view: View, width: u16, height: u16) -> Vec<String> {
+        let mut app = App::new().expect("a repository to look at");
+        if view != View::Dashboard {
+            app.go_to(view);
+            app.sidebar_focused = false;
+        }
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1805,15 +1817,27 @@ mod tests {
     /// screen, which is the only way to review a change of this kind.
     #[test]
     fn look_at_it() {
-        println!("{}", screen(100, 30).join("\n"));
+        for view in CONVERTED {
+            println!("\n── {} ──", view_label(&view));
+            println!("{}", screen_of(view, 100, 24).join("\n"));
+        }
     }
 
     /// No rule may cross another without a junction. A `│` sitting directly
     /// on a `─` is a column that starts out of thin air, which is what the
     /// grid looked like before the views tied themselves into the chrome.
+    /// The views converted to the window chrome so far. A view joins this
+    /// list when it stops drawing its own boxes.
+    const CONVERTED: [View; 3] = [View::Dashboard, View::Log, View::Branch];
+
     #[test]
     fn rules_never_cross_without_a_junction() {
-        let lines = screen(100, 30);
+        for view in CONVERTED {
+            check_junctions(&screen_of(view, 100, 30));
+        }
+    }
+
+    fn check_junctions(lines: &[String]) {
         let at = |row: usize, col: usize| lines[row].chars().nth(col).unwrap_or(' ');
         for row in 1..lines.len() {
             for col in 0..lines[row].chars().count() {
