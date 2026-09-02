@@ -1828,7 +1828,7 @@ mod tests {
     /// grid looked like before the views tied themselves into the chrome.
     /// The views converted to the window chrome so far. A view joins this
     /// list when it stops drawing its own boxes.
-    const CONVERTED: [View; 16] = [
+    const CONVERTED: [View; 17] = [
         View::Dashboard,
         View::Log,
         View::Branch,
@@ -1845,6 +1845,7 @@ mod tests {
         View::Config,
         View::Issue,
         View::Pr,
+        View::Platform,
     ];
 
     #[test]
