@@ -1,70 +1,74 @@
+//! The issue view: the open issues, and the selected one in full.
+//!
+//! Two panes parted by a rule rather than two boxes. The ops dropdown and the
+//! input overlays keep their boxes: a popup is a window.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
-use super::super::ui::{C_CYAN, C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::{App, IssueConfirm};
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
     let iv = &app.issue_view;
 
-    let cols = Layout::default()
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
         .split(area);
 
-    // ── Issue list ────────────────────────────────────────────────────────────
-    let title = if iv.loading {
-        " issues — loading… ".to_string()
-    } else {
-        format!(" issues — {} ", iv.issues.len())
-    };
+    // The list carries the rule; the detail sits the other side of it.
+    let divider = theme::divider_right();
+    let list_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = [panes[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
 
+    let [list_heading, list_body] = theme::heading_and_body(list_pane);
+    let [detail_heading, detail_body] = theme::heading_and_body(panes[1]);
+
+    // ── Issue list ────────────────────────────────────────────────────────────
     let items: Vec<ListItem> = if let Some(err) = &iv.error {
         err.chars()
             .collect::<Vec<_>>()
-            .chunks(cols[0].width.saturating_sub(4) as usize)
+            .chunks(list_body.width.saturating_sub(4).max(1) as usize)
             .enumerate()
             .map(|(i, chunk)| {
                 let text = chunk.iter().collect::<String>();
                 if i == 0 {
                     ListItem::new(Line::from(vec![
-                        Span::styled("  authentication required: ", Style::default().fg(C_RED)),
-                        Span::styled(text, Style::default().fg(C_DIM)),
+                        Span::styled(
+                            "authentication required: ",
+                            Style::default().fg(theme::BAD),
+                        ),
+                        Span::styled(text, Style::default().fg(theme::INK_FAINT)),
                     ]))
                 } else {
                     ListItem::new(Line::from(vec![
-                        Span::raw("    "),
-                        Span::styled(text, Style::default().fg(C_DIM)),
+                        Span::raw("  "),
+                        Span::styled(text, Style::default().fg(theme::INK_FAINT)),
                     ]))
                 }
             })
             .collect()
     } else if iv.issues.is_empty() && !iv.loading {
-        vec![ListItem::new(Line::from(vec![Span::styled(
-            "  no open issues",
-            Style::default().fg(C_DIM),
-        )]))]
+        vec![ListItem::new(Span::styled(
+            "no open issues",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
     } else {
         iv.issues
             .iter()
             .enumerate()
             .map(|(i, issue)| {
-                let is_sel = i == iv.idx;
-                let style = if is_sel {
-                    Style::default()
-                        .bg(app.selected_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                let prefix = if is_sel { "█ " } else { "  " };
+                let is_sel = focused && i == iv.idx;
                 let labels = if issue.labels.is_empty() {
                     String::new()
                 } else {
@@ -76,16 +80,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     String::new()
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
-                    Span::styled(format!("#{} ", issue.number), Style::default().fg(C_YELLOW)),
+                    theme::caret(app, is_sel),
+                    Span::styled(
+                        format!("#{} ", issue.number),
+                        Style::default().fg(theme::WARN),
+                    ),
                     Span::styled(
                         issue.title.clone(),
-                        Style::default().fg(if is_sel { C_WHITE } else { C_SUBTLE }),
+                        Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                     ),
-                    Span::styled(labels, Style::default().fg(C_CYAN)),
-                    Span::styled(comments, Style::default().fg(C_DIM)),
+                    Span::styled(labels, Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(comments, Style::default().fg(theme::INK_FAINT)),
                 ]))
-                .style(style)
+                .style(if is_sel {
+                    Style::default()
+                        .bg(theme::selection(app))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                })
             })
             .collect()
     };
@@ -95,221 +108,228 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         list_state.select(Some(iv.idx));
     }
 
-    let list_block = Block::default()
-        .title(Span::styled(
-            title,
-            if focused {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), cols[0], &mut list_state);
-
-    // ── Detail panel ──────────────────────────────────────────────────────────
-    let detail_lines = if let Some(issue) = iv.issues.get(iv.idx) {
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("  number  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    format!("#{}", issue.number),
-                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  state   ", Style::default().fg(C_SUBTLE)),
-                Span::styled(
-                    issue.state.clone(),
-                    Style::default().fg(if issue.state == "open" || issue.state == "opened" {
-                        C_GREEN
-                    } else {
-                        C_RED
-                    }),
-                ),
-            ]),
-            Line::from(vec![
-                Span::styled("  author  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(issue.author.clone(), Style::default().fg(C_CYAN)),
-            ]),
-        ];
-        if !issue.labels.is_empty() {
-            lines.push(Line::from(vec![
-                Span::styled("  labels  ", Style::default().fg(C_SUBTLE)),
-                Span::styled(issue.labels.join(", "), Style::default().fg(C_CYAN)),
-            ]));
-        }
-        lines.push(Line::from(""));
-        if let Some(body) = &issue.body {
-            let preview: String = body.lines().take(6).collect::<Vec<_>>().join("\n");
-            for l in preview.lines() {
-                lines.push(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(l.to_string(), Style::default().fg(C_SUBTLE)),
-                ]));
-            }
-        } else {
-            lines.push(Line::from(vec![Span::styled(
-                "  no description",
-                Style::default().fg(C_DIM),
-            )]));
-        }
-        lines
-    } else {
-        vec![Line::from(vec![Span::styled(
-            "  no issue selected",
-            Style::default().fg(C_DIM),
-        )])]
-    };
-
-    let detail_block = Block::default()
-        .title(Span::styled(" detail ", Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(
-        Paragraph::new(detail_lines)
-            .block(detail_block)
-            .wrap(Wrap { trim: true }),
-        cols[1],
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        "issues",
+        if iv.loading { None } else { Some(iv.issues.len()) },
+        focused,
+    ));
+    if iv.loading {
+        heading.push(Span::styled(
+            "  loading…",
+            Style::default().fg(theme::INK_FAINT),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(heading)), list_heading);
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        list_body,
+        &mut list_state,
     );
 
-    // ── Close confirm ─────────────────────────────────────────────────────────
-    if iv.confirm == IssueConfirm::Close {
-        let overlay = Rect::new(
-            cols[0].x + 2,
-            cols[0].y + 2 + iv.idx.min(cols[0].height as usize - 5) as u16,
-            32,
-            3,
-        );
-        f.render_widget(Clear, overlay);
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled("  close issue? ", Style::default().fg(C_RED)),
-                Span::styled(
-                    "[y]",
-                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+    // ── Detail pane ───────────────────────────────────────────────────────────
+    let mut detail_title = vec![Span::raw(" ")];
+    detail_title.extend(theme::panel_title("detail", None, false));
+    f.render_widget(Paragraph::new(Line::from(detail_title)), detail_heading);
+
+    let detail_lines: Vec<Line> = match iv.issues.get(iv.idx) {
+        Some(issue) => {
+            let open = issue.state == "open" || issue.state == "opened";
+            let mut lines = vec![
+                field(
+                    "number",
+                    Span::styled(
+                        format!("#{}", issue.number),
+                        Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                    ),
                 ),
-                Span::styled(" / any", Style::default().fg(C_SUBTLE)),
-            ]))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(C_RED))
-                    .border_type(app.border_type()),
-            ),
-            overlay,
-        );
+                field(
+                    "state",
+                    Span::styled(
+                        issue.state.clone(),
+                        Style::default().fg(if open { theme::OK } else { theme::INK_FAINT }),
+                    ),
+                ),
+                field(
+                    "author",
+                    Span::styled(issue.author.clone(), Style::default().fg(theme::INK_DIM)),
+                ),
+            ];
+            if !issue.labels.is_empty() {
+                lines.push(field(
+                    "labels",
+                    Span::styled(
+                        issue.labels.join(", "),
+                        Style::default().fg(theme::INK_DIM),
+                    ),
+                ));
+            }
+            lines.push(Line::from(""));
+            match &issue.body {
+                Some(body) => {
+                    for l in body.lines().take(6) {
+                        lines.push(Line::from(Span::styled(
+                            l.to_string(),
+                            Style::default().fg(theme::INK_DIM),
+                        )));
+                    }
+                }
+                None => lines.push(Line::from(Span::styled(
+                    "no description",
+                    Style::default().fg(theme::INK_FAINT),
+                ))),
+            }
+            lines
+        }
+        None => vec![Line::from(Span::styled(
+            "no issue selected",
+            Style::default().fg(theme::INK_FAINT),
+        ))],
+    };
+    f.render_widget(
+        Paragraph::new(detail_lines)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        detail_body,
+    );
+
+    // ── Overlays ──────────────────────────────────────────────────────────────
+    if iv.confirm == IssueConfirm::Close {
+        render_close_confirm(f, app, list_body);
+    }
+    match iv.confirm {
+        IssueConfirm::CreateTitle => render_input_overlay(f, app, area, "title", &iv.create_title),
+        IssueConfirm::CreateDesc => {
+            render_input_overlay(f, app, area, "description (optional)", &iv.create_desc)
+        }
+        IssueConfirm::Comment => render_input_overlay(f, app, area, "comment", &iv.comment_input),
+        _ => {}
     }
 
-    // ── Create title input ────────────────────────────────────────────────────
-    if iv.confirm == IssueConfirm::CreateTitle {
-        render_input_overlay(f, app, area, "title", &iv.create_title, bc);
-    }
-
-    // ── Create desc input ─────────────────────────────────────────────────────
-    if iv.confirm == IssueConfirm::CreateDesc {
-        render_input_overlay(f, app, area, "description (optional)", &iv.create_desc, bc);
-    }
-
-    // ── Comment input ─────────────────────────────────────────────────────────
-    if iv.confirm == IssueConfirm::Comment {
-        render_input_overlay(f, app, area, "comment", &iv.comment_input, bc);
-    }
-
-    // ── Ops dropdown ─────────────────────────────────────────────────────────
     if iv.ops_mode {
-        let ops: &[(&str, bool)] = &[
-            ("create", false),
-            ("comment", false),
-            ("open browser", false),
-            ("close ⚠", true),
-        ];
-        let dw = 16u16;
-        let dh = ops.len() as u16 + 2;
-        let ey = cols[0].y + 1 + iv.idx as u16 + 1;
-        let dy = if ey + dh < cols[0].y + cols[0].height {
-            ey
-        } else {
-            cols[0].y + cols[0].height - dh
-        };
-        let drop_area = Rect::new(cols[0].x + 3, dy, dw, dh);
-
-        let drop_items: Vec<ListItem> = ops
-            .iter()
-            .enumerate()
-            .map(|(i, (label, danger))| {
-                let is_sel = i == iv.ops_idx;
-                let color = if *danger {
-                    C_RED
-                } else if is_sel {
-                    C_WHITE
-                } else {
-                    C_SUBTLE
-                };
-                let prefix = if is_sel { "▶ " } else { "  " };
-                ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
-                    Span::styled(*label, Style::default().fg(color)),
-                ]))
-                .style(if is_sel {
-                    Style::default()
-                        .bg(app.selected_bg())
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                })
-            })
-            .collect();
-
-        let mut drop_state = ListState::default();
-        drop_state.select(Some(iv.ops_idx));
-
-        f.render_widget(Clear, drop_area);
-        f.render_stateful_widget(
-            List::new(drop_items).block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_type(app.border_type())
-                    .border_style(Style::default().fg(bc)),
-            ),
-            drop_area,
-            &mut drop_state,
-        );
+        render_ops(f, app, list_body);
     }
 }
 
-fn render_input_overlay(
-    f: &mut Frame,
-    app: &App,
-    area: Rect,
-    label: &str,
-    value: &str,
-    bc: ratatui::style::Color,
-) {
+fn field(label: &str, value: Span<'static>) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("{:<8}", label),
+            Style::default().fg(theme::INK_FAINT),
+        ),
+        value,
+    ])
+}
+
+/// The close prompt, anchored on the issue it would close.
+fn render_close_confirm(f: &mut Frame, app: &App, body: Rect) {
+    let row = app
+        .issue_view
+        .idx
+        .min(body.height.saturating_sub(3) as usize) as u16;
+    let overlay = Rect::new(body.x + 2, body.y + row, 32, 3);
+    f.render_widget(Clear, overlay);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  close issue? ", Style::default().fg(theme::BAD)),
+            Span::styled(
+                "y",
+                Style::default()
+                    .fg(theme::accent(app))
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  any other key cancels", Style::default().fg(theme::INK_FAINT)),
+        ]))
+        // A destructive prompt keeps the red border: here red is status, not
+        // the brand.
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(theme::BAD)),
+        ),
+        overlay,
+    );
+}
+
+/// The ops dropdown, anchored under the selected issue.
+fn render_ops(f: &mut Frame, app: &App, body: Rect) {
+    const OPS: &[(&str, bool)] = &[
+        ("create", false),
+        ("comment", false),
+        ("open browser", false),
+        ("close ⚠", true),
+    ];
+
+    let dropdown_w = 16u16;
+    let dropdown_h = OPS.len() as u16 + 2;
+    let entry_y = body.y + app.issue_view.idx as u16 + 1;
+    let drop_y = if entry_y + dropdown_h < body.y + body.height {
+        entry_y
+    } else {
+        body.y + body.height.saturating_sub(dropdown_h)
+    };
+    let drop_area = Rect::new(body.x + 3, drop_y, dropdown_w, dropdown_h);
+
+    let items: Vec<ListItem> = OPS
+        .iter()
+        .enumerate()
+        .map(|(i, (label, danger))| {
+            let is_sel = i == app.issue_view.ops_idx;
+            let color = if *danger {
+                theme::BAD
+            } else if is_sel {
+                theme::INK
+            } else {
+                theme::INK_DIM
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(*label, Style::default().fg(color)),
+            ]))
+            .style(if is_sel {
+                Style::default()
+                    .bg(theme::selection(app))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            })
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.issue_view.ops_idx));
+
+    f.render_widget(Clear, drop_area);
+    f.render_stateful_widget(List::new(items).block(popup(app)), drop_area, &mut state);
+}
+
+fn render_input_overlay(f: &mut Frame, app: &App, area: Rect, label: &str, value: &str) {
     let ow = 56u16;
     let oh = 3u16;
     let ox = area.x + area.width.saturating_sub(ow) / 2;
     let oy = area.y + area.height.saturating_sub(oh) / 2;
     let overlay = Rect::new(ox, oy, ow, oh);
+
     f.render_widget(Clear, overlay);
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(format!("  {}: ", label), Style::default().fg(C_SUBTLE)),
-            Span::styled(format!("{}█", value), Style::default().fg(C_WHITE)),
+            Span::styled(
+                format!("  {}: ", label),
+                Style::default().fg(theme::INK_FAINT),
+            ),
+            Span::styled(value.to_string(), Style::default().fg(theme::INK)),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
         ]))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(bc))
-                .border_type(app.border_type()),
-        ),
+        .block(popup(app)),
         overlay,
     );
+}
+
+/// A popup keeps its box: it is a window, not a column.
+fn popup(app: &App) -> Block<'static> {
+    Block::default()
+        .borders(Borders::ALL)
+        .border_type(app.border_type())
+        .border_style(Style::default().fg(theme::RULE))
 }
