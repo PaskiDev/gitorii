@@ -338,11 +338,11 @@ fn render_repo_picker(f: &mut Frame, app: &App, header_area: Rect) {
             let is_current = std::fs::canonicalize(p).ok() == current;
             let is_sel = i == app.repo_picker_idx;
             let color = if is_sel {
-                C_WHITE
+                theme::INK
             } else if is_current {
-                C_GREEN
+                theme::OK
             } else {
-                C_SUBTLE
+                theme::INK_FAINT
             };
             let prefix = if is_sel {
                 "▶ "
@@ -392,9 +392,9 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     let bc = app.brand_color();
     let hint = Line::from(vec![
         Span::styled(" [e]", Style::default().fg(bc)),
-        Span::styled(" close  ", Style::default().fg(C_SUBTLE)),
+        Span::styled(" close  ", Style::default().fg(theme::INK_FAINT)),
         Span::styled("[c]", Style::default().fg(bc)),
-        Span::styled(" clear ", Style::default().fg(C_SUBTLE)),
+        Span::styled(" clear ", Style::default().fg(theme::INK_FAINT)),
     ]);
     let block = Block::default()
         .title(Span::styled(
@@ -415,9 +415,9 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
         .iter()
         .map(|e| {
             let kind_color = match e.kind {
-                EventKind::Error => C_RED,
-                EventKind::Success => C_GREEN,
-                EventKind::Info => C_CYAN,
+                EventKind::Error => theme::BAD,
+                EventKind::Success => theme::OK,
+                EventKind::Info => theme::INK_DIM,
             };
             let kind_sym = match e.kind {
                 EventKind::Error => "✗",
@@ -425,10 +425,10 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
                 EventKind::Info => "·",
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {} ", e.timestamp), Style::default().fg(C_DIM)),
+                Span::styled(format!(" {} ", e.timestamp), Style::default().fg(theme::INK_FAINT)),
                 Span::styled(kind_sym, Style::default().fg(kind_color)),
                 Span::raw(" "),
-                Span::styled(&e.message, Style::default().fg(C_WHITE)),
+                Span::styled(&e.message, Style::default().fg(theme::INK)),
             ]))
         })
         .collect();
@@ -444,11 +444,11 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         Line::from(vec![
             Span::raw(" "),
             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-            Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+            Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
             Span::styled("[Enter]", Style::default().fg(bc)),
-            Span::styled(" open  ", Style::default().fg(C_SUBTLE)),
+            Span::styled(" open  ", Style::default().fg(theme::INK_FAINT)),
             Span::styled("[Esc]", Style::default().fg(bc)),
-            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
         ])
     } else {
         match app.view {
@@ -458,28 +458,28 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Panel::Staged => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" unstage  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" unstage  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" diff", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     Panel::Unstaged => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" stage  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" stage  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" diff", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     Panel::Untracked => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" stage", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" stage", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     Panel::Log => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[l]", Style::default().fg(bc)),
-                        Span::styled(" expand", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" expand", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
@@ -487,16 +487,16 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 let amend_style = if app.commit_view.amend {
                     Style::default().fg(bc).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(C_DIM)
+                    Style::default().fg(theme::INK_FAINT)
                 };
                 Line::from(vec![
                     Span::raw(" "),
                     Span::styled("[Enter]", Style::default().fg(bc)),
-                    Span::styled(" save  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled("[←→]", Style::default().fg(bc)),
-                    Span::styled(" cursor  ", Style::default().fg(C_SUBTLE)),
+                    Span::styled(" cursor  ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled("[a]", Style::default().fg(bc)),
-                    Span::styled(" amend ", Style::default().fg(C_SUBTLE)),
+                    Span::styled(" amend ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled(
                         if app.commit_view.amend {
                             "[amend ✓]"
@@ -506,46 +506,46 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         amend_style,
                     ),
                     Span::styled("  [Esc]", Style::default().fg(bc)),
-                    Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                    Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                 ])
             }
             View::Sync => Line::from(vec![
                 Span::raw(" "),
                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[Enter]", Style::default().fg(bc)),
-                Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[Esc]", Style::default().fg(bc)),
-                Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
             ]),
             View::Log => {
                 if app.log.search_mode {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" confirm  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel search", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel search", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else if app.log.ops_mode {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[/]", Style::default().fg(bc)),
-                        Span::styled(" search", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
                     ])
                 }
             }
@@ -561,30 +561,30 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             .unwrap_or("?");
                         Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("delete ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("delete ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 name.to_string(),
-                                Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled("?  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("?  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 "[y]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                            Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 "[any]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" cancel", Style::default().fg(C_DIM)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ])
                     }
                     BranchConfirm::NewBranch => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("new branch: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("new branch: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.branch_view.new_name.clone(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
@@ -592,26 +592,26 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         if app.branch_view.search_mode {
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("search: ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("search: ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.branch_view.search_query.clone(),
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled("█  ", Style::default().fg(bc)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" confirm  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Esc]", Style::default().fg(bc)),
-                                Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                             ])
                         } else if app.branch_view.ops_mode {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Esc]", Style::default().fg(bc)),
-                                Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                             ])
                         } else if let Some(s) = &app.branch_view.status {
                             let color = if s.starts_with("checkout:")
@@ -619,11 +619,11 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 || s.starts_with("pushed")
                                 || s.starts_with("deleted")
                             {
-                                C_GREEN
+                                theme::OK
                             } else if s.contains("failed") || s.contains("cannot") {
-                                C_RED
+                                theme::BAD
                             } else {
-                                C_YELLOW
+                                theme::WARN
                             };
                             Line::from(vec![
                                 Span::raw(" "),
@@ -633,11 +633,11 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[o]", Style::default().fg(bc)),
-                                Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[/]", Style::default().fg(bc)),
-                                Span::styled(" search", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
                             ])
                         }
                     }
@@ -649,9 +649,9 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" confirm  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel search", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel search", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else if app.snapshot_view.ops_mode
                     && app.snapshot_view.focus == SnapshotFocus::List
@@ -659,19 +659,19 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else if app.snapshot_view.focus == SnapshotFocus::Create {
                     Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("snapshot name: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("snapshot name: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.snapshot_view.create_name.clone(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ])
@@ -679,23 +679,23 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" set  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" set  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" back", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" back", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[/]", Style::default().fg(bc)),
-                        Span::styled(" search  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" search  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[a]", Style::default().fg(bc)),
-                        Span::styled(" auto-config", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" auto-config", Style::default().fg(theme::INK_FAINT)),
                     ])
                 }
             }
@@ -704,30 +704,30 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 match &app.tag_view.confirm {
                     TagConfirm::Delete => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("delete tag?  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("delete tag?  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[y]", Style::default().fg(bc).add_modifier(Modifier::BOLD)),
-                        Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                        Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             "[any]",
                             Style::default().fg(bc).add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(" cancel", Style::default().fg(C_DIM)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     TagConfirm::CreateName => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("tag name: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("tag name: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.tag_view.new_name.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
                     TagConfirm::CreateMessage => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("message: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("message: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.tag_view.new_message.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
@@ -735,36 +735,36 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         if app.tag_view.search_mode {
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("search: ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("search: ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.tag_view.search_query.clone(),
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled("█  ", Style::default().fg(bc)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" confirm  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Esc]", Style::default().fg(bc)),
-                                Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                             ])
                         } else if app.tag_view.ops_mode {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Esc]", Style::default().fg(bc)),
-                                Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                             ])
                         } else {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[o]", Style::default().fg(bc)),
-                                Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[/]", Style::default().fg(bc)),
-                                Span::styled(" search", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
                             ])
                         }
                     }
@@ -775,35 +775,35 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 match &app.history_view.confirm {
                     HistoryConfirm::CherryPick => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("cherry-pick commit?  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("cherry-pick commit?  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                        Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[any]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_DIM)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     HistoryConfirm::Clean => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("clean history & GC?  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("clean history & GC?  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                        Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[any]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_DIM)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     HistoryConfirm::Rebase => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("rebase onto: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("rebase onto: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.history_view.input.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
                     HistoryConfirm::RemoveFile => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("remove file from history: ", Style::default().fg(C_RED)),
+                        Span::styled("remove file from history: ", Style::default().fg(theme::BAD)),
                         Span::styled(
                             app.history_view.input.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
@@ -811,11 +811,11 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::raw(" "),
                         Span::styled(
                             "rewrite start date (YYYY-MM-DD HH:MM): ",
-                            Style::default().fg(C_SUBTLE),
+                            Style::default().fg(theme::INK_FAINT),
                         ),
                         Span::styled(
                             app.history_view.input.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
@@ -823,50 +823,50 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::raw(" "),
                         Span::styled(
                             "rewrite end date (YYYY-MM-DD HH:MM): ",
-                            Style::default().fg(C_SUBTLE),
+                            Style::default().fg(theme::INK_FAINT),
                         ),
                         Span::styled(
                             app.history_view.input2.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
                     HistoryConfirm::Blame => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("blame file: ", Style::default().fg(C_SUBTLE)),
+                        Span::styled("blame file: ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled(
                             app.history_view.input.as_str(),
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ]),
                     HistoryConfirm::Scan => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[f]", Style::default().fg(bc)),
-                        Span::styled(" toggle mode  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" toggle mode  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run scan  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run scan  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     HistoryConfirm::None => {
                         if app.history_view.ops_mode {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Esc]", Style::default().fg(bc)),
-                                Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                             ])
                         } else {
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[o]", Style::default().fg(bc)),
-                                Span::styled(" operations", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" operations", Style::default().fg(theme::INK_FAINT)),
                             ])
                         }
                     }
@@ -878,29 +878,29 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     match &app.remote_view.confirm {
                         RemoteConfirm::AddName => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("remote name: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("remote name: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.remote_view.new_name.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
                         RemoteConfirm::AddUrl => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("remote url: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("remote url: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.remote_view.new_url.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
@@ -913,15 +913,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("rename ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("rename ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(" → ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.remote_view.new_name.clone(),
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled("█", Style::default().fg(bc)),
                             ])
@@ -935,15 +935,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("edit url for ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("edit url for ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     name.to_string(),
-                                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(": ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(": ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.remote_view.new_url.clone(),
-                                    Style::default().fg(C_WHITE),
+                                    Style::default().fg(theme::INK),
                                 ),
                                 Span::styled("█", Style::default().fg(bc)),
                             ])
@@ -956,15 +956,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("rename mirror ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("rename mirror ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(" → ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.remote_view.new_name.clone(),
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled("█", Style::default().fg(bc)),
                             ])
@@ -973,29 +973,29 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             Span::raw(" "),
                             Span::styled(
                                 "mirror platform (github/gitlab/…): ",
-                                Style::default().fg(C_SUBTLE),
+                                Style::default().fg(theme::INK_FAINT),
                             ),
                             Span::styled(
                                 app.remote_view.new_mirror_platform.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
                         RemoteConfirm::MirrorAddAccount => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("account: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("account: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.remote_view.new_mirror_account.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
                         RemoteConfirm::MirrorAddRepo => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("repo name: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("repo name: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.remote_view.new_mirror_repo.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
@@ -1003,25 +1003,25 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             let (replica_style, primary_style) =
                                 if app.remote_view.new_mirror_type == 0 {
                                     (
-                                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                                        Style::default().fg(C_SUBTLE),
+                                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                                        Style::default().fg(theme::INK_FAINT),
                                     )
                                 } else {
                                     (
-                                        Style::default().fg(C_SUBTLE),
-                                        Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                        Style::default().fg(theme::INK_FAINT),
+                                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                     )
                                 };
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("type: ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("type: ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("replica", replica_style),
-                                Span::styled(" / ", Style::default().fg(C_DIM)),
+                                Span::styled(" / ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("primary", primary_style),
                                 Span::styled("  [←→]", Style::default().fg(bc)),
-                                Span::styled(" toggle  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" toggle  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[Enter]", Style::default().fg(bc)),
-                                Span::styled(" confirm", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" confirm", Style::default().fg(theme::INK_FAINT)),
                             ])
                         }
                         RemoteConfirm::Remove => {
@@ -1033,30 +1033,30 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("remove remote ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("remove remote ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     name.to_string(),
-                                    Style::default().fg(C_RED).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled("?  ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("?  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     "[y]",
                                     Style::default().fg(bc).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                                Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     "[any]",
                                     Style::default().fg(bc).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(" cancel", Style::default().fg(C_DIM)),
+                                Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                             ])
                         }
                         RemoteConfirm::None => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[o]", Style::default().fg(bc)),
-                            Span::styled(" operations", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" operations", Style::default().fg(theme::INK_FAINT)),
                         ]),
                     }
                 }
@@ -1068,53 +1068,53 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     match &app.issue_view.confirm {
                         IssueConfirm::CreateTitle => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("title  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("title  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         IssueConfirm::CreateDesc => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("description  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("description  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" create  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" create  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         IssueConfirm::Comment => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("comment  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("comment  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" send  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" send  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         IssueConfirm::Close => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[y]", Style::default().fg(bc)),
-                            Span::styled(" confirm close  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" confirm close  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[any]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         IssueConfirm::None => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[o]", Style::default().fg(bc)),
-                            Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[^r]", Style::default().fg(bc)),
-                            Span::styled(" refresh", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" refresh", Style::default().fg(theme::INK_FAINT)),
                         ]),
                     }
                 }
@@ -1125,121 +1125,121 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     match &app.pr_view.confirm {
                         PrConfirm::Merge => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[←→]", Style::default().fg(bc)),
-                            Span::styled(" method  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" method  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" merge  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" merge  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::Close => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[y]", Style::default().fg(bc)),
-                            Span::styled(" confirm close  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" confirm close  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[any]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::CreateTitle => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::CreateHead => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select source branch  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" select source branch  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::CreateBase => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select base  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" select base  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::CreateDesc => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" new line  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" new line  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[^S]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Tab]", Style::default().fg(bc)),
-                            Span::styled(" draft  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" draft  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::CreatePlatforms => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[Space]", Style::default().fg(bc)),
-                            Span::styled(" toggle  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" toggle  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[a]", Style::default().fg(bc)),
-                            Span::styled(" all  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" all  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" create  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" create  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::SwitchPlatform => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" switch  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" switch  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::EditTitle => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::EditDesc => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" new line  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" new line  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[^S]", Style::default().fg(bc)),
-                            Span::styled(" next  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::EditBase => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select base  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" select base  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" confirm  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         PrConfirm::None => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[o]", Style::default().fg(bc)),
-                            Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Tab]", Style::default().fg(bc)),
-                            Span::styled(" filter  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[^r]", Style::default().fg(bc)),
-                            Span::styled(" refresh", Style::default().fg(C_SUBTLE)),
+                            Span::styled(" refresh", Style::default().fg(theme::INK_FAINT)),
                         ]),
                     }
                 }
@@ -1250,60 +1250,60 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     match &app.workspace_view.confirm {
                         WorkspaceConfirm::DeleteWorkspace => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("delete workspace?  ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("delete workspace?  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 "[y]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                            Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 "[any]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" cancel", Style::default().fg(C_DIM)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         WorkspaceConfirm::RemoveRepo => Line::from(vec![
                             Span::raw(" "),
                             Span::styled(
                                 "remove repo from workspace?  ",
-                                Style::default().fg(C_SUBTLE),
+                                Style::default().fg(theme::INK_FAINT),
                             ),
                             Span::styled(
                                 "[y]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" confirm  ", Style::default().fg(C_DIM)),
+                            Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 "[any]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
                             ),
-                            Span::styled(" cancel", Style::default().fg(C_DIM)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
                         WorkspaceConfirm::SaveMessage => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("commit message: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("commit message: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.workspace_view.input.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
                         WorkspaceConfirm::AddRepoPath => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("repo path: ", Style::default().fg(C_SUBTLE)),
+                            Span::styled("repo path: ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled(
                                 app.workspace_view.input.clone(),
-                                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                             ),
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
@@ -1316,15 +1316,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("rename ", Style::default().fg(C_SUBTLE)),
+                                Span::styled("rename ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(C_YELLOW).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
                                 ),
-                                Span::styled(" → ", Style::default().fg(C_SUBTLE)),
+                                Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     app.workspace_view.input.clone(),
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled("█", Style::default().fg(bc)),
                             ])
@@ -1334,23 +1334,23 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Line::from(vec![
                                     Span::raw(" "),
                                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                    Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[→/l]", Style::default().fg(bc)),
-                                    Span::styled(" repos  ", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" repos  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[o]", Style::default().fg(bc)),
-                                    Span::styled(" operations", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" operations", Style::default().fg(theme::INK_FAINT)),
                                 ])
                             } else {
                                 Line::from(vec![
                                     Span::raw(" "),
                                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                    Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[Enter]", Style::default().fg(bc)),
-                                    Span::styled(" open  ", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" open  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[o]", Style::default().fg(bc)),
-                                    Span::styled(" operations  ", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[←/h]", Style::default().fg(bc)),
-                                    Span::styled(" workspaces", Style::default().fg(C_SUBTLE)),
+                                    Span::styled(" workspaces", Style::default().fg(theme::INK_FAINT)),
                                 ])
                             }
                         }
@@ -1366,30 +1366,30 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" save  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" edit  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" edit  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Tab]", Style::default().fg(bc)),
-                        Span::styled(" toggle scope", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" toggle scope", Style::default().fg(theme::INK_FAINT)),
                     ])
                 }
             }
             View::Settings => Line::from(vec![
                 Span::raw(" "),
                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[Enter]", Style::default().fg(bc)),
-                Span::styled(" toggle/edit  ", Style::default().fg(C_SUBTLE)),
+                Span::styled(" toggle/edit  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[s]", Style::default().fg(bc)),
-                Span::styled(" save", Style::default().fg(C_SUBTLE)),
+                Span::styled(" save", Style::default().fg(theme::INK_FAINT)),
             ]),
             View::Submodule => {
                 use crate::tui::app::SubmoduleFocus;
@@ -1397,36 +1397,36 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     SubmoduleFocus::OpsDropdown => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     SubmoduleFocus::InputArgs => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[type]", Style::default().fg(bc)),
-                        Span::styled(" input  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" input  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" next/run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" next/run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     SubmoduleFocus::ConfirmRemove => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" yes  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" yes  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[n/Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     SubmoduleFocus::List => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" ops  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" sidebar", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" sidebar", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
@@ -1436,36 +1436,36 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     WorktreeFocus::OpsDropdown => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     WorktreeFocus::InputArgs => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[type]", Style::default().fg(bc)),
-                        Span::styled(" input  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" input  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     WorktreeFocus::ConfirmRemove | WorktreeFocus::ConfirmPrune => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" yes  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" yes  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[n/Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     WorktreeFocus::List => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" ops  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" sidebar", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" sidebar", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
@@ -1475,47 +1475,47 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     BisectFocus::OpsDropdown => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     BisectFocus::InputArgs => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[type]", Style::default().fg(bc)),
-                        Span::styled(" input  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" input  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     BisectFocus::RefPicker => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[type]", Style::default().fg(bc)),
-                        Span::styled(" filter  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Tab]", Style::default().fg(bc)),
-                        Span::styled(" bad/good  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" bad/good  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Space]", Style::default().fg(bc)),
-                        Span::styled(" toggle good  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" toggle good  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     BisectFocus::ConfirmReset => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" reset  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" reset  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[n/Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     BisectFocus::List => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" ops  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" sidebar", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" sidebar", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
@@ -1525,43 +1525,43 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     AuthFocus::OpsDropdown => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" run  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" run  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     AuthFocus::InputToken => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[type/paste]", Style::default().fg(bc)),
-                        Span::styled(" token  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" token  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" save  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     AuthFocus::ConfirmRemove => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[y]", Style::default().fg(bc)),
-                        Span::styled(" remove  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" remove  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[n/Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     AuthFocus::OauthFlow => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" cancel  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" cancel  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("any-key", Style::default().fg(bc)),
-                        Span::styled(" close (when done)", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close (when done)", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     AuthFocus::List => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" select  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" ops  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" sidebar", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" sidebar", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
@@ -1574,39 +1574,39 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     | PlatformFocus::FilterDropdown => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" navigate  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" apply  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" apply  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" close", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     // Inside the job log scrollback.
                     PlatformFocus::JobLog => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                        Span::styled(" scroll  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" scroll  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[End]", Style::default().fg(bc)),
-                        Span::styled(" follow  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" follow  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[p]", Style::default().fg(bc)),
-                        Span::styled(" live  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" live  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" pager  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" pager  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" back", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" back", Style::default().fg(theme::INK_FAINT)),
                     ]),
                     // Browsing a sub-tab list.
                     PlatformFocus::List | PlatformFocus::JobsOfPipeline => Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[o]", Style::default().fg(bc)),
-                        Span::styled(" ops  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" ops  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[f]", Style::default().fg(bc)),
-                        Span::styled(" filter  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[r]", Style::default().fg(bc)),
-                        Span::styled(" remote  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" remote  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[p]", Style::default().fg(bc)),
-                        Span::styled(" live  ", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" live  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" drill", Style::default().fg(C_SUBTLE)),
+                        Span::styled(" drill", Style::default().fg(theme::INK_FAINT)),
                     ]),
                 }
             }
