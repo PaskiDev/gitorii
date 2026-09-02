@@ -1828,7 +1828,13 @@ mod tests {
     /// grid looked like before the views tied themselves into the chrome.
     /// The views converted to the window chrome so far. A view joins this
     /// list when it stops drawing its own boxes.
-    const CONVERTED: [View; 4] = [View::Dashboard, View::Log, View::Branch, View::Commit];
+    const CONVERTED: [View; 5] = [
+        View::Dashboard,
+        View::Log,
+        View::Branch,
+        View::Commit,
+        View::Sync,
+    ];
 
     #[test]
     fn rules_never_cross_without_a_junction() {
