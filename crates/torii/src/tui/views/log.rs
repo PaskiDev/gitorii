@@ -1,25 +1,41 @@
+//! The log view: what happened, and what each commit touched.
+//!
+//! Two panes parted by a rule rather than two boxes, which hands the graph and
+//! the message the columns those borders were holding.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
 use super::super::ui::{C_CYAN, C_DIM, C_GREEN, C_RED, C_SUBTLE, C_WHITE, C_YELLOW};
 use crate::tui::app::App;
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let bc = app.brand_color();
     let focused = !app.sidebar_focused;
 
-    let chunks = Layout::default()
+    let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
         .split(area);
 
+    // The commit list carries the rule; the files pane sits the other side of
+    // it, and the rule reaches up into whatever the chrome drew above.
+    let divider = theme::divider_right();
+    let list_pane = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    theme::tie_above(f, area, &[panes[0].right().saturating_sub(1)]);
+
+    // Each pane is a heading row and a body, the way a boxed title used to be
+    // a border and its inside.
+    let chunks = [heading_and_body(list_pane), heading_and_body(panes[1])];
+
     // ── Commit list ───────────────────────────────────────────────────────────
-    let inner_width = chunks[0].width.saturating_sub(4) as usize;
+    let inner_width = chunks[0][1].width.saturating_sub(4) as usize;
     let msg_width = inner_width.saturating_sub(32);
 
     let display_indices: Vec<usize> =
@@ -51,20 +67,19 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             let is_sel = i == app.log.idx;
             let style = if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
             };
-            let prefix = if is_sel { "█ " } else { "  " };
             let msg = truncate(&c.message, msg_width);
             let msg_color = if !app.log.search_query.is_empty() && !app.log.filtered.is_empty() {
-                C_GREEN
+                theme::OK
             } else {
-                C_WHITE
+                theme::INK_DIM
             };
 
-            let mut spans = vec![Span::styled(prefix, Style::default().fg(bc))];
+            let mut spans = vec![theme::caret(app, is_sel)];
             if graph_on {
                 let row = app.log.graph_rows.get(i);
                 let glyphs = row.map(|r| r.commit_line.as_str()).unwrap_or("");
@@ -106,19 +121,19 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             }
             spans.push(Span::styled(
                 format!("{} ", c.hash),
-                Style::default().fg(C_YELLOW),
+                Style::default().fg(theme::WARN),
             ));
             spans.push(Span::styled(
                 format!("{:<width$}", msg, width = msg_width),
-                Style::default().fg(if is_sel { C_WHITE } else { msg_color }),
+                Style::default().fg(if is_sel { theme::INK } else { msg_color }),
             ));
             spans.push(Span::styled(
                 format!(" {:>10}", truncate(&c.author, 10)),
-                Style::default().fg(C_CYAN),
+                Style::default().fg(theme::INK_FAINT),
             ));
             spans.push(Span::styled(
                 format!(" {}", c.time),
-                Style::default().fg(C_DIM),
+                Style::default().fg(theme::INK_FAINT),
             ));
 
             ListItem::new(Line::from(spans)).style(style)
@@ -132,56 +147,58 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let total = app.commits.len();
-    let loaded_hint = if app.log.all_loaded {
-        String::new()
-    } else {
-        "  ↓ more".to_string()
-    };
-    let title = if app.log.search_mode {
-        format!(" log — search: {}█ ", app.log.search_query)
+
+    // The heading says what the pane holds, and — while searching — what it is
+    // filtered to. The search itself is the one thing here worth the accent.
+    let heading: Vec<Span> = if app.log.search_mode {
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(theme::panel_title("search", None, true));
+        spans.push(Span::styled(
+            format!("  {}", app.log.search_query),
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled("█", Style::default().fg(theme::accent(app))));
+        spans
     } else if !app.log.search_query.is_empty() {
-        format!(
-            " log — \"{}\"  {} matches ",
-            app.log.search_query,
-            display_indices.len()
-        )
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(theme::panel_title(
+            "log",
+            Some(display_indices.len()),
+            focused,
+        ));
+        spans.push(Span::styled(
+            format!("  matching \"{}\"", app.log.search_query),
+            Style::default().fg(theme::INK_FAINT),
+        ));
+        spans
     } else {
-        format!(" log — {} ({} commits){} ", app.branch, total, loaded_hint)
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(theme::panel_title("log", Some(total), focused));
+        spans.push(Span::styled(
+            format!("  {}", app.branch),
+            Style::default().fg(theme::INK_FAINT),
+        ));
+        if !app.log.all_loaded {
+            spans.push(Span::styled(
+                "  ↓ more",
+                Style::default().fg(theme::INK_FAINT),
+            ));
+        }
+        spans
     };
+    f.render_widget(Paragraph::new(Line::from(heading)), chunks[0][0]);
 
-    let title_color = if app.log.search_mode {
-        C_YELLOW
-    } else if focused {
-        C_WHITE
-    } else {
-        bc
-    };
-
-    let list_block = Block::default()
-        .title(Span::styled(
-            title,
-            Style::default()
-                .fg(title_color)
-                .add_modifier(if focused || app.log.search_mode {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if focused {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_stateful_widget(List::new(items).block(list_block), chunks[0], &mut state);
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        chunks[0][1],
+        &mut state,
+    );
 
     // ── Files panel ───────────────────────────────────────────────────────────
     let file_items: Vec<ListItem> = if app.log.commit_files.is_empty() {
         vec![ListItem::new(Span::styled(
-            "  no changes",
-            Style::default().fg(C_DIM),
+            "no changes",
+            Style::default().fg(theme::INK_FAINT),
         ))]
     } else {
         app.log
@@ -189,10 +206,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .iter()
             .map(|f| {
                 let (status_str, status_color) = match f.status {
-                    'A' => ("+ ", C_GREEN),
-                    'D' => ("- ", C_RED),
-                    'R' => ("→ ", C_CYAN),
-                    _ => ("~ ", C_YELLOW),
+                    'A' => ("+ ", theme::OK),
+                    'D' => ("- ", theme::BAD),
+                    'R' => ("→ ", theme::INK_DIM),
+                    _ => ("~ ", theme::WARN),
                 };
                 ListItem::new(Line::from(vec![
                     Span::styled(
@@ -201,25 +218,31 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                             .fg(status_color)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(file_basename(&f.path), Style::default().fg(C_WHITE)),
-                    Span::styled(file_dir(&f.path), Style::default().fg(C_DIM)),
+                    Span::styled(file_basename(&f.path), Style::default().fg(theme::INK_DIM)),
+                    Span::styled(file_dir(&f.path), Style::default().fg(theme::INK_FAINT)),
                 ]))
             })
             .collect()
     };
 
-    let commit_info = app
-        .commits
-        .get(app.log.idx)
-        .map(|c| format!(" {} — {} files ", &c.hash, app.log.commit_files.len()))
-        .unwrap_or_default();
+    let mut files_heading = vec![Span::raw(" ")];
+    files_heading.extend(theme::panel_title(
+        "files",
+        Some(app.log.commit_files.len()),
+        false,
+    ));
+    if let Some(c) = app.commits.get(app.log.idx) {
+        files_heading.push(Span::styled(
+            format!("  {}", c.hash),
+            Style::default().fg(theme::INK_FAINT),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(files_heading)), chunks[1][0]);
 
-    let files_block = Block::default()
-        .title(Span::styled(commit_info, Style::default().fg(bc)))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
-    f.render_widget(List::new(file_items).block(files_block), chunks[1]);
+    f.render_widget(
+        List::new(file_items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        chunks[1][1],
+    );
 
     // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.log.ops_mode {
@@ -227,13 +250,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let dropdown_w: u16 = 50;
         let dropdown_h: u16 = ops.len() as u16 + 2;
         let sel_display_pos = sel_pos.unwrap_or(0);
-        let entry_y = chunks[0].y + 1 + sel_display_pos as u16 + 1;
-        let drop_y = if entry_y + dropdown_h < chunks[0].y + chunks[0].height {
+        let list = chunks[0][1];
+        let entry_y = list.y + sel_display_pos as u16 + 1;
+        let drop_y = if entry_y + dropdown_h < list.y + list.height {
             entry_y
         } else {
-            chunks[0].y + chunks[0].height.saturating_sub(dropdown_h)
+            list.y + list.height.saturating_sub(dropdown_h)
         };
-        let drop_area = Rect::new(chunks[0].x + 3, drop_y, dropdown_w, dropdown_h);
+        let drop_area = Rect::new(list.x + 3, drop_y, dropdown_w, dropdown_h);
 
         let drop_items: Vec<ListItem> = ops
             .iter()
@@ -241,24 +265,23 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .map(|(i, (label, desc, danger))| {
                 let is_sel = i == app.log.ops_idx;
                 let color = if *danger {
-                    C_RED
+                    theme::BAD
                 } else if is_sel {
-                    C_WHITE
+                    theme::INK
                 } else {
-                    C_SUBTLE
+                    theme::INK_DIM
                 };
-                let prefix = if is_sel { "▶ " } else { "  " };
                 let style = if is_sel {
                     Style::default()
-                        .bg(app.selected_bg())
+                        .bg(theme::selection(app))
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(bc)),
+                    theme::caret(app, is_sel),
                     Span::styled(format!("{:<18}", label), Style::default().fg(color)),
-                    Span::styled(*desc, Style::default().fg(C_DIM)),
+                    Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
                 ]))
                 .style(style)
             })
@@ -270,11 +293,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let drop_block = Block::default()
             .title(Span::styled(
                 " ops — Enter run · Esc close ",
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
             ))
             .borders(Borders::ALL)
             .border_type(app.border_type())
-            .border_style(Style::default().fg(C_WHITE));
+            .border_style(Style::default().fg(theme::RULE));
 
         f.render_widget(Clear, drop_area);
         f.render_stateful_widget(
@@ -413,6 +436,16 @@ pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
         ("scan history", "find secrets across every commit", false),
         ("compact", "gc + reflog expire (recovers space)", false),
     ]
+}
+
+/// Split a pane into its heading row and the body below it — the shape a
+/// boxed title used to give for free.
+fn heading_and_body(area: Rect) -> [Rect; 2] {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    [rows[0], rows[1]]
 }
 
 fn file_basename(path: &str) -> String {
