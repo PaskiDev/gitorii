@@ -1,115 +1,126 @@
+//! The commit view: what is staged, what kind of change it is, and the message.
+//!
+//! Three sections parted by rules rather than three stacked boxes. Where a
+//! border used to change colour to say which section had the focus, the
+//! heading now carries it.
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, List, ListItem, Padding, Paragraph},
     Frame,
 };
 
-use super::super::ui::{C_DIM, C_GREEN, C_SUBTLE, C_WHITE};
 use crate::tui::app::{App, CommitFocus};
 use crate::tui::events::COMMIT_TYPES;
+use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
-    let in_list = app.commit_view.focus == CommitFocus::List;
-    let in_selector = app.commit_view.focus == CommitFocus::TypeSelector;
-    let in_input = app.commit_view.focus == CommitFocus::Input;
+    let focused = !app.sidebar_focused;
+    let in_list = focused && app.commit_view.focus == CommitFocus::List;
+    let in_selector = focused && app.commit_view.focus == CommitFocus::TypeSelector;
+    let in_input = focused && app.commit_view.focus == CommitFocus::Input;
 
-    let chunks = Layout::default()
+    // staged | rule | type | rule | message. Each section is a heading row and
+    // a body, which is what a boxed title was giving for free.
+    let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Min(1),
-            Constraint::Length(COMMIT_TYPES.len() as u16 + 2),
-            Constraint::Length(3),
+            Constraint::Min(2),
+            Constraint::Length(1),
+            Constraint::Length(COMMIT_TYPES.len() as u16 + 1),
+            Constraint::Length(1),
+            Constraint::Length(2),
         ])
         .split(area);
 
-    let bc = app.brand_color();
+    render_staged(f, app, rows[0], in_list);
+    theme::hrule_content(f, rows[1], &[]);
+    render_types(f, app, rows[2], in_selector);
+    theme::hrule_content(f, rows[3], &[]);
+    render_message(f, app, rows[4], in_input);
+}
 
-    // ── Staged files ──────────────────────────────────────────────────────────
-    let staged_items: Vec<ListItem> = if app.staged.is_empty() {
+fn render_staged(f: &mut Frame, app: &App, area: Rect, active: bool) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("staged", Some(app.staged.len()), active));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let items: Vec<ListItem> = if app.staged.is_empty() {
         vec![ListItem::new(Span::styled(
-            "  no staged files — use [space] on files view to stage",
-            Style::default().fg(C_DIM),
+            "no staged files — press space on the files view to stage one",
+            Style::default().fg(theme::INK_FAINT),
         ))]
     } else {
         app.staged
             .iter()
             .map(|e| {
                 ListItem::new(Line::from(vec![
-                    Span::styled("  + ", Style::default().fg(C_GREEN)),
-                    Span::styled(&e.path, Style::default().fg(C_WHITE)),
+                    Span::styled("+ ", Style::default().fg(theme::OK)),
+                    Span::styled(&e.path, Style::default().fg(theme::INK_DIM)),
                 ]))
             })
             .collect()
     };
 
-    let staged_block = Block::default()
-        .title(Span::styled(
-            format!(" staged ({}) ", app.staged.len()),
-            if in_list {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if in_list {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_widget(List::new(staged_items).block(staged_block), chunks[0]);
+    f.render_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+    );
+}
 
-    // ── Type selector ─────────────────────────────────────────────────────────
-    let type_items: Vec<ListItem> = COMMIT_TYPES
+fn render_types(f: &mut Frame, app: &App, area: Rect, active: bool) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("type", None, active));
+    heading.push(Span::raw("  "));
+    heading.extend(theme::key_hint(app, "i", "skip"));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let items: Vec<ListItem> = COMMIT_TYPES
         .iter()
         .enumerate()
         .map(|(i, (prefix, desc))| {
-            let is_sel = in_selector && i == app.commit_view.type_idx;
-            let prefix_color = if is_sel { bc } else { C_SUBTLE };
-            let desc_color = if is_sel { C_WHITE } else { C_DIM };
-            let indicator = if is_sel { "▶ " } else { "  " };
+            let is_sel = active && i == app.commit_view.type_idx;
             ListItem::new(Line::from(vec![
-                Span::styled(indicator, Style::default().fg(bc)),
+                theme::caret(app, is_sel),
                 Span::styled(
                     format!("{:<10}", prefix),
-                    Style::default().fg(prefix_color).add_modifier(if is_sel {
-                        Modifier::BOLD
-                    } else {
-                        Modifier::empty()
-                    }),
+                    Style::default()
+                        .fg(if is_sel { theme::INK } else { theme::INK_DIM })
+                        .add_modifier(if is_sel {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        }),
                 ),
-                Span::styled(*desc, Style::default().fg(desc_color)),
+                Span::styled(*desc, Style::default().fg(theme::INK_FAINT)),
             ]))
             .style(if is_sel {
-                Style::default().bg(app.selected_bg())
+                Style::default().bg(theme::selection(app))
             } else {
                 Style::default()
             })
         })
         .collect();
 
-    let type_block = Block::default()
-        .title(Span::styled(
-            " type  [i] skip ",
-            if in_selector {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if in_selector {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_widget(List::new(type_items).block(type_block), chunks[1]);
+    f.render_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+    );
+}
 
-    // ── Message input ─────────────────────────────────────────────────────────
+fn render_message(f: &mut Frame, app: &App, area: Rect, active: bool) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("message", None, active));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
     let msg = &app.commit_view.message;
     let cursor = app.commit_view.cursor;
     let (before, after) = msg.split_at(cursor.min(msg.len()));
@@ -120,41 +131,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         &after[cursor_char.len_utf8()..]
     };
 
-    let input_line = if in_input {
+    let line = if active {
         Line::from(vec![
-            Span::raw(" "),
-            Span::styled(before, Style::default().fg(C_WHITE)),
+            Span::raw("  "),
+            Span::styled(before, Style::default().fg(theme::INK)),
             Span::styled(
                 cursor_char.to_string(),
                 Style::default()
-                    .bg(app.selected_bg())
-                    .fg(C_WHITE)
+                    .bg(theme::selection(app))
+                    .fg(theme::INK)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(after_cursor, Style::default().fg(C_WHITE)),
+            Span::styled(after_cursor, Style::default().fg(theme::INK)),
         ])
     } else {
         Line::from(vec![
-            Span::raw(" "),
-            Span::styled(msg.as_str(), Style::default().fg(C_DIM)),
+            Span::raw("  "),
+            Span::styled(msg.as_str(), Style::default().fg(theme::INK_DIM)),
         ])
     };
 
-    let msg_block = Block::default()
-        .title(Span::styled(
-            " message ",
-            if in_input {
-                Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(bc)
-            },
-        ))
-        .borders(Borders::ALL)
-        .border_type(app.border_type())
-        .border_style(if in_input {
-            Style::default().fg(C_WHITE)
-        } else {
-            Style::default().fg(bc)
-        });
-    f.render_widget(Paragraph::new(input_line).block(msg_block), chunks[2]);
+    f.render_widget(Paragraph::new(line), body);
 }
