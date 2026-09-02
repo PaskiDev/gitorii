@@ -26,6 +26,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         .split(area);
 
     let spines = render_files(f, app, rows[0]);
+    // The columns have to meet the chrome at both ends: the header rule above,
+    // which was drawn before this view existed, and the rule below.
+    theme::tie_above(f, rows[0], &spines);
     let ticks: Vec<(u16, Tick)> = spines.into_iter().map(|x| (x, Tick::Up)).collect();
     theme::hrule_content(f, rows[1], &ticks);
     render_log(f, app, rows[2]);

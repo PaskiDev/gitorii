@@ -108,11 +108,43 @@ pub fn hrule(f: &mut Frame, area: Rect, ticks: &[(u16, Tick)]) {
     put(f, area.right(), area.y, "┤", style);
 
     for (x, tick) in ticks {
-        let glyph = match tick {
-            Tick::Down => "┬",
-            Tick::Up => "┴",
-        };
-        put(f, *x, area.y, glyph, style);
+        tie(f, *x, area.y, *tick);
+    }
+}
+
+/// Mark that a vertical rule meets an already-drawn horizontal one at
+/// `(x, y)`, and pick the glyph from what is there.
+///
+/// The chrome draws its rules before a view draws its columns, so a view's
+/// column rule would otherwise start out of thin air just below the header
+/// rule. It calls this to reach back up one row and cut the tee. A rule met
+/// from both sides becomes a cross; anything that is not a rule is left
+/// alone, so this can never scribble over text.
+pub fn tie(f: &mut Frame, x: u16, y: u16, tick: Tick) {
+    let existing = f
+        .buffer_mut()
+        .cell((x, y))
+        .map(|c| c.symbol().to_string())
+        .unwrap_or_default();
+    let glyph = match (existing.as_str(), tick) {
+        ("─", Tick::Down) => "┬",
+        ("─", Tick::Up) => "┴",
+        ("┬", Tick::Up) | ("┴", Tick::Down) | ("┼", _) => "┼",
+        ("┬", Tick::Down) => "┬",
+        ("┴", Tick::Up) => "┴",
+        _ => return,
+    };
+    put(f, x, y, glyph, Style::default().fg(RULE));
+}
+
+/// Tie a view's column rules into whatever rule sits directly above its
+/// content, so the columns start from the chrome instead of beside it.
+pub fn tie_above(f: &mut Frame, area: Rect, xs: &[u16]) {
+    let Some(y) = area.y.checked_sub(1) else {
+        return;
+    };
+    for x in xs {
+        tie(f, *x, y, Tick::Down);
     }
 }
 
