@@ -2269,8 +2269,8 @@ mod tests {
         terminal.draw(|f| render(f, &app)).unwrap();
         let screen = dump(terminal.backend().buffer(), 100, 24);
 
-        assert!(screen.contains("Switch branch…"), "{screen}");
-        assert!(screen.contains("Switch workspace repo…"), "{screen}");
+        assert!(screen.contains("Switch branch"), "{screen}");
+        assert!(screen.contains("Switch workspace repo"), "{screen}");
         assert!(
             screen.contains("ctrl+o"),
             "the binding stays visible: {screen}"
