@@ -85,18 +85,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
             let mut spans = vec![theme::caret(app, is_sel)];
             if graph_on {
-                let row = app.log.graph_rows.get(i);
-                let glyphs = row.map(|r| r.commit_line.as_str()).unwrap_or("");
-                let color = row
-                    .map(|r| ratatui::style::Color::Indexed(crate::graph::lane_color(r.lane)))
-                    .unwrap_or(theme::INK_DIM);
-                // Explicitly cancel BOLD here — the parent ListItem style applies
-                // BOLD when selected, but many monospace fonts ship narrower
-                // bullseye/half-circle glyphs in bold (or fall back to a thinner
-                // proxy), making the selected commit glyph visibly shrink.
+                let glyphs = app
+                    .log
+                    .graph_rows
+                    .get(i)
+                    .map(|r| r.commit_line.as_str())
+                    .unwrap_or("");
+                // The graph is structure, not decoration: lanes and nodes sit
+                // in the rule's grey, and the only accent on the screen stays
+                // the caret. The ten per-lane hues went with the boxes.
+                //
+                // Explicitly cancel BOLD — the parent ListItem style applies it
+                // when selected, and several monospace fonts ship a thinner
+                // proxy for these glyphs in bold, which makes the selected
+                // commit's node visibly shrink.
                 spans.push(Span::styled(
                     format!("{:<width$} ", glyphs, width = graph_width),
-                    Style::default().fg(color).remove_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::RULE)
+                        .remove_modifier(Modifier::BOLD),
                 ));
             }
             if app.log.show_signatures {
