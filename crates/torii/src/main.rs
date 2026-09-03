@@ -41,6 +41,7 @@ pub use cmd::describe;
 pub use cmd::fileops;
 pub use cmd::grep;
 pub use cmd::notes;
+pub use cmd::restore;
 pub use cmd::submodule;
 pub use cmd::subtree;
 pub use cmd::worktree;

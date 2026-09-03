@@ -519,6 +519,15 @@ pub(crate) fn remove(
     Ok(())
 }
 
+pub(crate) fn restore(paths: &[PathBuf], staged: &bool, no_snapshot: &bool) -> Result<()> {
+    let opts = crate::restore::Opts {
+        staged: *staged,
+        no_snapshot: *no_snapshot,
+    };
+    crate::restore::restore(std::path::Path::new("."), paths, &opts)?;
+    Ok(())
+}
+
 pub(crate) fn rename(from: &std::path::Path, to: &std::path::Path, force: &bool) -> Result<()> {
     let opts = crate::fileops::MvOpts { force: *force };
     crate::fileops::mv(std::path::Path::new("."), from, to, &opts)?;

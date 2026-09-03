@@ -61,6 +61,7 @@ use wrappers::{
   torii sync                            Pull and push
   torii sync main                       Integrate main into current branch
   torii diff --staged                   Review what will be committed
+  torii restore src/main.rs             Undo local edits to a tracked file
 
 Branch & history:
   torii branch feature/auth -c          Create and switch to branch
@@ -1105,6 +1106,26 @@ merge commit. Without it the full upstream graph is brought in.")]
         force: bool,
     },
 
+    /// Put a tracked file back the way it was — undo an edit, or unstage it.
+    #[command(after_help = "Examples:
+  torii restore src/main.rs               Throw away local edits (snapshot first)
+  torii restore --staged src/main.rs      Take it out of the next commit, keep the edit
+  torii restore src/ --no-snapshot        Skip the safety snapshot
+
+`remove` deletes a file, `clean` deletes untracked ones — this one puts a
+tracked file back. The snapshot it takes first is listed by `torii snapshot`.")]
+    Restore {
+        /// One or more tracked paths.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// Unstage instead: index back to HEAD, file on disk untouched.
+        #[arg(long)]
+        staged: bool,
+        /// Skip the safety snapshot taken before edits are discarded.
+        #[arg(long)]
+        no_snapshot: bool,
+    },
+
     /// Rename (or move) a tracked file/directory.
     #[command(
         alias = "mv",
@@ -1369,6 +1390,11 @@ impl Cli {
                 recursive,
                 force,
             } => wrappers::remove(paths, cached, recursive, force),
+            Commands::Restore {
+                paths,
+                staged,
+                no_snapshot,
+            } => wrappers::restore(paths, staged, no_snapshot),
             Commands::Rename { from, to, force } => wrappers::rename(from, to, force),
             Commands::Grep {
                 pattern,
