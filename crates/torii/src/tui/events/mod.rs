@@ -19,6 +19,7 @@ mod platform;
 mod pr;
 mod remote;
 mod snapshot;
+mod stats;
 mod submodule;
 mod tag;
 mod workspace;
@@ -37,6 +38,7 @@ use platform::*;
 use pr::*;
 use remote::*;
 use snapshot::*;
+use stats::*;
 use submodule::*;
 use tag::*;
 use workspace::*;
@@ -593,6 +595,7 @@ impl EventHandler {
                     View::Submodule => handle_submodule(key, app),
                     View::Bisect => handle_bisect(key, app),
                     View::Ignore => handle_ignore(key, app),
+                    View::Stats => handle_stats(key, app),
                     View::Auth => handle_auth(key, app),
                     // 0.7.12 — unified Platform view.
                     View::Platform => handle_platform(key, app),

@@ -335,6 +335,7 @@ fn view_for_action(id: &str) -> Option<View> {
         "goto:bisect" => View::Bisect,
         "goto:auth" => View::Auth,
         "goto:config" => View::Config,
+        "goto:stats" => View::Stats,
         _ => return None,
     })
 }

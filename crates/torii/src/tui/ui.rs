@@ -134,6 +134,11 @@ const TABS: &[Tab] = &[
         label: "config",
         view: View::Config,
     },
+    Tab {
+        key: "z",
+        label: "stats",
+        view: View::Stats,
+    },
 ];
 
 pub fn render(f: &mut Frame, app: &App) {
@@ -215,6 +220,7 @@ pub fn render(f: &mut Frame, app: &App) {
         // Config absorbs Settings via tabs since 0.7.2.
         View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
         View::Ignore => views::ignore::render(f, app, content_rows[0]),
+        View::Stats => views::stats::render(f, app, content_rows[0]),
         View::Diff | View::Help => {}
     }
 
@@ -1562,6 +1568,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
                 ]),
             },
+            View::Stats => Line::from(vec![
+                Span::raw(" "),
+                Span::styled("[1]", Style::default().fg(bc)),
+                Span::styled(" repo  ", Style::default().fg(theme::INK_FAINT)),
+                Span::styled("[2]", Style::default().fg(bc)),
+                Span::styled(" workspace  ", Style::default().fg(theme::INK_FAINT)),
+                Span::styled("[r]", Style::default().fg(bc)),
+                Span::styled(" measure again", Style::default().fg(theme::INK_FAINT)),
+            ]),
             View::Config if app.config_view.tab == crate::tui::app::ConfigTab::Keys => {
                 if app.config_view.capturing.is_some() {
                     Line::from(vec![
@@ -2248,6 +2263,33 @@ mod tests {
             }
             other => panic!("expected an rgb background, got {other:?}"),
         }
+    }
+
+    /// The stats screen, both modes, over this very repo.
+    #[test]
+    fn look_at_the_stats() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Stats);
+        app.sidebar_focused = false;
+        app.load_stats();
+        // The worker would normally answer a moment later; wait for it so the
+        // printed screen shows the finished thing.
+        for _ in 0..200 {
+            app.poll_stats_worker();
+            if app.stats_view.churn.is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 28)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        println!("{}", dump(terminal.backend().buffer(), 100, 28));
+
+        app.stats_view.mode = crate::tui::app::StatsMode::Workspace;
+        let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        println!("{}", dump(terminal.backend().buffer(), 100, 16));
     }
 
     /// Nothing in the keys screen may be cut: the action id is what has to be

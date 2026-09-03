@@ -19,6 +19,7 @@ mod remote;
 mod settings;
 mod shared;
 mod snapshot;
+mod stats;
 mod submodule;
 mod sync;
 mod tag;
@@ -42,6 +43,7 @@ pub use remote::*;
 pub use settings::*;
 pub use shared::*;
 pub use snapshot::*;
+pub use stats::*;
 pub use submodule::*;
 pub use sync::*;
 pub use tag::*;
@@ -84,6 +86,8 @@ pub enum View {
     Config,
     /// New in 0.14.1 — the `.toriignore` pair, as editable rules.
     Ignore,
+    /// New in 0.14.1 — what the repo, or the whole workspace, looks like.
+    Stats,
     /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
     #[allow(dead_code)]
     Settings,
@@ -144,6 +148,7 @@ pub struct App {
     pub issue_view: IssueState,
     pub config_view: ConfigState,
     pub ignore_view: IgnoreState,
+    pub stats_view: StatsState,
     /// User-defined keys, what is half-pressed of a sequence, and the palette.
     pub keymap: crate::tui::keys::Keymap,
     pub pending_chords: Vec<crate::tui::keys::Chord>,
@@ -235,6 +240,7 @@ impl App {
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
+            stats_view: StatsState::default(),
             keymap: crate::tui::keys::Keymap::load(),
             pending_chords: Vec::new(),
             palette: PaletteState::default(),
@@ -307,6 +313,7 @@ impl App {
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
+            stats_view: StatsState::default(),
             keymap: crate::tui::keys::Keymap::load(),
             pending_chords: Vec::new(),
             palette: PaletteState::default(),
@@ -381,13 +388,14 @@ impl App {
             15 => View::Bisect,
             16 => View::Auth,
             17 => View::Config,
+            18 => View::Stats,
             _ => View::Dashboard,
         }
     }
 
     /// Total entries in the sidebar — keep in sync with `view_for_idx`
     /// and TABS in ui.rs.
-    const SIDEBAR_LEN: usize = 18;
+    const SIDEBAR_LEN: usize = 19;
 
     pub fn sidebar_up(&mut self) {
         if self.sidebar_idx > 0 {
@@ -437,6 +445,7 @@ impl App {
             View::Issue => self.load_issues(),
             View::Config | View::Settings => self.load_config(),
             View::Ignore => self.load_ignore_rules(),
+            View::Stats => self.load_stats(),
             // 0.7.2: refresh the four new informative views on entry.
             View::Worktree => crate::tui::views::worktree::refresh(self),
             View::Submodule => crate::tui::views::submodule::refresh(self),
@@ -473,6 +482,7 @@ impl App {
             View::Auth => 16,
             View::Config => 17,
             View::Settings => 17, // fused into Config
+            View::Stats => 18,
             _ => self.sidebar_idx,
         };
         self.view = view;
@@ -505,6 +515,7 @@ impl App {
                 View::Auth => 16,
                 View::Config => 17,
                 View::Settings => 17, // fused into Config
+                View::Stats => 18,
                 _ => 0,
             };
             // If returning to a view with its own content, keep focus in the view
