@@ -1,0 +1,36 @@
+# llm-qa baseline for gitorii
+# Recorded 2026-08-14. Regenerate with: qa baseline --update
+#
+# This is the denominator, not a target. A pattern with a large count
+# here is either real debt or a pattern that does not fit this codebase —
+# decide which, and either fix the code or fix the pattern.
+
+files=193
+lines=59578
+score=2.9
+
+docker-apt-no-clean=1
+docker-curl-pipe-sh=1
+infra-latest-tag=1
+rs-allow=74
+rs-allow-crate=1
+rs-block-on=3
+rs-box-dyn-error=6
+rs-clone=424
+rs-env-var-default=9
+rs-expect=8
+rs-let-underscore=95
+rs-process-exit=1
+rs-rc-refcell=1
+rs-sleep=4
+rs-spawn-detached=1
+rs-to-owned=2
+rs-unreachable=1
+rs-unsafe=2
+rs-unwrap=11
+rs-unwrap-or-default=118
+u-force=8
+u-long-line=4
+u-no-verify=2
+u-secret-literal=1
+u-todo=2
