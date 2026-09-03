@@ -467,8 +467,8 @@ pub const ACTIONS: &[ActionDef] = &[
     // Things worth reaching from anywhere.
     def("repo:scan", "Scan for secrets", "repo"),
     def("repo:scan-history", "Scan the whole history", "repo"),
-    def("repo:switch-branch", "Switch branch…", "repo"),
-    def("repo:switch-repo", "Switch workspace repo…", "repo"),
+    def("repo:switch-branch", "Switch branch", "repo"),
+    def("repo:switch-repo", "Switch workspace repo", "repo"),
 ];
 
 const fn def(id: &'static str, label: &'static str, group: &'static str) -> ActionDef {
@@ -580,6 +580,20 @@ mod file_tests {
 
     /// Every action the config screen offers must be one the runtime knows;
     /// an id that drifts silently unbinds whatever the user had on it.
+    /// No label may end in an ellipsis. It was meant to say "this one opens a
+    /// picker", and it read as a truncated string instead — the one thing the
+    /// keys screen must never look like.
+    #[test]
+    fn no_label_looks_truncated() {
+        for action in ACTIONS {
+            assert!(
+                !action.label.ends_with('…') && !action.label.ends_with("..."),
+                "`{}` reads as cut off",
+                action.label
+            );
+        }
+    }
+
     #[test]
     fn the_catalogue_has_no_duplicate_ids() {
         let mut ids: Vec<&str> = ACTIONS.iter().map(|a| a.id).collect();
