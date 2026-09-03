@@ -2219,6 +2219,37 @@ mod tests {
             .join("\n")
     }
 
+    /// The selected row and the caret must be the same colour family: the
+    /// caret is the accent, so the row behind it is the accent washed down.
+    #[test]
+    fn the_selected_row_wears_the_accent() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Log);
+        app.sidebar_focused = false;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        // Find the caret cell, then read the background beside it.
+        let mut found = None;
+        for y in 0..24u16 {
+            for x in 0..100u16 {
+                let cell = buffer.cell((x, y)).unwrap();
+                if cell.symbol() == "›" && cell.fg == theme::accent(&app) {
+                    found = Some(buffer.cell((x + 2, y)).unwrap().bg);
+                }
+            }
+        }
+        let bg = found.expect("a selected row somewhere on screen");
+        match bg {
+            ratatui::style::Color::Rgb(r, g, b) => {
+                assert!(r > g && r > b, "the selection is red-ish: {r},{g},{b}");
+            }
+            other => panic!("expected an rgb background, got {other:?}"),
+        }
+    }
+
     /// Nothing in the keys screen may be cut: the action id is what has to be
     /// typed into `keys.toml`, and half an id is worse than none. Narrow
     /// terminals get a second line, not an ellipsis.
