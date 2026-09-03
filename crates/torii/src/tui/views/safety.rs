@@ -113,7 +113,11 @@ fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused:
     ));
     f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
+    // One entry per drawn line, so a click can be turned back into a rule:
+    // `None` where a group header sits, `Some(i)` where rule `i` does.
+    let mut lines: Vec<Option<usize>> = Vec::new();
     let items: Vec<ListItem> = if iv.rules.is_empty() {
+        lines.push(None);
         vec![ListItem::new(Span::styled(
             "no rules — press a to add one",
             Style::default().fg(theme::INK_FAINT),
@@ -131,6 +135,7 @@ fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused:
                         .fg(theme::INK_FAINT)
                         .add_modifier(Modifier::BOLD),
                 ))));
+                lines.push(None);
                 last_kind = Some(rule.kind);
             }
             let is_sel = active && i == iv.idx;
@@ -154,6 +159,7 @@ fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused:
                     Style::default()
                 }),
             );
+            lines.push(Some(i));
         }
         items
     };
@@ -168,6 +174,12 @@ fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused:
         body,
         &mut state,
     );
+
+    // Registered after drawing, reading the offset the list settled on:
+    // guessing the scroll sends the click to the wrong rule.
+    app.hits
+        .borrow_mut()
+        .lines(body, "safety.rules", state.offset(), &lines);
 }
 
 /// What the scanner is made of, and what it enforces.

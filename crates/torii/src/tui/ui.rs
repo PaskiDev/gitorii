@@ -2610,6 +2610,18 @@ mod tests {
             let mut app = App::new().expect("a repository to look at");
             app.go_to(view.clone());
             app.sidebar_focused = false;
+            if *view == View::Safety {
+                // The rules list is empty in a repo with no .toriignore, and
+                // an empty list has nothing to register.
+                app.ignore_view.rules = vec![crate::ignore_rules::Rule {
+                    origin: crate::ignore_rules::Origin::Public,
+                    kind: crate::ignore_rules::Kind::Path,
+                    line_no: 1,
+                    raw: "build/".into(),
+                    pattern: "build/".into(),
+                    name: None,
+                }];
+            }
 
             let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
             terminal.draw(|f| render(f, &app)).unwrap();
