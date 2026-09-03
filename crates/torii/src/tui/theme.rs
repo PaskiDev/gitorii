@@ -301,6 +301,40 @@ pub fn unbracket(span: Span<'_>) -> Span<'_> {
     Span::styled(format!("{}{} ", " ".repeat(lead), inner), style)
 }
 
+/// Split a value into pieces that fit `width`.
+///
+/// A list row that runs past its pane is clipped by the widget, and a clipped
+/// value is worse than a wrapped one: half an address is not an address, and
+/// half a rule name names nothing. Breaks where the text reads well — after
+/// an `@`, after a dot, at a space — and only cuts mid-token when there is
+/// nowhere else to break.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    if width == 0 || text.chars().count() <= width {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut rest: Vec<char> = text.chars().collect();
+    while rest.len() > width {
+        let take = ['@', '.', ' ', '-', '/']
+            .iter()
+            .find_map(|sep| rest[..width].iter().rposition(|c| c == sep))
+            .map(|i| i + 1)
+            .unwrap_or(width);
+        out.push(
+            rest[..take]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        );
+        rest = rest.split_off(take);
+    }
+    if !rest.is_empty() {
+        out.push(rest.into_iter().collect());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +351,31 @@ mod tests {
             }
             other => panic!("expected rgb, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_value_that_fits_is_left_alone() {
+        assert_eq!(wrap("clean", 20), vec!["clean"]);
+    }
+
+    /// An address breaks where a reader expects it to, not mid-token.
+    #[test]
+    fn an_address_breaks_at_a_boundary() {
+        let parts = wrap("someone.with.a.long.address@example.com", 24);
+        assert!(parts.len() > 1, "{parts:?}");
+        assert!(
+            parts.iter().all(|p| p.chars().count() <= 24),
+            "every piece fits: {parts:?}"
+        );
+        assert_eq!(parts.concat(), "someone.with.a.long.address@example.com");
+    }
+
+    /// A word with nowhere to break is carried over rather than clipped.
+    #[test]
+    fn an_unbreakable_word_is_carried_over() {
+        let parts = wrap(&"x".repeat(30), 10);
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts.concat(), "x".repeat(30));
     }
 
     /// A user who picked their own accent gets a selection that matches it.

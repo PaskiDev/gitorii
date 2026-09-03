@@ -1,9 +1,10 @@
-//! The ignore view: the `.toriignore` pair as rules you can read and change.
+//! The safety view: what keeps a secret out of this repo.
 //!
-//! Two panes parted by a rule. The left one lists every rule from both files,
-//! grouped by kind; the right one says what the selected rule is and, above
-//! all, **which file it lives in** — the difference between a rule everyone
-//! with the repo can read and one that never leaves this machine.
+//! Two tabs. **Rules** is the `.toriignore` pair, editable, with each rule
+//! showing which of the two files it lives in — the difference between a rule
+//! everyone with the repo can read and one that never leaves this machine.
+//! **Scanner** is what reads those rules: the built-in patterns, the size
+//! gate, and the hooks that run around a save.
 
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -14,10 +15,63 @@ use ratatui::{
 };
 
 use crate::ignore_rules::{Kind, Origin};
-use crate::tui::app::{App, IgnoreFocus};
+use crate::tui::app::{App, IgnoreFocus, SafetyTab};
 use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(area);
+
+    render_tab_strip(f, app, rows[0]);
+    match app.ignore_view.tab {
+        SafetyTab::Rules => {
+            render_rules_tab(f, app, rows[1], rows[2]);
+        }
+        SafetyTab::Scanner => {
+            theme::hrule_content(f, rows[1], &[]);
+            render_scanner(f, app, rows[2]);
+        }
+    }
+
+    match app.ignore_view.focus {
+        IgnoreFocus::Input => render_input(f, app, area),
+        IgnoreFocus::ConfirmDelete => render_confirm(f, app, area),
+        IgnoreFocus::List => {}
+    }
+}
+
+fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
+    let focused = !app.sidebar_focused;
+    let tab = app.ignore_view.tab;
+    let style = |mine: SafetyTab| {
+        if tab == mine && focused {
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD)
+        } else if tab == mine {
+            Style::default()
+                .fg(theme::INK_DIM)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::INK_FAINT)
+        }
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("1 rules", style(SafetyTab::Rules)),
+            Span::styled(" · ", Style::default().fg(theme::RULE)),
+            Span::styled("2 scanner", style(SafetyTab::Scanner)),
+        ])),
+        area,
+    );
+}
+
+fn render_rules_tab(f: &mut Frame, app: &App, rule_row: Rect, area: Rect) {
     let focused = !app.sidebar_focused;
 
     let panes = Layout::default()
@@ -28,21 +82,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let divider = theme::divider_right();
     let list_pane = divider.inner(panes[0]);
     f.render_widget(divider, panes[0]);
-    let spine = [panes[0].right().saturating_sub(1)];
-    theme::tie_above(f, area, &spine);
-    theme::tie_below(f, area, &spine);
+    let spine = panes[0].right().saturating_sub(1);
+    theme::hrule_content(f, rule_row, &[(spine, theme::Tick::Down)]);
+    theme::tie_below(f, area, &[spine]);
 
     let [list_heading, list_body] = theme::heading_and_body(list_pane);
     let [detail_heading, detail_body] = theme::heading_and_body(panes[1]);
 
     render_list(f, app, list_heading, list_body, focused);
     render_detail(f, app, detail_heading, detail_body);
-
-    match app.ignore_view.focus {
-        IgnoreFocus::Input => render_input(f, app, area),
-        IgnoreFocus::ConfirmDelete => render_confirm(f, app, area),
-        IgnoreFocus::List => {}
-    }
 }
 
 fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused: bool) {
@@ -119,6 +167,240 @@ fn render_list(f: &mut Frame, app: &App, heading_row: Rect, body: Rect, focused:
         body,
         &mut state,
     );
+}
+
+/// What the scanner is made of, and what it enforces.
+///
+/// The left column is the machinery — built-in patterns and the user's own
+/// deny rules — and the right one is everything else the same two files
+/// control: the size gate and the hooks that run around a save. Nothing here
+/// is decoration: every line changes whether a `torii save` goes through.
+fn render_scanner(f: &mut Frame, app: &App, area: Rect) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+        .split(area);
+
+    let divider = theme::divider_right();
+    let left = divider.inner(panes[0]);
+    f.render_widget(divider, panes[0]);
+    let spine = panes[0].right().saturating_sub(1);
+    theme::tie_above(f, area, &[spine]);
+    theme::tie_below(f, area, &[spine]);
+
+    render_patterns(f, app, left);
+    render_enforcement(f, app, panes[1]);
+}
+
+fn render_patterns(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+    let builtin = crate::scanner::builtin_pattern_names();
+    let own: Vec<&crate::ignore_rules::Rule> = app
+        .ignore_view
+        .rules
+        .iter()
+        .filter(|r| r.kind == Kind::Secret)
+        .collect();
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title(
+        "patterns",
+        Some(builtin.len() + own.len()),
+        !app.sidebar_focused,
+    ));
+    heading.push(Span::styled(
+        format!("  {} built in · {} yours", builtin.len(), own.len()),
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let mut items: Vec<ListItem> = Vec::new();
+    // The user's own rules first: they are the ones that can be wrong, and
+    // the ones the rules tab can change.
+    if !own.is_empty() {
+        items.push(group("yours — edit them in the rules tab"));
+        for rule in &own {
+            items.push(ListItem::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    rule.name.clone().unwrap_or_else(|| rule.pattern.clone()),
+                    Style::default().fg(theme::INK),
+                ),
+                Span::styled(
+                    format!("  {}", rule.origin.label()),
+                    Style::default().fg(if rule.origin == Origin::Local {
+                        theme::WARN
+                    } else {
+                        theme::INK_FAINT
+                    }),
+                ),
+            ])));
+        }
+    }
+    items.push(group("built in — always on"));
+    let room = (body.width as usize).saturating_sub(4);
+    for name in builtin {
+        items.push(ListItem::new(
+            theme::wrap(name, room.max(8))
+                .into_iter()
+                .map(|part| {
+                    Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(part, Style::default().fg(theme::INK_DIM)),
+                    ])
+                })
+                .collect::<Vec<_>>(),
+        ));
+    }
+
+    let mut state = ListState::default();
+    state.select(Some(app.ignore_view.scanner_idx));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
+}
+
+fn render_enforcement(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+    let iv = &app.ignore_view;
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("enforcement", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    // Values wrap under their label: `blocks and asks (--yes to override)`
+    // does not fit a narrow pane, and cutting it would hide the override.
+    let room = (body.width as usize).saturating_sub(11);
+    let field = move |label: &str, text: String, style: Style| -> Vec<Line<'static>> {
+        theme::wrap(&text, room.max(8))
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<9}", if i == 0 { label } else { "" }),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                    Span::styled(part, style),
+                ])
+            })
+            .collect()
+    };
+
+    let mut lines = vec![Line::from(Span::styled(
+        "when you save",
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    ))];
+    lines.extend(field(
+        "scan",
+        "every staged file, always".into(),
+        Style::default().fg(theme::OK),
+    ));
+    // The scanner blocks and asks; it does not decide for you. Saying so here
+    // is the difference between trusting it and being surprised by it.
+    lines.extend(field(
+        "on a hit",
+        "blocks and asks (--yes overrides)".into(),
+        Style::default().fg(theme::INK_DIM),
+    ));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "size gate",
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.extend(match iv.size.max_bytes {
+        Some(b) => field(
+            "block",
+            crate::stats::human_bytes(b),
+            Style::default().fg(theme::BAD),
+        ),
+        None => field(
+            "block",
+            "not set".into(),
+            Style::default().fg(theme::INK_FAINT),
+        ),
+    });
+    lines.extend(match iv.size.warn_bytes {
+        Some(b) => field(
+            "warn",
+            crate::stats::human_bytes(b),
+            Style::default().fg(theme::WARN),
+        ),
+        None => field(
+            "warn",
+            "not set".into(),
+            Style::default().fg(theme::INK_FAINT),
+        ),
+    });
+    if !iv.size.exclude.is_empty() {
+        lines.extend(field(
+            "except",
+            iv.size.exclude.join(" · "),
+            Style::default().fg(theme::INK_DIM),
+        ));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "hooks",
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    )));
+    let hooks = [
+        ("pre-save", &iv.hooks.pre_save),
+        ("post-save", &iv.hooks.post_save),
+        ("pre-sync", &iv.hooks.pre_sync),
+        ("post-sync", &iv.hooks.post_sync),
+    ];
+    let mut any_hook = false;
+    for (label, commands) in hooks {
+        for command in commands {
+            any_hook = true;
+            lines.extend(field(
+                label,
+                command.clone(),
+                Style::default().fg(theme::INK_DIM),
+            ));
+        }
+    }
+    if !any_hook {
+        lines.push(Line::from(Span::styled(
+            "  none",
+            Style::default().fg(theme::INK_FAINT),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "these live in the same two files;",
+        Style::default().fg(theme::INK_FAINT),
+    )));
+    lines.push(Line::from(Span::styled(
+        "edit with torii ignore or an editor",
+        Style::default().fg(theme::INK_FAINT),
+    )));
+
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+    );
+}
+
+/// A group header inside a list.
+fn group(label: &str) -> ListItem<'static> {
+    ListItem::new(Line::from(Span::styled(
+        label.to_string(),
+        Style::default()
+            .fg(theme::INK_FAINT)
+            .add_modifier(Modifier::BOLD),
+    )))
 }
 
 /// Where rule `idx` sits once the group headers are counted in.

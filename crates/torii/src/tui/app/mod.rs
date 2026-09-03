@@ -9,13 +9,13 @@ mod config;
 mod dashboard;
 mod diff;
 mod history;
-mod ignore;
 mod issue;
 mod keymap;
 mod log;
 mod platform;
 mod pr;
 mod remote;
+mod safety;
 mod settings;
 mod shared;
 mod snapshot;
@@ -33,13 +33,13 @@ pub use config::*;
 pub use dashboard::*;
 pub use diff::*;
 pub use history::*;
-pub use ignore::*;
 pub use issue::*;
 pub use keymap::*;
 pub use log::*;
 pub use platform::*;
 pub use pr::*;
 pub use remote::*;
+pub use safety::*;
 pub use settings::*;
 pub use shared::*;
 pub use snapshot::*;
@@ -84,8 +84,9 @@ pub enum View {
     /// packages across the active remote (and `--remote all` aggregations).
     Platform,
     Config,
-    /// New in 0.14.1 — the `.toriignore` pair, as editable rules.
-    Ignore,
+    /// New in 0.14.1 — what keeps secrets out of the repo: the `.toriignore`
+    /// pair, and the scanner that reads it.
+    Safety,
     /// New in 0.14.1 — what the repo, or the whole workspace, looks like.
     Stats,
     /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
@@ -375,7 +376,7 @@ impl App {
             2 => View::Commit,
             3 => View::Sync,
             4 => View::Snapshot,
-            5 => View::Ignore,
+            5 => View::Safety,
             6 => View::Log,
             7 => View::Branch,
             8 => View::Tag,
@@ -444,7 +445,7 @@ impl App {
             View::Pr => self.load_prs(),
             View::Issue => self.load_issues(),
             View::Config | View::Settings => self.load_config(),
-            View::Ignore => self.load_ignore_rules(),
+            View::Safety => self.load_safety(),
             View::Stats => self.load_stats(),
             // 0.7.2: refresh the four new informative views on entry.
             View::Worktree => crate::tui::views::worktree::refresh(self),
@@ -466,7 +467,7 @@ impl App {
             View::Commit => 2,
             View::Sync => 3,
             View::Snapshot => 4,
-            View::Ignore => 5,
+            View::Safety => 5,
             View::Log => 6,
             View::History => 6, // fused into Log
             View::Branch => 7,
@@ -499,7 +500,7 @@ impl App {
                 View::Commit => 2,
                 View::Sync => 3,
                 View::Snapshot => 4,
-                View::Ignore => 5,
+                View::Safety => 5,
                 View::Log => 6,
                 View::History => 6, // fused into Log
                 View::Branch => 7,

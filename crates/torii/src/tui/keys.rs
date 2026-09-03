@@ -443,7 +443,7 @@ pub const ACTIONS: &[ActionDef] = &[
     def("goto:save", "Save", "go"),
     def("goto:sync", "Sync", "go"),
     def("goto:snapshot", "Snapshot", "go"),
-    def("goto:ignore", "Ignore rules", "go"),
+    def("goto:safety", "Safety", "go"),
     def("goto:log", "Log", "go"),
     def("goto:branch", "Branches", "go"),
     def("goto:tag", "Tags", "go"),
