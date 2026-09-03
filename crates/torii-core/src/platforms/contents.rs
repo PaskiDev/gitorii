@@ -93,7 +93,11 @@ fn parse_github_tree(json: &serde_json::Value) -> Result<Vec<TreeEntry>> {
         }
         out.push(TreeEntry {
             path: path.to_string(),
-            kind: e.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            kind: e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
             size: e.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
         });
     }
@@ -126,7 +130,9 @@ fn pct_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 2);
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -148,7 +154,11 @@ fn parse_gitlab_tree(json: &serde_json::Value) -> Vec<TreeEntry> {
                     }
                     Some(TreeEntry {
                         path: path.to_string(),
-                        kind: e.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                        kind: e
+                            .get("type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         size: 0, // GitLab's tree listing carries no size
                     })
                 })
@@ -230,7 +240,11 @@ mod tests {
         assert_eq!(entries.len(), 3);
         assert_eq!(
             entries[1],
-            TreeEntry { path: "src/en.json".into(), kind: "blob".into(), size: 128 }
+            TreeEntry {
+                path: "src/en.json".into(),
+                kind: "blob".into(),
+                size: 128
+            }
         );
         // A tree entry with no size defaults to 0.
         assert_eq!(entries[0].kind, "tree");
@@ -258,6 +272,13 @@ mod tests {
         ]);
         let entries = parse_gitlab_tree(&json);
         assert_eq!(entries.len(), 2);
-        assert_eq!(entries[1], TreeEntry { path: "src/en.json".into(), kind: "blob".into(), size: 0 });
+        assert_eq!(
+            entries[1],
+            TreeEntry {
+                path: "src/en.json".into(),
+                kind: "blob".into(),
+                size: 0
+            }
+        );
     }
 }

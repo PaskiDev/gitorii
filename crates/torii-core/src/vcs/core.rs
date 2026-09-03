@@ -147,11 +147,7 @@ impl GitRepo {
                 .unwrap_or_else(|| trimmed_path.is_dir());
 
             if is_dir || as_str.ends_with('/') {
-                index.add_all(
-                    [trimmed].iter(),
-                    git2::IndexAddOption::DEFAULT,
-                    None,
-                )?;
+                index.add_all([trimmed].iter(), git2::IndexAddOption::DEFAULT, None)?;
             } else {
                 index.add_path(trimmed_path)?;
             }
@@ -228,8 +224,8 @@ impl GitRepo {
         if in_merge {
             // git2 (esta versión) no expone merge_head_foreach: MERGE_HEAD es
             // un archivo con un OID por línea (varios en un octopus merge).
-            let contents = std::fs::read_to_string(self.repo.path().join("MERGE_HEAD"))
-                .unwrap_or_default();
+            let contents =
+                std::fs::read_to_string(self.repo.path().join("MERGE_HEAD")).unwrap_or_default();
             for line in contents.lines() {
                 let Ok(oid) = git2::Oid::from_str(line.trim()) else {
                     continue;

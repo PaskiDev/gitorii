@@ -82,7 +82,11 @@ fn normalize_message(msg: &str) -> String {
 }
 
 /// Rewrite commit messages for the given `(hash, message)` entries.
-pub fn reword(repo_path: &Path, entries: &[(String, String)], opts: &RewordOptions) -> Result<Stats> {
+pub fn reword(
+    repo_path: &Path,
+    entries: &[(String, String)],
+    opts: &RewordOptions,
+) -> Result<Stats> {
     let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
 
     pre_flight(&repo, opts.allow_dirty)?;

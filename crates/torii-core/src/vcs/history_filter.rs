@@ -220,17 +220,23 @@ pub fn print_summary(stats: &Stats, label: &str, dry_run: bool) {
 const DEFAULT_REPLACEMENT: &str = "***REMOVED***";
 
 enum CompiledRule {
-    Literal { needle: Vec<u8>, repl: Vec<u8> },
-    Regex { re: regex::bytes::Regex, repl: Vec<u8> },
+    Literal {
+        needle: Vec<u8>,
+        repl: Vec<u8>,
+    },
+    Regex {
+        re: regex::bytes::Regex,
+        repl: Vec<u8>,
+    },
 }
 
 impl CompiledRule {
     fn apply(&self, data: Vec<u8>) -> Vec<u8> {
         match self {
             CompiledRule::Literal { needle, repl } => replace_bytes(&data, needle, repl),
-            CompiledRule::Regex { re, repl } => {
-                re.replace_all(&data, regex::bytes::NoExpand(repl)).into_owned()
-            }
+            CompiledRule::Regex { re, repl } => re
+                .replace_all(&data, regex::bytes::NoExpand(repl))
+                .into_owned(),
         }
     }
 }
@@ -273,7 +279,9 @@ fn parse_rule_line(line: &str) -> Result<Option<CompiledRule>> {
         None => (rest, DEFAULT_REPLACEMENT),
     };
     if pat.is_empty() {
-        return Err(ToriiError::Usage("empty pattern in replace-text rule".into()));
+        return Err(ToriiError::Usage(
+            "empty pattern in replace-text rule".into(),
+        ));
     }
     let rule = if is_regex {
         CompiledRule::Regex {
@@ -767,7 +775,11 @@ fn import_dir(
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if ent.metadata().map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false) {
+                if ent
+                    .metadata()
+                    .map(|m| m.permissions().mode() & 0o111 != 0)
+                    .unwrap_or(false)
+                {
                     mode = 0o100755;
                 }
             }
@@ -783,7 +795,10 @@ mod tests {
 
     #[test]
     fn literal_byte_replace() {
-        assert_eq!(replace_bytes(b"a SECRET b SECRET", b"SECRET", b"X"), b"a X b X");
+        assert_eq!(
+            replace_bytes(b"a SECRET b SECRET", b"SECRET", b"X"),
+            b"a X b X"
+        );
         assert_eq!(replace_bytes(b"none here", b"SECRET", b"X"), b"none here");
     }
 
@@ -823,7 +838,10 @@ mod tests {
     #[test]
     fn filter_path_subdirectory_strips_prefix() {
         let f = FilterPath::new(vec![], vec![], Some("crates/lib".into()), vec![]).unwrap();
-        assert_eq!(f.map_path("crates/lib/src/a.rs").as_deref(), Some("src/a.rs"));
+        assert_eq!(
+            f.map_path("crates/lib/src/a.rs").as_deref(),
+            Some("src/a.rs")
+        );
         assert_eq!(f.map_path("README.md"), None); // outside the subdir → dropped
     }
 
@@ -831,7 +849,10 @@ mod tests {
     fn filter_path_remove_keep_rename() {
         let remove = FilterPath::new(vec![], vec!["secrets".into()], None, vec![]).unwrap();
         assert_eq!(remove.map_path("secrets/key.pem"), None);
-        assert_eq!(remove.map_path("src/main.rs").as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            remove.map_path("src/main.rs").as_deref(),
+            Some("src/main.rs")
+        );
 
         let keep = FilterPath::new(vec!["src".into()], vec![], None, vec![]).unwrap();
         assert_eq!(keep.map_path("src/main.rs").as_deref(), Some("src/main.rs"));
