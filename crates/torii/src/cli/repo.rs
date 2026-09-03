@@ -143,9 +143,9 @@ pub(crate) fn save(
             crate::hooks::pre_save(&ti.hooks, repo_path)?;
         }
 
-        let mut findings = scanner::scan_staged(repo_path)?;
-        // [secrets] custom regex rules
-        findings.extend(scanner::scan_staged_with_custom(repo_path, &ti.secrets)?);
+        // Built-ins plus the `[secrets]` rules, through the one entry point
+        // `torii scan` uses.
+        let findings = scanner::scan_staged_all(repo_path)?;
         if !findings.is_empty() {
             println!("⚠️  Sensitive data detected in staged files:\n");
             for f in &findings {

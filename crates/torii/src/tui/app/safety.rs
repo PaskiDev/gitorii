@@ -24,12 +24,33 @@ pub enum SafetyTab {
     Scanner,
 }
 
+/// One editable line of the scanner tab.
+///
+/// The rows are declared rather than derived from the file, so a setting that
+/// has never been written still has a place to be typed into — an empty
+/// `[size]` section would otherwise be invisible and unreachable.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Setting {
+    pub section: &'static str,
+    pub key: &'static str,
+    pub label: &'static str,
+    /// Whether the key holds a list (another line) or a single value.
+    pub multi: bool,
+    /// What it is set to now, and where.
+    pub value: Option<String>,
+    pub origin: Option<Origin>,
+    /// The line it came from, so it can be removed exactly.
+    pub rule: Option<Rule>,
+}
+
 /// What the view is doing: reading, typing a new rule, or confirming a delete.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IgnoreFocus {
     List,
     /// Typing the pattern of a new rule.
     Input,
+    /// Typing the value of a scanner setting.
+    SettingInput,
     ConfirmDelete,
 }
 
@@ -42,6 +63,8 @@ pub struct IgnoreState {
     pub hooks: crate::toriignore::HookRules,
     /// Row of the scanner tab.
     pub scanner_idx: usize,
+    /// The editable rows of the scanner tab, rebuilt on every load.
+    pub settings: Vec<Setting>,
     pub idx: usize,
     pub focus: IgnoreFocus,
     /// What a new rule would be: a path or a secret.
@@ -61,6 +84,7 @@ impl Default for IgnoreState {
             size: Default::default(),
             hooks: Default::default(),
             scanner_idx: 0,
+            settings: Vec::new(),
             idx: 0,
             focus: IgnoreFocus::List,
             new_kind: Kind::Path,
@@ -90,6 +114,175 @@ impl App {
             }
             Err(e) => {
                 self.ignore_view.status = Some(format!("could not read the rules: {e}"));
+            }
+        }
+        self.build_settings();
+        let last = self.ignore_view.settings.len().saturating_sub(1);
+        self.ignore_view.scanner_idx = self.ignore_view.scanner_idx.min(last);
+    }
+
+    /// The scanner tab's rows: every knob, set or not, with the line it came
+    /// from when it has one.
+    fn build_settings(&mut self) {
+        const KNOBS: &[(&str, &str, &str, bool)] = &[
+            ("size", "max", "block above", false),
+            ("size", "warn", "warn above", false),
+            ("size", "exclude", "except", true),
+            ("hooks", "pre-save", "before save", true),
+            ("hooks", "post-save", "after save", true),
+            ("hooks", "pre-sync", "before sync", true),
+            ("hooks", "post-sync", "after sync", true),
+        ];
+
+        let mut out = Vec::new();
+        for (section, key, label, multi) in KNOBS {
+            let kind = if *section == "size" {
+                Kind::Size
+            } else {
+                Kind::Hook
+            };
+            // Every line already written for this key, so a list shows all of
+            // them and a single value shows the one in force.
+            let mut written: Vec<&Rule> = self
+                .ignore_view
+                .rules
+                .iter()
+                .filter(|r| {
+                    r.kind == kind
+                        && r.pattern
+                            .split_once(':')
+                            .map(|(k, _)| k.trim() == *key)
+                            .unwrap_or(false)
+                })
+                .collect();
+            if written.is_empty() {
+                out.push(Setting {
+                    section,
+                    key,
+                    label,
+                    multi: *multi,
+                    value: None,
+                    origin: None,
+                    rule: None,
+                });
+                continue;
+            }
+            // A single-valued key keeps the last line written, which is what
+            // the parser itself takes.
+            if !*multi {
+                written = written.split_off(written.len() - 1);
+            }
+            for rule in written {
+                out.push(Setting {
+                    section,
+                    key,
+                    label,
+                    multi: *multi,
+                    value: rule
+                        .pattern
+                        .split_once(':')
+                        .map(|(_, v)| v.trim().to_string()),
+                    origin: Some(rule.origin),
+                    rule: Some(rule.clone()),
+                });
+            }
+        }
+        self.ignore_view.settings = out;
+    }
+
+    pub fn safety_selected_setting(&self) -> Option<&Setting> {
+        self.ignore_view.settings.get(self.ignore_view.scanner_idx)
+    }
+
+    pub fn safety_move_setting(&mut self, delta: isize) {
+        let last = self.ignore_view.settings.len().saturating_sub(1) as isize;
+        let idx = self.ignore_view.scanner_idx as isize + delta;
+        self.ignore_view.scanner_idx = idx.clamp(0, last.max(0)) as usize;
+    }
+
+    /// Start editing the selected setting, with what it holds now.
+    pub fn safety_start_setting_edit(&mut self) {
+        let Some(setting) = self.safety_selected_setting().cloned() else {
+            return;
+        };
+        // A list key starts empty: typing over the first hook would silently
+        // replace it, and adding one is what the user usually means.
+        self.ignore_view.input = if setting.multi {
+            String::new()
+        } else {
+            setting.value.clone().unwrap_or_default()
+        };
+        self.ignore_view.cursor = self.ignore_view.input.len();
+        self.ignore_view.new_origin = setting.origin.unwrap_or(Origin::Public);
+        self.ignore_view.status = None;
+        self.ignore_view.focus = IgnoreFocus::SettingInput;
+    }
+
+    /// Write what was typed into the file the target points at.
+    pub fn safety_commit_setting(&mut self) {
+        let Some(setting) = self.safety_selected_setting().cloned() else {
+            return;
+        };
+        let value = self.ignore_view.input.trim().to_string();
+        let origin = self.ignore_view.new_origin;
+        let root = std::path::PathBuf::from(&self.repo_path);
+
+        // A size is validated with the scanner's own parser: a value it
+        // cannot read would silently turn the gate off.
+        if setting.section == "size" && setting.key != "exclude" {
+            if let Err(e) = crate::toriignore::parse_size_value(&value) {
+                self.ignore_view.status = Some(format!("{e} — try 10MB, 500KB, 2GB"));
+                return;
+            }
+        }
+
+        match crate::ignore_rules::set_setting(
+            &root,
+            setting.section,
+            setting.key,
+            &value,
+            origin,
+            setting.multi,
+        ) {
+            Ok(()) => {
+                self.ignore_view.input.clear();
+                self.ignore_view.cursor = 0;
+                self.ignore_view.focus = IgnoreFocus::List;
+                self.log_event(
+                    format!("safety: {} {} → {}", setting.key, value, origin.file_name()),
+                    EventKind::Success,
+                );
+                self.load_safety();
+            }
+            Err(e) => {
+                self.ignore_view.status = Some(format!("{e}"));
+                self.log_event(format!("safety: {e}"), EventKind::Error);
+            }
+        }
+    }
+
+    /// Take the selected setting out of its file.
+    pub fn safety_unset_selected(&mut self) {
+        let Some(setting) = self.safety_selected_setting().cloned() else {
+            return;
+        };
+        let root = std::path::PathBuf::from(&self.repo_path);
+        // A list line is removed by its own line; a single value by its key.
+        let result = match (&setting.rule, setting.origin) {
+            (Some(rule), _) if setting.multi => crate::ignore_rules::remove(&root, rule),
+            (_, Some(origin)) => {
+                crate::ignore_rules::unset_setting(&root, setting.section, setting.key, origin)
+            }
+            _ => return,
+        };
+        match result {
+            Ok(()) => {
+                self.log_event(format!("safety: {} unset", setting.key), EventKind::Success);
+                self.load_safety();
+            }
+            Err(e) => {
+                self.ignore_view.status = Some(format!("{e}"));
+                self.log_event(format!("safety: {e}"), EventKind::Error);
             }
         }
     }

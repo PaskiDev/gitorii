@@ -1535,15 +1535,30 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     }
                 }
             }
+            View::Safety if app.ignore_view.focus == crate::tui::app::IgnoreFocus::SettingInput => {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[^T]", Style::default().fg(bc)),
+                    Span::styled(" target  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
+                ])
+            }
             View::Safety if app.ignore_view.tab == crate::tui::app::SafetyTab::Scanner => {
                 Line::from(vec![
                     Span::raw(" "),
                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                    Span::styled(" scroll  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" set  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[d]", Style::default().fg(bc)),
+                    Span::styled(" unset  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[a]", Style::default().fg(bc)),
+                    Span::styled(" new pattern  ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled("[1]", Style::default().fg(bc)),
-                    Span::styled(" rules  ", Style::default().fg(theme::INK_FAINT)),
-                    Span::styled("[r]", Style::default().fg(bc)),
-                    Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(" rules", Style::default().fg(theme::INK_FAINT)),
                 ])
             }
             View::Safety => match app.ignore_view.focus {
@@ -1564,6 +1579,13 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled(" remove  ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled("[n]", Style::default().fg(bc)),
                     Span::styled(" keep", Style::default().fg(theme::INK_FAINT)),
+                ]),
+                crate::tui::app::IgnoreFocus::SettingInput => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                 ]),
                 crate::tui::app::IgnoreFocus::List => Line::from(vec![
                     Span::raw(" "),
@@ -2209,8 +2231,12 @@ mod tests {
 
         assert!(screen.contains("built in"), "{screen}");
         assert!(
-            screen.contains("blocks and asks"),
-            "the screen must say what a hit does: {screen}"
+            screen.contains("blocked") && screen.contains("--yes"),
+            "the screen must say what a hit does, and how to override: {screen}"
+        );
+        assert!(
+            screen.contains("block above") && screen.contains("before save"),
+            "the settings are rows you can act on: {screen}"
         );
         assert!(
             screen.contains(&crate::scanner::builtin_pattern_count().to_string()),

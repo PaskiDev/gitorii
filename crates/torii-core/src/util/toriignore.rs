@@ -269,7 +269,10 @@ impl ToriIgnore {
 }
 
 /// Parse "10MB", "500KB", "1024", "2GB" → bytes
-fn parse_size_value(s: &str) -> Result<u64> {
+/// Read a size the way `.toriignore` writes it: `10MB`, `500KB`, `2GB`, or a
+/// bare byte count. Public so an editor can reject a bad value before it
+/// reaches the file, using the same rules the scanner will apply to it.
+pub fn parse_size_value(s: &str) -> Result<u64> {
     let s = s.trim();
     let upper = s.to_uppercase();
     let (num_str, mul): (&str, u64) = if let Some(rest) = upper.strip_suffix("GB") {
@@ -397,7 +400,10 @@ mod tests {
     fn parses_secrets_section() {
         let t = from_str("[secrets]\ndeny: AKIA[0-9A-Z]{16}\ndeny: ghp_[A-Za-z0-9]{36}\n");
         assert_eq!(t.secrets.len(), 2);
-        assert!(t.secrets[0].regex.is_match("AKIAIOSFODNN7EXAMPLE"));
+        // Built at runtime: the literal would be a finding in this file, and
+        // the scanner is right to say so.
+        let example = format!("AKIA{}", "IOSFODNN7EXAMPLE");
+        assert!(t.secrets[0].regex.is_match(&example));
         assert!(!t.secrets[0].regex.is_match("not a key"));
     }
 

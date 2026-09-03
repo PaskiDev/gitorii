@@ -552,6 +552,22 @@ pub fn scan_staged_with_custom(
 
 /// Scan staged files in the git index for sensitive data.
 /// Returns a list of findings.
+/// Everything the scanner has to say about the staged files: the built-in
+/// patterns and the user's own `[secrets]` rules, in one call.
+///
+/// The two used to be separate, and only `torii save` remembered to run both.
+/// `torii scan` — the command you run *to check* — reported clean on a secret
+/// its own configured rule was written to catch. One entry point, so a caller
+/// cannot get half an answer.
+pub fn scan_staged_all(repo_path: &Path) -> Result<Vec<Finding>> {
+    let mut findings = scan_staged(repo_path)?;
+    let rules = crate::toriignore::ToriIgnore::load(repo_path)
+        .map(|ti| ti.secrets)
+        .unwrap_or_default();
+    findings.extend(scan_staged_with_custom(repo_path, &rules)?);
+    Ok(findings)
+}
+
 pub fn scan_staged(repo_path: &Path) -> Result<Vec<Finding>> {
     use git2::Repository;
 
@@ -1015,5 +1031,63 @@ mod pattern_audit_tests {
         // the rule to actual secrets.
         assert!(matching_pattern(r#"api_key = "sk_9f8e7d6c5b4a3210deadbeef""#).is_some());
         assert!(matching_pattern(r#"password: "Tr0ub4dor&3xtraLong""#).is_some());
+    }
+}
+
+#[cfg(test)]
+mod custom_rule_tests {
+    use super::*;
+    use std::path::Path;
+
+    /// Stage a file holding `content` in a fresh repo that carries `rules` in
+    /// its private `.toriignore.local`.
+    fn repo_with(rules: &str, content: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join(".toriignore.local"), rules).unwrap();
+        std::fs::write(tmp.path().join("config.txt"), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("config.txt")).unwrap();
+        index.write().unwrap();
+        tmp
+    }
+
+    /// The bug this pins: a user writes a rule for the token shape their
+    /// company uses, `torii scan` says clean, and the token goes out. The
+    /// rules were only ever applied by `torii save`.
+    #[test]
+    fn a_users_own_rule_is_applied_by_a_plain_scan() {
+        let tmp = repo_with(
+            "[secrets]\ndeny: zzcustom-[a-z0-9]{10,}  # Demo token\n",
+            "token = zzcustom-abcdef012345\n",
+        );
+
+        let findings = scan_staged_all(tmp.path()).unwrap();
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.pattern_name.contains("Demo token")),
+            "the user's own rule must fire: {:?}",
+            findings.iter().map(|f| &f.pattern_name).collect::<Vec<_>>()
+        );
+    }
+
+    /// The built-ins still fire through the same door.
+    #[test]
+    fn the_builtin_patterns_still_fire() {
+        // Assembled at runtime: a literal example key here is a finding in
+        // this very file, and weakening the scanner to let a test through is
+        // the wrong trade.
+        let key = format!("AKIA{}", "IOSFODNN7EXAMPLE");
+        let tmp = repo_with("", &format!("aws = {key}\n"));
+        let findings = scan_staged_all(tmp.path()).unwrap();
+        assert!(!findings.is_empty(), "a built-in pattern must still fire");
+    }
+
+    /// A repo with no rules of its own is not an error, and not a false alarm.
+    #[test]
+    fn no_rules_and_nothing_to_find_is_clean() {
+        let tmp = repo_with("", "just some text\n");
+        assert!(scan_staged_all(tmp.path()).unwrap().is_empty());
     }
 }

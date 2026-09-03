@@ -41,6 +41,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     match app.ignore_view.focus {
         IgnoreFocus::Input => render_input(f, app, area),
+        IgnoreFocus::SettingInput => render_setting_input(f, app, area),
         IgnoreFocus::ConfirmDelete => render_confirm(f, app, area),
         IgnoreFocus::List => {}
     }
@@ -265,132 +266,162 @@ fn render_patterns(f: &mut Frame, app: &App, area: Rect) {
 fn render_enforcement(f: &mut Frame, app: &App, area: Rect) {
     let [heading_row, body] = theme::heading_and_body(area);
     let iv = &app.ignore_view;
+    let active = !app.sidebar_focused && iv.tab == SafetyTab::Scanner;
 
+    let set = iv.settings.iter().filter(|s| s.value.is_some()).count();
     let mut heading = vec![Span::raw(" ")];
-    heading.extend(theme::panel_title("enforcement", None, false));
+    heading.extend(theme::panel_title("enforcement", Some(set), active));
+    heading.push(Span::styled(
+        "  Enter sets · d unsets",
+        Style::default().fg(theme::INK_FAINT),
+    ));
     f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
-    // Values wrap under their label: `blocks and asks (--yes to override)`
-    // does not fit a narrow pane, and cutting it would hide the override.
-    let room = (body.width as usize).saturating_sub(11);
-    let field = move |label: &str, text: String, style: Style| -> Vec<Line<'static>> {
-        theme::wrap(&text, room.max(8))
-            .into_iter()
-            .enumerate()
-            .map(|(i, part)| {
-                Line::from(vec![
-                    Span::styled(
-                        format!("{:<9}", if i == 0 { label } else { "" }),
-                        Style::default().fg(theme::INK_FAINT),
-                    ),
-                    Span::styled(part, style),
-                ])
-            })
-            .collect()
+    let room = (body.width as usize).saturating_sub(16);
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut last_section = "";
+    for (i, setting) in iv.settings.iter().enumerate() {
+        if setting.section != last_section {
+            items.push(group(match setting.section {
+                "size" => "size gate — what a save refuses to carry",
+                _ => "hooks — what runs around a save",
+            }));
+            last_section = setting.section;
+        }
+        let is_sel = active && i == iv.scanner_idx;
+        let (value, value_style) = match &setting.value {
+            Some(v) => (v.clone(), Style::default().fg(theme::INK)),
+            None => ("not set".to_string(), Style::default().fg(theme::INK_FAINT)),
+        };
+        // The file a setting lives in matters as much as its value: a hook
+        // naming internal tooling belongs in the private file.
+        let origin = setting
+            .origin
+            .map(|o| format!("  {}", o.label()))
+            .unwrap_or_default();
+
+        let mut lines = vec![Line::from(vec![
+            theme::caret(app, is_sel),
+            Span::styled(
+                format!("{:<12}", setting.label),
+                Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+            ),
+        ])];
+        for (n, part) in theme::wrap(&value, room.max(8)).into_iter().enumerate() {
+            if n == 0 {
+                if let Some(line) = lines.last_mut() {
+                    line.spans.push(Span::styled(part, value_style));
+                    line.spans.push(Span::styled(
+                        origin.clone(),
+                        Style::default().fg(match setting.origin {
+                            Some(Origin::Local) => theme::WARN,
+                            _ => theme::INK_FAINT,
+                        }),
+                    ));
+                }
+            } else {
+                lines.push(Line::from(vec![
+                    Span::raw(" ".repeat(14)),
+                    Span::styled(part, value_style),
+                ]));
+            }
+        }
+
+        items.push(ListItem::new(lines).style(if is_sel {
+            Style::default()
+                .bg(theme::selection(app))
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        }));
+    }
+
+    // What the scanner does on a hit is not a setting — it is the contract,
+    // and it belongs on screen so nobody is surprised by it.
+    items.push(ListItem::new(Line::from("")));
+    items.push(group("on a hit"));
+    for line in theme::wrap(
+        "the save is blocked and you are asked; --yes overrides",
+        room.max(8) + 12,
+    ) {
+        items.push(ListItem::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(line, Style::default().fg(theme::INK_DIM)),
+        ])));
+    }
+
+    let mut state = ListState::default();
+    state.select(Some(iv.scanner_idx.min(items.len().saturating_sub(1))));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
+}
+
+/// Typing the value of a setting, with the file it will land in on show.
+fn render_setting_input(f: &mut Frame, app: &App, area: Rect) {
+    let Some(setting) = app.safety_selected_setting() else {
+        return;
+    };
+    let iv = &app.ignore_view;
+    let w = 64u16.min(area.width.saturating_sub(4));
+    let h = 5u16;
+    let overlay = Rect::new(
+        area.x + area.width.saturating_sub(w) / 2,
+        area.y + area.height.saturating_sub(h) / 2,
+        w,
+        h,
+    );
+    f.render_widget(Clear, overlay);
+
+    let cursor = iv.cursor.min(iv.input.len());
+    let (before, after) = iv.input.split_at(cursor);
+    let hint = match (setting.section, setting.key) {
+        ("size", "exclude") => "a glob, e.g. *.bin",
+        ("size", _) => "a size, e.g. 10MB",
+        _ => "a shell command",
     };
 
-    let mut lines = vec![Line::from(Span::styled(
-        "when you save",
-        Style::default()
-            .fg(theme::INK_FAINT)
-            .add_modifier(Modifier::BOLD),
-    ))];
-    lines.extend(field(
-        "scan",
-        "every staged file, always".into(),
-        Style::default().fg(theme::OK),
-    ));
-    // The scanner blocks and asks; it does not decide for you. Saying so here
-    // is the difference between trusting it and being surprised by it.
-    lines.extend(field(
-        "on a hit",
-        "blocks and asks (--yes overrides)".into(),
-        Style::default().fg(theme::INK_DIM),
-    ));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "size gate",
-        Style::default()
-            .fg(theme::INK_FAINT)
-            .add_modifier(Modifier::BOLD),
-    )));
-    lines.extend(match iv.size.max_bytes {
-        Some(b) => field(
-            "block",
-            crate::stats::human_bytes(b),
-            Style::default().fg(theme::BAD),
-        ),
-        None => field(
-            "block",
-            "not set".into(),
-            Style::default().fg(theme::INK_FAINT),
-        ),
-    });
-    lines.extend(match iv.size.warn_bytes {
-        Some(b) => field(
-            "warn",
-            crate::stats::human_bytes(b),
-            Style::default().fg(theme::WARN),
-        ),
-        None => field(
-            "warn",
-            "not set".into(),
-            Style::default().fg(theme::INK_FAINT),
-        ),
-    });
-    if !iv.size.exclude.is_empty() {
-        lines.extend(field(
-            "except",
-            iv.size.exclude.join(" · "),
-            Style::default().fg(theme::INK_DIM),
-        ));
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "hooks",
-        Style::default()
-            .fg(theme::INK_FAINT)
-            .add_modifier(Modifier::BOLD),
-    )));
-    let hooks = [
-        ("pre-save", &iv.hooks.pre_save),
-        ("post-save", &iv.hooks.post_save),
-        ("pre-sync", &iv.hooks.pre_sync),
-        ("post-sync", &iv.hooks.post_sync),
+    let body = vec![
+        Line::from(vec![
+            Span::styled(
+                format!(" {} → ", setting.label),
+                Style::default().fg(theme::INK_FAINT),
+            ),
+            Span::styled(
+                iv.new_origin.file_name(),
+                Style::default()
+                    .fg(match iv.new_origin {
+                        Origin::Local => theme::WARN,
+                        Origin::Public => theme::INK_FAINT,
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!("   {hint}"), Style::default().fg(theme::INK_FAINT)),
+        ]),
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(before.to_string(), Style::default().fg(theme::INK)),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
+            Span::styled(after.to_string(), Style::default().fg(theme::INK)),
+        ]),
+        Line::from(match &iv.status {
+            Some(status) => vec![
+                Span::raw("  "),
+                Span::styled(status.clone(), Style::default().fg(theme::BAD)),
+            ],
+            None => {
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(theme::key_hint(app, "^T", "target"));
+                spans.extend(theme::key_hint(app, "Enter", "save"));
+                spans.extend(theme::key_hint(app, "Esc", "cancel"));
+                spans
+            }
+        }),
     ];
-    let mut any_hook = false;
-    for (label, commands) in hooks {
-        for command in commands {
-            any_hook = true;
-            lines.extend(field(
-                label,
-                command.clone(),
-                Style::default().fg(theme::INK_DIM),
-            ));
-        }
-    }
-    if !any_hook {
-        lines.push(Line::from(Span::styled(
-            "  none",
-            Style::default().fg(theme::INK_FAINT),
-        )));
-    }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "these live in the same two files;",
-        Style::default().fg(theme::INK_FAINT),
-    )));
-    lines.push(Line::from(Span::styled(
-        "edit with torii ignore or an editor",
-        Style::default().fg(theme::INK_FAINT),
-    )));
-
-    f.render_widget(
-        Paragraph::new(lines).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
-        body,
-    );
+    f.render_widget(Paragraph::new(body).block(popup(app)), overlay);
 }
 
 /// A group header inside a list.

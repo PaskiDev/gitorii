@@ -170,6 +170,84 @@ pub fn add_secret(root: &Path, pattern: &str, name: Option<&str>, origin: Origin
     append_line(&origin.path(root), Some("secrets"), &line)
 }
 
+/// Write `key: value` under `[section]`, replacing the line that key already
+/// has rather than adding a second one.
+///
+/// A file with two `max:` lines is not an error the parser reports — it takes
+/// the last and the user is left wondering which one is in force. Keys that
+/// hold a list (`pre-save`, `exclude`) are appended to instead, since more
+/// than one of those is the point.
+pub fn set_setting(
+    root: &Path,
+    section: &str,
+    key: &str,
+    value: &str,
+    origin: Origin,
+    multi: bool,
+) -> Result<()> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(ToriiError::Usage(format!("`{key}` needs a value")));
+    }
+    let line = format!("{key}: {value}");
+    let path = origin.path(root);
+
+    if !multi {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Some(idx) = setting_line(&text, section, key) {
+                let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+                lines[idx] = line;
+                let mut out = lines.join("\n");
+                out.push('\n');
+                return std::fs::write(&path, out)
+                    .map_err(|e| ToriiError::Fs(format!("{}: {e}", path.display())));
+            }
+        }
+    }
+    append_line(&path, Some(section), &line)
+}
+
+/// Drop the line a key holds under `[section]`, if it has one.
+pub fn unset_setting(root: &Path, section: &str, key: &str, origin: Origin) -> Result<()> {
+    let path = origin.path(root);
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(()); // nothing written means nothing to unset
+    };
+    let Some(idx) = setting_line(&text, section, key) else {
+        return Ok(());
+    };
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    lines.remove(idx);
+    let mut out = lines.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    std::fs::write(&path, out).map_err(|e| ToriiError::Fs(format!("{}: {e}", path.display())))
+}
+
+/// The index of the line where `key` is set under `[section]`, if any.
+fn setting_line(text: &str, section: &str, key: &str) -> Option<usize> {
+    let mut current = "paths";
+    for (i, raw) in text.lines().enumerate() {
+        let line = raw.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with('[') && line.ends_with(']') {
+            current = &line[1..line.len() - 1];
+            continue;
+        }
+        if current == section {
+            if let Some((k, _)) = line.split_once(':') {
+                if k.trim() == key {
+                    return Some(i);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Remove exactly the line a rule came from.
 ///
 /// The line is matched by content as well as by number: the file may have been
@@ -324,6 +402,84 @@ mod tests {
 
         let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
         assert_eq!(text, "build/\n*.log\n");
+    }
+
+    #[test]
+    fn a_setting_replaces_its_own_line_instead_of_piling_up() {
+        let tmp = tempfile::tempdir().unwrap();
+        set_setting(tmp.path(), "size", "max", "10MB", Origin::Public, false).unwrap();
+        set_setting(tmp.path(), "size", "max", "20MB", Origin::Public, false).unwrap();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert_eq!(text.matches("max:").count(), 1, "{text}");
+        assert!(text.contains("max: 20MB"), "{text}");
+        assert_eq!(text.matches("[size]").count(), 1, "{text}");
+    }
+
+    /// A hook is a list: a second one is another line, not a replacement.
+    #[test]
+    fn a_list_setting_takes_more_than_one_line() {
+        let tmp = tempfile::tempdir().unwrap();
+        set_setting(
+            tmp.path(),
+            "hooks",
+            "pre-save",
+            "cargo fmt --check",
+            Origin::Public,
+            true,
+        )
+        .unwrap();
+        set_setting(
+            tmp.path(),
+            "hooks",
+            "pre-save",
+            "cargo test",
+            Origin::Public,
+            true,
+        )
+        .unwrap();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert_eq!(text.matches("pre-save:").count(), 2, "{text}");
+    }
+
+    #[test]
+    fn unsetting_takes_the_line_out_and_leaves_the_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        set_setting(tmp.path(), "size", "max", "10MB", Origin::Public, false).unwrap();
+        set_setting(tmp.path(), "size", "warn", "1MB", Origin::Public, false).unwrap();
+
+        unset_setting(tmp.path(), "size", "max", Origin::Public).unwrap();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert!(!text.contains("max:"), "{text}");
+        assert!(text.contains("warn: 1MB"), "{text}");
+    }
+
+    /// A key of the same name in another section is a different setting.
+    #[test]
+    fn a_key_is_only_matched_inside_its_own_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore"),
+            "[hooks]\nmax: not a size\n\n[size]\nmax: 10MB\n",
+        )
+        .unwrap();
+
+        set_setting(tmp.path(), "size", "max", "20MB", Origin::Public, false).unwrap();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert!(
+            text.contains("max: not a size"),
+            "the hook line is untouched: {text}"
+        );
+        assert!(text.contains("max: 20MB"), "{text}");
+    }
+
+    #[test]
+    fn unsetting_something_never_written_is_not_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        unset_setting(tmp.path(), "size", "max", Origin::Public).unwrap();
     }
 
     /// The file governs a secret scanner. If it moved under us, refuse rather
