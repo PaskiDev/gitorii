@@ -389,22 +389,20 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     let y = (area.y + area.height).saturating_sub(panel_h + 1);
     let panel_area = Rect::new(x, y, panel_w, panel_h);
 
-    let bc = app.brand_color();
-    let hint = Line::from(vec![
-        Span::styled(" [e]", Style::default().fg(bc)),
-        Span::styled(" close  ", Style::default().fg(theme::INK_FAINT)),
-        Span::styled("[c]", Style::default().fg(bc)),
-        Span::styled(" clear ", Style::default().fg(theme::INK_FAINT)),
-    ]);
+    // A popup keeps its box — it is a window — but the box is a rule, the
+    // title is ink, and the keys read like the strip at the foot.
+    let mut hint = vec![Span::raw(" ")];
+    hint.extend(theme::key_hint(app, "e", "close"));
+    hint.extend(theme::key_hint(app, "c", "clear"));
     let block = Block::default()
         .title(Span::styled(
             format!(" events ({}) ", app.event_log.len()),
-            Style::default().fg(bc).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(hint)
+        .title_bottom(Line::from(hint))
         .borders(Borders::ALL)
         .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
+        .border_style(Style::default().fg(theme::RULE));
 
     let inner = block.inner(panel_area);
     f.render_widget(Clear, panel_area);
@@ -414,29 +412,27 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
         .event_log
         .iter()
         .map(|e| {
-            let kind_color = match e.kind {
-                EventKind::Error => theme::BAD,
-                EventKind::Success => theme::OK,
-                EventKind::Info => theme::INK_DIM,
-            };
-            let kind_sym = match e.kind {
-                EventKind::Error => "✗",
-                EventKind::Success => "✓",
-                EventKind::Info => "·",
+            let (sym, color) = match e.kind {
+                EventKind::Error => ("✗", theme::BAD),
+                EventKind::Success => ("✓", theme::OK),
+                EventKind::Info => ("·", theme::INK_FAINT),
             };
             ListItem::new(Line::from(vec![
                 Span::styled(
-                    format!(" {} ", e.timestamp),
+                    format!("{} ", e.timestamp),
                     Style::default().fg(theme::INK_FAINT),
                 ),
-                Span::styled(kind_sym, Style::default().fg(kind_color)),
+                Span::styled(sym, Style::default().fg(color)),
                 Span::raw(" "),
-                Span::styled(&e.message, Style::default().fg(theme::INK)),
+                Span::styled(&e.message, Style::default().fg(theme::INK_DIM)),
             ]))
         })
         .collect();
 
-    f.render_widget(List::new(items), inner);
+    f.render_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        inner,
+    );
 }
 
 fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
@@ -1883,6 +1879,38 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|f| render(f, &app)).expect("a frame");
+    }
+
+    /// The events popup is the one overlay every view can raise, so it has to
+    /// speak the window's language: a rule for a border, ink for the title,
+    /// and keys in the accent — not the brand red used as a box colour.
+    #[test]
+    fn the_events_popup_wears_the_window_chrome() {
+        let mut app = App::new().expect("a repository to look at");
+        app.log_event("something happened", EventKind::Success);
+        app.show_event_log = true;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+
+        let mut border_colours = std::collections::HashSet::new();
+        for y in 0..30 {
+            for x in 0..100 {
+                let cell = buffer.cell((x, y)).unwrap();
+                if matches!(
+                    cell.symbol(),
+                    "│" | "─" | "╭" | "╮" | "╰" | "╯" | "┌" | "┐" | "└" | "┘"
+                ) {
+                    border_colours.insert(format!("{:?}", cell.fg));
+                }
+            }
+        }
+        assert_eq!(
+            border_colours,
+            std::collections::HashSet::from([format!("{:?}", theme::RULE)]),
+            "every line on screen, popup included, is drawn in the rule's colour"
+        );
     }
 
     /// Not an assertion — `cargo test -- --nocapture look_at_it` prints the
