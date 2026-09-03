@@ -111,6 +111,9 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
         return Ok(PickerResult::Cancelled);
     }
 
+    // Same reason as the main TUI: from here on nothing but ratatui writes to
+    // stdout.
+    crate::util::output::set_silent(true);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;

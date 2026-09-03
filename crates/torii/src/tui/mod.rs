@@ -48,6 +48,10 @@ pub fn run() -> crate::error::Result<()> {
 }
 
 pub fn run_with_workspace(ws_name: String) -> crate::error::Result<()> {
+    // Core prints a checkout progress line and fetch banners for CLI users.
+    // In here stdout is the alternate screen, and anything written behind
+    // ratatui's back stays on screen until a full redraw.
+    crate::util::output::set_silent(true);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -68,6 +72,10 @@ pub fn run_with_workspace(ws_name: String) -> crate::error::Result<()> {
 }
 
 pub fn run_with_view(initial_view: app::View) -> crate::error::Result<()> {
+    // Core prints a checkout progress line and fetch banners for CLI users.
+    // In here stdout is the alternate screen, and anything written behind
+    // ratatui's back stays on screen until a full redraw.
+    crate::util::output::set_silent(true);
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
