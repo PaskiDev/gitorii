@@ -133,6 +133,23 @@ impl EventHandler {
 
         match event::read()? {
             Event::Key(key) => {
+                // The palette owns the keyboard while it is open.
+                if app.palette.open {
+                    handle_palette(key, app);
+                    return Ok(None);
+                }
+                // So does the config screen while it is recording a binding —
+                // otherwise the key being recorded would also run.
+                if app.config_view.capturing.is_some() {
+                    handle_capture(key, app);
+                    return Ok(None);
+                }
+                // User-defined keys come before everything else, but the
+                // resolver refuses bare letters while a field has focus, so a
+                // commit message stays a commit message.
+                if app.keymap_consume(crate::tui::keys::Chord::from_event(key)) {
+                    return Ok(None);
+                }
                 // Clear event log when panel is open
                 if app.show_event_log
                     && key.code == KeyCode::Char('c')
@@ -682,4 +699,67 @@ fn handle_help(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         _ => {}
     }
     None
+}
+
+/// Keys while the action palette is open. Typing filters; Enter runs.
+fn handle_palette(key: event::KeyEvent, app: &mut App) {
+    match key.code {
+        KeyCode::Esc => app.palette_close(),
+        KeyCode::Enter => app.palette_accept(),
+        KeyCode::Up => app.palette_move(-1),
+        KeyCode::Down => app.palette_move(1),
+        KeyCode::Backspace => {
+            app.palette.query.pop();
+            app.palette.idx = 0;
+        }
+        KeyCode::Char(c) => {
+            app.palette.query.push(c);
+            app.palette.idx = 0;
+        }
+        _ => {}
+    }
+}
+
+/// Keys while the config screen is recording a binding.
+///
+/// Every key belongs to the recording, including the ones that normally mean
+/// something: that is the only way to put an action on `Tab` or on `q`. Esc is
+/// the exception, because a recording with no way out is a trap.
+fn handle_capture(key: event::KeyEvent, app: &mut App) {
+    use crate::tui::keys::{Binding, Chord};
+
+    if key.code == KeyCode::Esc {
+        app.config_view.capturing = None;
+        app.config_view.captured.clear();
+        return;
+    }
+    if key.code == KeyCode::Enter && !app.config_view.captured.is_empty() {
+        let action = app.config_view.capturing.take().unwrap_or_default();
+        let binding = Binding(std::mem::take(&mut app.config_view.captured));
+        let displaced = app.keymap.action_for(&binding).map(str::to_string);
+        app.keymap.bind(binding.clone(), &action);
+        match app.keymap.save() {
+            Ok(()) => {
+                let mut msg = format!("{} → {binding}", crate::tui::keys::action_label(&action));
+                if let Some(old) = displaced.filter(|o| o != &action) {
+                    // Say what was taken away: a silent steal is how a user
+                    // loses a key they were relying on.
+                    msg.push_str(&format!(
+                        " (taken from {})",
+                        crate::tui::keys::action_label(&old)
+                    ));
+                }
+                app.config_view.status = Some(msg.clone());
+                app.log_event(format!("keys: {msg}"), crate::tui::app::EventKind::Success);
+            }
+            Err(e) => {
+                app.config_view.status = Some(format!("could not write keys.toml: {e}"));
+                app.log_event(format!("keys: {e}"), crate::tui::app::EventKind::Error);
+            }
+        }
+        return;
+    }
+    if app.config_view.captured.len() < 3 {
+        app.config_view.captured.push(Chord::from_event(key));
+    }
 }

@@ -227,6 +227,17 @@ pub fn render(f: &mut Frame, app: &App) {
     if app.repo_picker_open {
         render_repo_picker(f, app, rows[0]);
     }
+
+    // Last, so it sits over everything: the palette is the way out when a
+    // binding is wrong, forgotten, or was never made.
+    if app.palette.open {
+        render_palette(f, app, area);
+    }
+
+    // A half-typed sequence says so, or `g` looks like a key that did nothing.
+    if !app.pending_chords.is_empty() {
+        render_pending_chords(f, app, rows[4]);
+    }
 }
 
 /// The name the sidebar gives the current view, for the chrome bar. Views
@@ -438,6 +449,115 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         inner,
+    );
+}
+
+/// The action palette: every action, filtered by what is typed.
+fn render_palette(f: &mut Frame, app: &App, area: Rect) {
+    let w = 64u16.min(area.width.saturating_sub(4));
+    let h = 16u16.min(area.height.saturating_sub(4));
+    let overlay = Rect::new(
+        area.x + area.width.saturating_sub(w) / 2,
+        area.y + area.height.saturating_sub(h) / 2,
+        w,
+        h,
+    );
+    f.render_widget(Clear, overlay);
+
+    let block = Block::default()
+        .title(Span::styled(
+            " actions ",
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(app.border_type())
+        .border_style(Style::default().fg(theme::RULE));
+    let inner = block.inner(overlay);
+    f.render_widget(block, overlay);
+
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(inner);
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(" > ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                app.palette.query.clone(),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
+        ])),
+        rows[0],
+    );
+
+    let matches = app.palette_matches();
+    let items: Vec<ListItem> = if matches.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "no action matches",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
+    } else {
+        matches
+            .iter()
+            .enumerate()
+            .map(|(i, action)| {
+                let is_sel = i == app.palette.idx;
+                // The binding is shown beside the action, so the palette also
+                // teaches the keys instead of replacing them.
+                let binding = app
+                    .keymap
+                    .binding_for(action.id)
+                    .map(|b| b.to_string())
+                    .unwrap_or_default();
+                ListItem::new(Line::from(vec![
+                    theme::caret(app, is_sel),
+                    Span::styled(
+                        format!("{:<30}", action.label),
+                        Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                    ),
+                    Span::styled(
+                        format!("{binding:<12}"),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                ]))
+                .style(if is_sel {
+                    Style::default()
+                        .bg(theme::selection(app))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                })
+            })
+            .collect()
+    };
+
+    let mut state = ListState::default();
+    state.select(Some(app.palette.idx.min(matches.len().saturating_sub(1))));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        rows[1],
+        &mut state,
+    );
+}
+
+/// What has been pressed of a sequence, on the key line.
+fn render_pending_chords(f: &mut Frame, app: &App, area: Rect) {
+    let text: Vec<String> = app.pending_chords.iter().map(|c| c.to_string()).collect();
+    let label = format!(" {} … ", text.join(" "));
+    let w = label.chars().count() as u16;
+    let spot = Rect::new(area.x, area.y, w.min(area.width), 1);
+    f.render_widget(Clear, spot);
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            label,
+            Style::default()
+                .fg(theme::INK)
+                .bg(theme::selection(app))
+                .add_modifier(Modifier::BOLD),
+        ))),
+        spot,
     );
 }
 
@@ -1449,6 +1569,31 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
                 ]),
             },
+            View::Config if app.config_view.tab == crate::tui::app::ConfigTab::Keys => {
+                if app.config_view.capturing.is_some() {
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("[any key]", Style::default().fg(bc)),
+                        Span::styled(" record  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[Enter]", Style::default().fg(bc)),
+                        Span::styled(" save  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[Esc]", Style::default().fg(bc)),
+                        Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
+                    ])
+                } else {
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                        Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[Enter]", Style::default().fg(bc)),
+                        Span::styled(" bind  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[d]", Style::default().fg(bc)),
+                        Span::styled(" unbind  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[1]", Style::default().fg(bc)),
+                        Span::styled(" values", Style::default().fg(theme::INK_FAINT)),
+                    ])
+                }
+            }
             View::Config => {
                 // Hint adapts to mode (0.7.5): editing → Enter saves, Esc
                 // cancels; otherwise Enter opens edit + Tab toggles scope.
@@ -2043,6 +2188,42 @@ mod tests {
             screen.contains(".toriignore.local"),
             "the detail names the file the rule lives in"
         );
+    }
+
+    /// The keys tab and the palette, drawn once so they can be reviewed.
+    #[test]
+    fn look_at_the_keys() {
+        let mut app = App::new().expect("a repository to look at");
+        app.keymap = crate::tui::keys::Keymap::from_text(
+            "\"ctrl+g\" = \"goto:log\"\n\"g s\" = \"goto:sync\"\n\"alt+i\" = \"goto:ignore\"\n",
+        );
+        app.go_to(View::Config);
+        app.sidebar_focused = false;
+        app.config_view.tab = crate::tui::app::ConfigTab::Keys;
+        app.config_view.keys_idx = 5;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        println!("{}", dump(terminal.backend().buffer(), 100, 24));
+
+        app.palette.open = true;
+        app.palette.query = "sc".into();
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        println!("{}", dump(terminal.backend().buffer(), 100, 24));
+    }
+
+    fn dump(buffer: &ratatui::buffer::Buffer, w: u16, h: u16) -> String {
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Not an assertion — `cargo test -- --nocapture look_at_it` prints the

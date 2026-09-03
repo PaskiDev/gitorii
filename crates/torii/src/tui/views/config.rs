@@ -13,12 +13,200 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::{App, ConfigScope};
+use crate::tui::app::{App, ConfigScope, ConfigTab};
+use crate::tui::keys;
 use crate::tui::theme;
 
 const SECTIONS: &[&str] = &["user", "auth", "git", "mirror", "snapshot", "ui"];
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
+    // Two tabs share this screen: the git values, and the key bindings.
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(area);
+    render_tab_strip(f, app, rows[0]);
+    theme::hrule_content(f, rows[1], &[]);
+    match app.config_view.tab {
+        ConfigTab::Values => render_values(f, app, rows[2]),
+        ConfigTab::Keys => render_keys(f, app, rows[2]),
+    }
+}
+
+/// The two tabs, as words rather than a boxed widget.
+fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
+    let focused = !app.sidebar_focused;
+    let tab = app.config_view.tab;
+    let style = |mine: ConfigTab| {
+        if tab == mine && focused {
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD)
+        } else if tab == mine {
+            Style::default()
+                .fg(theme::INK_DIM)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::INK_FAINT)
+        }
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("1 values", style(ConfigTab::Values)),
+            Span::styled(" · ", Style::default().fg(theme::RULE)),
+            Span::styled("2 keys", style(ConfigTab::Keys)),
+        ])),
+        area,
+    );
+}
+
+/// The bindings: every action, and what it is on.
+fn render_keys(f: &mut Frame, app: &App, area: Rect) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(16), Constraint::Min(1)])
+        .split(area);
+
+    // Left: the groups the catalogue declares, as a legend.
+    let divider = theme::divider_right();
+    let groups_pane = divider.inner(cols[0]);
+    f.render_widget(divider, cols[0]);
+    let spine = [cols[0].right().saturating_sub(1)];
+    theme::tie_above(f, area, &spine);
+    theme::tie_below(f, area, &spine);
+
+    let [groups_heading, groups_body] = theme::heading_and_body(groups_pane);
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("groups", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), groups_heading);
+
+    let selected_group = keys::ACTIONS
+        .get(app.config_view.keys_idx)
+        .map(|a| a.group)
+        .unwrap_or("");
+    let mut seen: Vec<&str> = Vec::new();
+    for a in keys::ACTIONS {
+        if !seen.contains(&a.group) {
+            seen.push(a.group);
+        }
+    }
+    let group_items: Vec<ListItem> = seen
+        .iter()
+        .map(|g| {
+            let is_current = *g == selected_group;
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_current),
+                Span::styled(
+                    *g,
+                    Style::default().fg(if is_current {
+                        theme::INK
+                    } else {
+                        theme::INK_DIM
+                    }),
+                ),
+            ]))
+        })
+        .collect();
+    f.render_widget(
+        List::new(group_items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        groups_body,
+    );
+
+    // Right: action → binding.
+    let [heading_row, body] = theme::heading_and_body(cols[1]);
+    let focused = !app.sidebar_focused;
+    let bound = app.keymap.bindings.len();
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("keys", Some(bound), focused));
+    heading.push(Span::styled(
+        format!("  palette {}", app.keymap.leader),
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    if let Some(action) = &app.config_view.capturing {
+        heading.push(Span::styled(
+            format!("  recording {action} — Esc cancels"),
+            Style::default().fg(theme::accent(app)),
+        ));
+    }
+    // A binding that can never fire is worth saying out loud, right where it
+    // was made.
+    if let Some(first) = app.keymap.conflicts().first() {
+        heading.push(Span::styled(
+            format!("  ⚠ {first}"),
+            Style::default().fg(theme::WARN),
+        ));
+    }
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let items: Vec<ListItem> = keys::ACTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, action)| {
+            let is_sel = focused && i == app.config_view.keys_idx;
+            let capturing = app.config_view.capturing.as_deref() == Some(action.id);
+            let binding = if capturing {
+                // Show the chords as they land, so a three-chord binding can
+                // be seen taking shape.
+                let so_far: Vec<String> = app
+                    .config_view
+                    .captured
+                    .iter()
+                    .map(|c| c.to_string())
+                    .collect();
+                if so_far.is_empty() {
+                    "press keys…".to_string()
+                } else {
+                    format!("{}  ↵ to save", so_far.join(" "))
+                }
+            } else {
+                app.keymap
+                    .binding_for(action.id)
+                    .map(|b| b.to_string())
+                    .unwrap_or_else(|| "—".to_string())
+            };
+            let binding_colour = if capturing {
+                theme::accent(app)
+            } else if app.keymap.binding_for(action.id).is_some() {
+                theme::INK
+            } else {
+                theme::INK_FAINT
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(
+                    format!("{:<28}", action.label),
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                ),
+                Span::styled(
+                    format!("{binding:<18}"),
+                    Style::default().fg(binding_colour),
+                ),
+                Span::styled(action.id, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
+                Style::default()
+                    .bg(theme::selection(app))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            })
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.config_view.keys_idx));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
+}
+
+fn render_values(f: &mut Frame, app: &App, area: Rect) {
     // 0.7.5: the "status" box used to live below as a third row with
     // mode-aware hints. Those hints moved into the global hint bar
     // (render_hint in ui.rs) so they sit with every other view's bottom

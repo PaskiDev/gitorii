@@ -24,6 +24,26 @@ pub struct ConfigState {
     pub edit_cursor: usize,
     pub scope: ConfigScope,
     pub status: Option<String>,
+    /// Which tab of the config screen is showing: the git settings, or the
+    /// key bindings.
+    pub tab: ConfigTab,
+    /// Row of the keys tab.
+    pub keys_idx: usize,
+    /// While set, the next keypress is recorded as this action's binding
+    /// rather than acted on.
+    pub capturing: Option<String>,
+    /// Chords collected so far for the binding being captured.
+    pub captured: Vec<crate::tui::keys::Chord>,
+    /// An action picked in the palette, waiting for its binding.
+    pub pending_action: Option<String>,
+}
+
+/// The config screen shows two things that are both "settings" and share
+/// nothing else: git config values, and key bindings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigTab {
+    Values,
+    Keys,
 }
 
 impl Default for ConfigState {
@@ -36,6 +56,11 @@ impl Default for ConfigState {
             edit_cursor: 0,
             scope: ConfigScope::Global,
             status: None,
+            tab: ConfigTab::Values,
+            keys_idx: 0,
+            capturing: None,
+            captured: Vec::new(),
+            pending_action: None,
         }
     }
 }
