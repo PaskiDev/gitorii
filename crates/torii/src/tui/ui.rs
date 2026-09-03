@@ -466,7 +466,7 @@ fn render_palette(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .title(Span::styled(
-            " actions ",
+            app.palette_title(),
             Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
@@ -504,23 +504,16 @@ fn render_palette(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, action)| {
                 let is_sel = i == app.palette.idx;
-                // The binding is shown beside the action, so the palette also
-                // teaches the keys instead of replacing them.
-                let binding = app
-                    .keymap
-                    .binding_for(action.id)
-                    .map(|b| b.to_string())
-                    .unwrap_or_default();
+                // The row carries its own right-hand text: a binding for an
+                // action, `current` for the branch you are on, a path for a
+                // repo. The palette teaches the keys instead of replacing them.
                 ListItem::new(Line::from(vec![
                     theme::caret(app, is_sel),
                     Span::styled(
                         format!("{:<30}", action.label),
                         Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                     ),
-                    Span::styled(
-                        format!("{binding:<12}"),
-                        Style::default().fg(theme::INK_FAINT),
-                    ),
+                    Span::styled(action.hint.clone(), Style::default().fg(theme::INK_FAINT)),
                 ]))
                 .style(if is_sel {
                     Style::default()
@@ -2207,7 +2200,7 @@ mod tests {
         println!("{}", dump(terminal.backend().buffer(), 100, 24));
 
         app.palette.open = true;
-        app.palette.query = "sc".into();
+        app.palette.query = "sw".into();
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         println!("{}", dump(terminal.backend().buffer(), 100, 24));

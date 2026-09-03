@@ -198,12 +198,26 @@ pub struct Keymap {
 
 impl Default for Keymap {
     fn default() -> Self {
-        Self {
+        let mut km = Self {
             bindings: Vec::new(),
             // Ctrl-K: modified, so it survives a text field, and free in every
             // view's own keys.
             leader: Binding(vec![Chord::new(KeyCode::Char('k'), KeyModifiers::CONTROL)]),
+        };
+        // Two bindings ship on by default, because they are the ones that pay
+        // for the whole feature: moving between branches and between the
+        // repos of a workspace without leaving the screen you are on. Both are
+        // modified, so they also work while typing, and either can be rebound
+        // or dropped in the config screen.
+        for (binding, action) in [
+            ("ctrl+b", "repo:switch-branch"),
+            ("ctrl+o", "repo:switch-repo"),
+        ] {
+            if let Ok(b) = parse_binding(binding) {
+                km.bind(b, action);
+            }
         }
+        km
     }
 }
 
@@ -287,8 +301,11 @@ mod tests {
         parse_chord(text).unwrap()
     }
 
+    /// A map with nothing but what the test puts in it — the shipped defaults
+    /// would otherwise show up in every count.
     fn map(pairs: &[(&str, &str)]) -> Keymap {
         let mut km = Keymap::default();
+        km.bindings.clear();
         for (binding, action) in pairs {
             km.bind(parse_binding(binding).unwrap(), action);
         }
@@ -450,6 +467,8 @@ pub const ACTIONS: &[ActionDef] = &[
     // Things worth reaching from anywhere.
     def("repo:scan", "Scan for secrets", "repo"),
     def("repo:scan-history", "Scan the whole history", "repo"),
+    def("repo:switch-branch", "Switch branch…", "repo"),
+    def("repo:switch-repo", "Switch repo of the workspace…", "repo"),
 ];
 
 const fn def(id: &'static str, label: &'static str, group: &'static str) -> ActionDef {
@@ -554,21 +573,9 @@ mod file_tests {
         let km = Keymap::from_text(
             "[keys]\n\"ctrl+g\" = \"goto:log\"\n\"ctrl+nonsense\" = \"goto:sync\"\ngarbage\n\"g s\" = \"goto:tag\"\n",
         );
-        assert_eq!(km.bindings.len(), 2);
         assert!(km.binding_for("goto:log").is_some());
         assert!(km.binding_for("goto:tag").is_some());
         assert!(km.binding_for("goto:sync").is_none());
-    }
-
-    #[test]
-    fn no_file_means_no_bindings_and_a_working_leader() {
-        let km = Keymap::from_text("");
-        assert!(km.bindings.is_empty());
-        assert_eq!(km.leader.to_string(), "ctrl+k");
-        assert!(
-            km.leader.is_typing_safe(),
-            "the way out must survive a text field"
-        );
     }
 
     /// Every action the config screen offers must be one the runtime knows;

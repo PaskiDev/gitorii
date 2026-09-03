@@ -1446,6 +1446,101 @@ target/
         );
     }
 
+    /// The point of the whole thing: switch branch from wherever you are,
+    /// without walking to the branch view and back.
+    #[test]
+    fn the_branch_switcher_checks_out_from_any_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        let sig = git2::Signature::now("T", "t@x").unwrap();
+        let tree = {
+            let mut index = repo.index().unwrap();
+            std::fs::write(tmp.path().join("a.txt"), "one\n").unwrap();
+            index.add_path(std::path::Path::new("a.txt")).unwrap();
+            index.write().unwrap();
+            let oid = index.write_tree().unwrap();
+            repo.find_tree(oid).unwrap()
+        };
+        let head = repo
+            .commit(Some("HEAD"), &sig, &sig, "one", &tree, &[])
+            .unwrap();
+        repo.branch("feature", &repo.find_commit(head).unwrap(), false)
+            .unwrap();
+
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        // Somewhere that has nothing to do with branches.
+        app.view = View::Platform;
+
+        app.open_switcher(PaletteMode::Branches);
+        assert!(app.palette.open);
+        assert_eq!(app.palette_title(), " switch branch ");
+
+        app.palette.query = "feature".into();
+        app.palette.idx = 0;
+        app.palette_accept();
+
+        assert_eq!(app.branch, "feature", "HEAD moved");
+        assert!(!app.palette.open);
+        assert_eq!(app.view, View::Platform, "the view you were on stays put");
+    }
+
+    /// A failed checkout — a dirty tree, usually — says so instead of leaving
+    /// the user thinking the branch changed.
+    #[test]
+    fn a_refused_checkout_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+
+        app.switch_to_branch("nope");
+
+        assert!(
+            app.event_log
+                .first()
+                .is_some_and(|e| e.message.contains("checkout failed")),
+            "{:?}",
+            app.event_log.first().map(|e| e.message.clone())
+        );
+    }
+
+    /// With no workspace there is nothing to switch between, and the overlay
+    /// says so rather than opening empty.
+    #[test]
+    fn the_repo_switcher_needs_a_workspace() {
+        let mut app = App::test_blank();
+        app.open_switcher(PaletteMode::Repos);
+
+        assert!(!app.palette.open);
+        assert!(
+            app.event_log
+                .first()
+                .is_some_and(|e| e.message.contains("no workspace")),
+            "{:?}",
+            app.event_log.first().map(|e| e.message.clone())
+        );
+    }
+
+    /// Both switchers are bound to modified chords, so they are exactly the
+    /// keys that still work with a commit message half-typed.
+    #[test]
+    fn the_switchers_work_while_typing() {
+        use crate::tui::keys::Chord;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::test_blank();
+        app.view = View::Commit;
+        app.commit_view.focus = CommitFocus::Input;
+        assert!(app.is_typing());
+
+        let ctrl_b = Chord::new(KeyCode::Char('b'), KeyModifiers::CONTROL);
+        assert!(
+            app.keymap_consume(ctrl_b),
+            "ctrl+b must not reach the field"
+        );
+    }
+
     /// The scanner used to run as a subprocess with its output sent to
     /// /dev/null, so the TUI could say "scan found issues — check event log"
     /// while the event log held nothing but that sentence. The findings are
