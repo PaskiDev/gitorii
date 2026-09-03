@@ -46,6 +46,11 @@ const TABS: &[Tab] = &[
     },
     // local action
     Tab {
+        key: "z",
+        label: "stats",
+        view: View::Stats,
+    },
+    Tab {
         key: "c",
         label: "save",
         view: View::Commit,
@@ -133,11 +138,6 @@ const TABS: &[Tab] = &[
         key: "g",
         label: "config",
         view: View::Config,
-    },
-    Tab {
-        key: "z",
-        label: "stats",
-        view: View::Stats,
     },
 ];
 
