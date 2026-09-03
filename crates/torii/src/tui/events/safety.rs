@@ -14,6 +14,7 @@ pub(super) fn handle_safety(key: event::KeyEvent, app: &mut App) -> Option<Actio
     match app.ignore_view.focus.clone() {
         IgnoreFocus::List => handle_list(key, app),
         IgnoreFocus::Input => handle_input(key, app),
+        IgnoreFocus::SettingInput => handle_setting_input(key, app),
         IgnoreFocus::ConfirmDelete => handle_confirm(key, app),
     }
 }
@@ -39,11 +40,21 @@ fn handle_list(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         // The scanner tab is a report: it scrolls, and sends you to the rules
         // tab for anything that can be changed.
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                app.ignore_view.scanner_idx = app.ignore_view.scanner_idx.saturating_add(1);
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                app.ignore_view.scanner_idx = app.ignore_view.scanner_idx.saturating_sub(1);
+            KeyCode::Char('j') | KeyCode::Down => app.safety_move_setting(1),
+            KeyCode::Char('k') | KeyCode::Up => app.safety_move_setting(-1),
+            KeyCode::Enter => app.safety_start_setting_edit(),
+            KeyCode::Char('d') => app.safety_unset_selected(),
+            // A custom pattern is a rule, so it is added where the rules are —
+            // with the kind already set, since that is what was asked for here.
+            KeyCode::Char('a') => {
+                app.ignore_view.tab = SafetyTab::Rules;
+                if app.ignore_view.new_kind != crate::ignore_rules::Kind::Secret {
+                    app.ignore_toggle_kind();
+                }
+                app.ignore_view.input.clear();
+                app.ignore_view.cursor = 0;
+                app.ignore_view.status = None;
+                app.ignore_view.focus = IgnoreFocus::Input;
             }
             KeyCode::Char('r') => app.load_safety(),
             _ => {}
@@ -139,6 +150,47 @@ fn handle_confirm(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     match key.code {
         KeyCode::Char('y') => app.ignore_delete_selected(),
         _ => app.ignore_view.focus = IgnoreFocus::List,
+    }
+    None
+}
+
+/// Typing the value of a scanner setting. Same shape as the rule input: the
+/// target file can still be flipped, because a size limit is ordinary and
+/// public while a hook command may name internal tooling.
+fn handle_setting_input(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    match key.code {
+        KeyCode::Esc => {
+            app.ignore_view.input.clear();
+            app.ignore_view.cursor = 0;
+            app.ignore_view.status = None;
+            app.ignore_view.focus = IgnoreFocus::List;
+        }
+        KeyCode::Enter => {
+            if !app.ignore_view.input.trim().is_empty() {
+                app.safety_commit_setting();
+            }
+        }
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.ignore_toggle_origin()
+        }
+        KeyCode::Char(c) => {
+            let idx = app.ignore_view.cursor.min(app.ignore_view.input.len());
+            app.ignore_view.input.insert(idx, c);
+            app.ignore_view.cursor = idx + c.len_utf8();
+        }
+        KeyCode::Backspace => {
+            let cursor = app.ignore_view.cursor.min(app.ignore_view.input.len());
+            if cursor > 0 {
+                let prev = app.ignore_view.input[..cursor]
+                    .chars()
+                    .next_back()
+                    .map(char::len_utf8)
+                    .unwrap_or(1);
+                app.ignore_view.input.remove(cursor - prev);
+                app.ignore_view.cursor = cursor - prev;
+            }
+        }
+        _ => {}
     }
     None
 }

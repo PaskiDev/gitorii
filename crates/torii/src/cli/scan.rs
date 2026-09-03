@@ -70,7 +70,9 @@ fn run_scan(history: bool) -> Result<()> {
         }
     } else {
         println!("🔍 Scanning staged files for sensitive data...\n");
-        let findings = scanner::scan_staged(repo_path)?;
+        // Both the built-ins and the user's own rules: the command you run
+        // to check must not report clean on a rule you configured.
+        let findings = scanner::scan_staged_all(repo_path)?;
         if findings.is_empty() {
             println!("✅ No sensitive data detected in staged files.");
         } else {

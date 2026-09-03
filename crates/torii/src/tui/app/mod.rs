@@ -579,7 +579,7 @@ impl App {
                     .collect::<Vec<_>>()
             })
         } else {
-            crate::scanner::scan_staged(&path)
+            crate::scanner::scan_staged_all(&path)
         };
 
         match result {
@@ -1550,6 +1550,136 @@ target/
         assert!(
             app.keymap_consume(ctrl_b),
             "ctrl+b must not reach the field"
+        );
+    }
+
+    /// The scanner's own settings are editable from the screen that shows
+    /// them: a size gate nobody can set is a gate nobody uses.
+    #[test]
+    fn a_size_limit_can_be_set_from_the_scanner_tab() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_safety();
+
+        let idx = app
+            .ignore_view
+            .settings
+            .iter()
+            .position(|s| s.key == "max")
+            .expect("a row for the hard limit");
+        app.ignore_view.scanner_idx = idx;
+        app.safety_start_setting_edit();
+        assert_eq!(app.ignore_view.focus, IgnoreFocus::SettingInput);
+
+        app.ignore_view.input = "10MB".into();
+        app.safety_commit_setting();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert!(
+            text.contains("[size]") && text.contains("max: 10MB"),
+            "{text}"
+        );
+        // And the screen now knows about it, without a manual reload.
+        assert_eq!(app.ignore_view.size.max_bytes, Some(10 * 1024 * 1024));
+        assert_eq!(app.ignore_view.focus, IgnoreFocus::List);
+    }
+
+    /// A size the scanner cannot parse would turn the gate off without
+    /// saying so, so it never reaches the file.
+    #[test]
+    fn a_size_the_scanner_cannot_read_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_safety();
+        app.ignore_view.scanner_idx = app
+            .ignore_view
+            .settings
+            .iter()
+            .position(|s| s.key == "max")
+            .unwrap();
+        app.safety_start_setting_edit();
+
+        app.ignore_view.input = "ten megabytes".into();
+        app.safety_commit_setting();
+
+        assert_eq!(
+            app.ignore_view.focus,
+            IgnoreFocus::SettingInput,
+            "still editing"
+        );
+        assert!(
+            app.ignore_view
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("10MB")),
+            "the message shows the shape it wants: {:?}",
+            app.ignore_view.status
+        );
+        assert!(!tmp.path().join(".toriignore").exists());
+    }
+
+    /// Hooks are a list: a second one is another line, not a replacement.
+    #[test]
+    fn hooks_stack_instead_of_replacing_each_other() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_safety();
+
+        for command in ["cargo fmt --check", "cargo test"] {
+            app.ignore_view.scanner_idx = app
+                .ignore_view
+                .settings
+                .iter()
+                .position(|s| s.key == "pre-save" && s.value.is_none())
+                .or_else(|| {
+                    app.ignore_view
+                        .settings
+                        .iter()
+                        .position(|s| s.key == "pre-save")
+                })
+                .unwrap();
+            app.safety_start_setting_edit();
+            app.ignore_view.input = command.into();
+            app.safety_commit_setting();
+        }
+
+        assert_eq!(
+            app.ignore_view.hooks.pre_save.len(),
+            2,
+            "{:?}",
+            app.ignore_view.hooks.pre_save
+        );
+    }
+
+    /// Unsetting takes the line out of the file it was written to.
+    #[test]
+    fn a_setting_can_be_taken_back_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore"),
+            "[size]\nmax: 10MB\nwarn: 1MB\n",
+        )
+        .unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_safety();
+
+        app.ignore_view.scanner_idx = app
+            .ignore_view
+            .settings
+            .iter()
+            .position(|s| s.key == "max")
+            .unwrap();
+        app.safety_unset_selected();
+
+        assert_eq!(app.ignore_view.size.max_bytes, None);
+        assert_eq!(
+            app.ignore_view.size.warn_bytes,
+            Some(1024 * 1024),
+            "the other one stays"
         );
     }
 
