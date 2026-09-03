@@ -18,6 +18,10 @@ pub struct TuiSettings {
     pub show_remote_view: bool,
     pub brand_color: (u8, u8, u8),
     pub selected_bg: (u8, u8, u8),
+    /// Whether `selected_bg` came from the file. Without it the selection is
+    /// derived from the accent instead of using the stored default, so the
+    /// two always belong to the same colour.
+    pub selected_bg_explicit: bool,
     pub event_log_max: usize,
     pub graph_style: crate::graph::GraphStyle,
 }
@@ -33,6 +37,7 @@ impl Default for TuiSettings {
             show_remote_view: true,
             brand_color: (255, 76, 76),
             selected_bg: (40, 40, 60),
+            selected_bg_explicit: false,
             event_log_max: 50,
             graph_style: crate::graph::GraphStyle::Curves,
         }
@@ -77,6 +82,7 @@ impl TuiSettings {
                 "selected_bg" => {
                     if let Some(rgb) = parse_rgb(val) {
                         s.selected_bg = rgb;
+                        s.selected_bg_explicit = true;
                     }
                 }
                 "event_log_max" => {

@@ -52,10 +52,36 @@ pub fn accent(app: &App) -> Color {
     app.brand_color()
 }
 
-/// The selected row's background. The site uses `--accent-soft`, an alpha
-/// wash; a terminal cell has no alpha, so settings hold the baked colour.
+/// The selected row's background.
+///
+/// The site paints it with `--accent-soft`, the accent at low alpha. A
+/// terminal cell has no alpha, so the wash is baked here from whatever accent
+/// is in force: the selection and the caret then belong to the same colour,
+/// which is the whole point of having an accent.
+///
+/// A `selected_bg` written in the settings file still wins — someone who
+/// picked their own colour keeps it.
 pub fn selection(app: &App) -> Color {
-    app.selected_bg()
+    if app.settings.selected_bg_explicit {
+        return app.selected_bg();
+    }
+    wash(accent(app))
+}
+
+/// Mix a colour down towards black, to roughly the weight `--accent-soft`
+/// carries on the site. Dark enough for INK to stay readable on top.
+fn wash(color: Color) -> Color {
+    const KEEP: u16 = 30; // percent of the original left standing
+    match color {
+        Color::Rgb(r, g, b) => Color::Rgb(
+            (r as u16 * KEEP / 100) as u8,
+            (g as u16 * KEEP / 100) as u8,
+            (b as u16 * KEEP / 100) as u8,
+        ),
+        // An indexed or named colour has no channels to mix; the stored
+        // default is the honest fallback.
+        other => other,
+    }
 }
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
@@ -273,4 +299,32 @@ pub fn unbracket(span: Span<'_>) -> Span<'_> {
     let inner = &trimmed[1..trimmed.len() - 1];
     let style = span.style;
     Span::styled(format!("{}{} ", " ".repeat(lead), inner), style)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The selection is the accent washed down, not a colour of its own: the
+    /// old default was a blue-grey belonging to no palette, and it stayed blue
+    /// for anyone with a settings file even after the restyle.
+    #[test]
+    fn the_selection_is_the_accent_washed_down() {
+        match wash(Color::Rgb(255, 76, 76)) {
+            Color::Rgb(r, g, b) => {
+                assert!(r > g && r > b, "it stays red: {r},{g},{b}");
+                assert!(r < 128, "dark enough for ink to read on top: {r}");
+            }
+            other => panic!("expected rgb, got {other:?}"),
+        }
+    }
+
+    /// A user who picked their own accent gets a selection that matches it.
+    #[test]
+    fn the_wash_follows_whatever_accent_is_set() {
+        match wash(Color::Rgb(74, 222, 128)) {
+            Color::Rgb(r, g, b) => assert!(g > r && g > b, "{r},{g},{b}"),
+            other => panic!("expected rgb, got {other:?}"),
+        }
+    }
 }
