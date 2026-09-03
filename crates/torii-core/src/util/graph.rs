@@ -29,7 +29,7 @@
 pub enum GraphStyle {
     /// Plain ASCII (`* | / \`). Maximum portability.
     Ascii,
-    /// Unicode box-drawing curves (`● │ ╮ ╰`). Recommended default.
+    /// Unicode box-drawing curves (`■ │ ◝ ◟`). Recommended default.
     #[default]
     Curves,
     /// Heavy box-drawing (`⬢ ┃ ┓ ┗`). Bold, attention-grabbing.
@@ -70,17 +70,20 @@ impl GraphStyle {
     /// Glyph for the active commit on its lane, varying by parent count:
     /// 0 = root, 1 = normal, ≥2 = merge.
     ///
-    /// Curves / Bubbles / BubblesX share the bullseye family (〇 ⦿ ◉) for a
-    /// "node-on-a-line" look that reads like a graph editor (≈ kraken).
+    /// Curves / Bubbles / BubblesX share a square family (□ ■ ▣): fill says
+    /// the commit has history behind it, and the inner square says it joins
+    /// two histories. Squares sit on the same grid as the lane rules, which
+    /// the bullseye family (〇 ⦿ ◉) never did — those also render wide in
+    /// several monospace fonts, so a node shifted its own column.
     pub fn commit_glyph(self, parent_count: usize) -> char {
         match (self, parent_count) {
             (Self::Ascii, _) => '*',
             (Self::Heavy, 0) => '□',
             (Self::Heavy, 1) => '◉',
             (Self::Heavy, _) => '◆',
-            (Self::Curves | Self::Bubbles | Self::BubblesX, 0) => '〇',
-            (Self::Curves | Self::Bubbles | Self::BubblesX, 1) => '⦿',
-            (Self::Curves | Self::Bubbles | Self::BubblesX, _) => '◉',
+            (Self::Curves | Self::Bubbles | Self::BubblesX, 0) => '□',
+            (Self::Curves | Self::Bubbles | Self::BubblesX, 1) => '■',
+            (Self::Curves | Self::Bubbles | Self::BubblesX, _) => '▣',
         }
     }
 
@@ -539,6 +542,21 @@ pub fn render_repo_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The node family is a decision, not a detail: fill says the commit has
+    /// history behind it, the inner square says it joins two. Pinned here
+    /// because the TUI and the CLI both draw their nodes from this table.
+    #[test]
+    fn curve_family_nodes_are_squares() {
+        for style in [GraphStyle::Curves, GraphStyle::Bubbles, GraphStyle::BubblesX] {
+            assert_eq!(style.commit_glyph(0), '□', "root");
+            assert_eq!(style.commit_glyph(1), '■', "normal");
+            assert_eq!(style.commit_glyph(2), '▣', "merge");
+        }
+        // Ascii and Heavy keep their own vocabulary.
+        assert_eq!(GraphStyle::Ascii.commit_glyph(1), '*');
+        assert_eq!(GraphStyle::Heavy.commit_glyph(1), '◉');
+    }
 
     fn c(id: &str, parents: &[&str]) -> GraphCommit {
         GraphCommit {
