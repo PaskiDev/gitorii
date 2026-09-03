@@ -12,6 +12,7 @@ pub mod describe;
 pub mod fileops;
 pub mod grep;
 pub mod notes;
+pub mod restore;
 pub mod submodule;
 pub mod subtree;
 pub mod worktree;
