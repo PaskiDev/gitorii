@@ -49,8 +49,8 @@ fn render_list(f: &mut Frame, app: &App, area: Rect, active: bool) {
             app.snapshot_view.filtered.clone()
         };
 
-    let searching = !app.snapshot_view.search_query.is_empty()
-        && !app.snapshot_view.filtered.is_empty();
+    let searching =
+        !app.snapshot_view.search_query.is_empty() && !app.snapshot_view.filtered.is_empty();
 
     let items: Vec<ListItem> = if app.snapshot_view.snapshots.is_empty() {
         vec![ListItem::new(Span::styled(
@@ -87,7 +87,10 @@ fn render_list(f: &mut Frame, app: &App, area: Rect, active: bool) {
                         }),
                     ),
                     Span::styled(format!("  {}", s.id), Style::default().fg(theme::WARN)),
-                    Span::styled(format!("  {}", s.time), Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(
+                        format!("  {}", s.time),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
                 ]))
                 .style(if is_sel {
                     Style::default().bg(theme::selection(app))

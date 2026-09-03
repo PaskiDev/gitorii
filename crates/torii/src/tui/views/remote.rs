@@ -59,10 +59,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                         format!("{:<10}", &r.platform),
                         Style::default().fg(platform_color(&r.platform)),
                     ),
-                    Span::styled(
-                        truncate(&r.url, 30),
-                        Style::default().fg(theme::INK_FAINT),
-                    ),
+                    Span::styled(truncate(&r.url, 30), Style::default().fg(theme::INK_FAINT)),
                 ]))
                 .style(row_style(app, is_sel)),
             );
@@ -274,11 +271,7 @@ fn render_ops(f: &mut Frame, app: &App, body: Rect, sel_list_pos: usize) {
     state.select(Some(app.remote_view.ops_idx));
 
     f.render_widget(Clear, drop_area);
-    f.render_stateful_widget(
-        List::new(items).block(popup(app)),
-        drop_area,
-        &mut state,
-    );
+    f.render_stateful_widget(List::new(items).block(popup(app)), drop_area, &mut state);
 }
 
 fn render_url_editor(f: &mut Frame, app: &App, area: Rect) {

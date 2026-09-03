@@ -143,8 +143,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                         theme::caret(app, is_sel && focused),
                         Span::styled(
                             format!("{:<20}", repo_name(&r.path)),
-                            Style::default()
-                                .fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                            Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                         ),
                         Span::styled(
                             format!(" {:<10}", &r.branch),
@@ -154,7 +153,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                         if r.dirty {
                             Span::styled(
                                 " *",
-                                Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(theme::WARN)
+                                    .add_modifier(Modifier::BOLD),
                             )
                         } else {
                             Span::raw("")
@@ -220,7 +221,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                             Style::default().fg(theme::OK).add_modifier(Modifier::BOLD),
                         ),
                     ),
-                    field("sync", Span::styled(sync_text, Style::default().fg(sync_color))),
+                    field(
+                        "sync",
+                        Span::styled(sync_text, Style::default().fg(sync_color)),
+                    ),
                     field(
                         "dirty",
                         Span::styled(

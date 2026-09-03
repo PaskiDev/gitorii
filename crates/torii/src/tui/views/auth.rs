@@ -398,10 +398,7 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
             body.push(Line::from(""));
             body.push(Line::from(vec![
                 Span::styled("  ", Style::default()),
-                Span::styled(
-                    "2. Confirm the user code:",
-                    Style::default().fg(theme::INK),
-                ),
+                Span::styled("2. Confirm the user code:", Style::default().fg(theme::INK)),
             ]));
             body.push(Line::from(vec![
                 Span::raw("     "),
