@@ -307,7 +307,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .rev()
             .collect();
         let at_limit = len >= TITLE_MAX;
-        let counter_color = if len > 230 { theme::BAD } else { theme::INK_FAINT };
+        let counter_color = if len > 230 {
+            theme::BAD
+        } else {
+            theme::INK_FAINT
+        };
         let lines = vec![
             Line::from(vec![
                 Span::styled(

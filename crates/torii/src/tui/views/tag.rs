@@ -51,9 +51,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     theme::caret(app, is_sel),
                     Span::styled(
                         format!("{:<20}", &t.name),
-                        Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme::WARN)
+                            .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(format!(" {}", &t.time), Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(
+                        format!(" {}", &t.time),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
                 ]))
                 .style(if is_sel {
                     Style::default()
@@ -105,7 +110,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 "name",
                 Span::styled(
                     t.name.clone(),
-                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme::WARN)
+                        .add_modifier(Modifier::BOLD),
                 ),
             ),
             field(

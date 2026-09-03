@@ -106,7 +106,13 @@ fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
     let pv = &app.platform_view;
     let focused = !app.sidebar_focused;
 
-    let titles = ["1 pipelines", "2 jobs", "3 releases", "4 packages", "5 runners"];
+    let titles = [
+        "1 pipelines",
+        "2 jobs",
+        "3 releases",
+        "4 packages",
+        "5 runners",
+    ];
     let active_idx = match pv.sub_tab {
         PlatformSubTab::Pipelines => 0,
         PlatformSubTab::Jobs => 1,
@@ -121,7 +127,9 @@ fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
         .highlight_style(if focused {
             Style::default().fg(theme::INK).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(theme::INK_DIM).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(theme::INK_DIM)
+                .add_modifier(Modifier::BOLD)
         })
         .divider(Span::styled("·", Style::default().fg(theme::RULE)))
         .padding(" ", " ");
@@ -356,7 +364,10 @@ fn render_packages_items(app: &App) -> (String, Vec<ListItem<'static>>, usize) {
                 theme::caret(app, is_sel),
                 Span::styled(col(&p.name, 22), Style::default().fg(theme::INK)),
                 Span::styled(col(&p.version, 14), Style::default().fg(theme::OK)),
-                Span::styled(col(&p.package_type, 10), Style::default().fg(theme::INK_FAINT)),
+                Span::styled(
+                    col(&p.package_type, 10),
+                    Style::default().fg(theme::INK_FAINT),
+                ),
                 Span::styled(
                     col(&short_time(&p.created_at), 18),
                     Style::default().fg(theme::INK_FAINT),
@@ -452,7 +463,13 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
     match pv.sub_tab {
         PlatformSubTab::Pipelines => {
             if let Some(p) = pv.pipelines.get(pv.pipelines_idx) {
-                kv(&mut body, "id", &format!("#{}", p.id), theme::INK_DIM, value_w);
+                kv(
+                    &mut body,
+                    "id",
+                    &format!("#{}", p.id),
+                    theme::INK_DIM,
+                    value_w,
+                );
                 kv(
                     &mut body,
                     "status",
@@ -461,9 +478,27 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     value_w,
                 );
                 kv(&mut body, "branch", &p.branch, theme::INK, value_w);
-                kv(&mut body, "sha", &short_sha(&p.sha), theme::INK_FAINT, value_w);
-                kv(&mut body, "created", &p.created_at, theme::INK_FAINT, value_w);
-                kv(&mut body, "updated", &p.updated_at, theme::INK_FAINT, value_w);
+                kv(
+                    &mut body,
+                    "sha",
+                    &short_sha(&p.sha),
+                    theme::INK_FAINT,
+                    value_w,
+                );
+                kv(
+                    &mut body,
+                    "created",
+                    &p.created_at,
+                    theme::INK_FAINT,
+                    value_w,
+                );
+                kv(
+                    &mut body,
+                    "updated",
+                    &p.updated_at,
+                    theme::INK_FAINT,
+                    value_w,
+                );
                 body.push(Line::from(""));
                 kv(&mut body, "url", &p.web_url, theme::INK_DIM, value_w);
             }
@@ -474,7 +509,13 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     .duration_seconds
                     .map(|s| format!("{}s", s as u64))
                     .unwrap_or_default();
-                kv(&mut body, "id", &format!("#{}", j.id), theme::INK_DIM, value_w);
+                kv(
+                    &mut body,
+                    "id",
+                    &format!("#{}", j.id),
+                    theme::INK_DIM,
+                    value_w,
+                );
                 kv(
                     &mut body,
                     "pipeline",
@@ -500,7 +541,13 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             if let Some(r) = pv.releases.get(pv.releases_idx) {
                 kv(&mut body, "tag", &r.tag, theme::OK, value_w);
                 kv(&mut body, "name", &r.name, theme::INK, value_w);
-                kv(&mut body, "created", &r.created_at, theme::INK_FAINT, value_w);
+                kv(
+                    &mut body,
+                    "created",
+                    &r.created_at,
+                    theme::INK_FAINT,
+                    value_w,
+                );
                 body.push(Line::from(""));
                 kv(&mut body, "url", &r.web_url, theme::INK_DIM, value_w);
             }
@@ -509,8 +556,20 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             if let Some(p) = pv.packages.get(pv.packages_idx) {
                 kv(&mut body, "name", &p.name, theme::INK, value_w);
                 kv(&mut body, "version", &p.version, theme::OK, value_w);
-                kv(&mut body, "type", &p.package_type, theme::INK_FAINT, value_w);
-                kv(&mut body, "created", &p.created_at, theme::INK_FAINT, value_w);
+                kv(
+                    &mut body,
+                    "type",
+                    &p.package_type,
+                    theme::INK_FAINT,
+                    value_w,
+                );
+                kv(
+                    &mut body,
+                    "created",
+                    &p.created_at,
+                    theme::INK_FAINT,
+                    value_w,
+                );
             }
         }
         PlatformSubTab::Runners => {
@@ -526,9 +585,21 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
                     "paused" => theme::INK_FAINT,
                     _ => theme::INK_DIM,
                 };
-                kv(&mut body, "id", &format!("#{}", r.id), theme::INK_DIM, value_w);
+                kv(
+                    &mut body,
+                    "id",
+                    &format!("#{}", r.id),
+                    theme::INK_DIM,
+                    value_w,
+                );
                 kv(&mut body, "status", &r.status, status_c, value_w);
-                kv(&mut body, "description", &r.description, theme::INK, value_w);
+                kv(
+                    &mut body,
+                    "description",
+                    &r.description,
+                    theme::INK,
+                    value_w,
+                );
                 kv(&mut body, "type", &r.runner_type, theme::INK_FAINT, value_w);
                 kv(&mut body, "os", &r.os, theme::INK_FAINT, value_w);
                 if !r.ip_address.is_empty() {
@@ -834,7 +905,10 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
                 };
                 let marker = if is_cur { "●" } else { " " };
                 ListItem::new(Line::from(vec![
-                    Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(theme::accent(app))),
+                    Span::styled(
+                        if is_sel { "▶ " } else { "  " },
+                        Style::default().fg(theme::accent(app)),
+                    ),
                     Span::styled(format!("{} ", marker), Style::default().fg(theme::OK)),
                     Span::styled(
                         name.clone(),

@@ -217,10 +217,7 @@ fn render_detail(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::INK_FAINT),
         ))],
     };
-    f.render_widget(
-        Paragraph::new(body).wrap(Wrap { trim: false }),
-        body_area,
-    );
+    f.render_widget(Paragraph::new(body).wrap(Wrap { trim: false }), body_area);
 }
 
 fn state_color(state: &str) -> ratatui::style::Color {

@@ -44,10 +44,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 let text = chunk.iter().collect::<String>();
                 if i == 0 {
                     ListItem::new(Line::from(vec![
-                        Span::styled(
-                            "authentication required: ",
-                            Style::default().fg(theme::BAD),
-                        ),
+                        Span::styled("authentication required: ", Style::default().fg(theme::BAD)),
                         Span::styled(text, Style::default().fg(theme::INK_FAINT)),
                     ]))
                 } else {
@@ -111,7 +108,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let mut heading = vec![Span::raw(" ")];
     heading.extend(theme::panel_title(
         "issues",
-        if iv.loading { None } else { Some(iv.issues.len()) },
+        if iv.loading {
+            None
+        } else {
+            Some(iv.issues.len())
+        },
         focused,
     ));
     if iv.loading {
@@ -140,7 +141,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     "number",
                     Span::styled(
                         format!("#{}", issue.number),
-                        Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(theme::WARN)
+                            .add_modifier(Modifier::BOLD),
                     ),
                 ),
                 field(
@@ -158,10 +161,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             if !issue.labels.is_empty() {
                 lines.push(field(
                     "labels",
-                    Span::styled(
-                        issue.labels.join(", "),
-                        Style::default().fg(theme::INK_DIM),
-                    ),
+                    Span::styled(issue.labels.join(", "), Style::default().fg(theme::INK_DIM)),
                 ));
             }
             lines.push(Line::from(""));
@@ -238,7 +238,10 @@ fn render_close_confirm(f: &mut Frame, app: &App, body: Rect) {
                     .fg(theme::accent(app))
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("  any other key cancels", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                "  any other key cancels",
+                Style::default().fg(theme::INK_FAINT),
+            ),
         ]))
         // A destructive prompt keeps the red border: here red is status, not
         // the brand.

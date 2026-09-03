@@ -190,7 +190,9 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
         RefPickerOp::MarkGood => {
             title.push(Span::styled("mark good", Style::default().fg(theme::OK)))
         }
-        RefPickerOp::MarkBad => title.push(Span::styled("mark bad", Style::default().fg(theme::BAD))),
+        RefPickerOp::MarkBad => {
+            title.push(Span::styled("mark bad", Style::default().fg(theme::BAD)))
+        }
         RefPickerOp::Skip => title.push(Span::styled("skip", Style::default().fg(theme::WARN))),
     }
     if !picker.filter.is_empty() {
@@ -231,7 +233,9 @@ fn render_status(f: &mut Frame, app: &App, area: Rect) {
     if pv.in_progress {
         lines.push(Line::from(Span::styled(
             "  ● bisecting",
-            Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(theme::WARN)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(""));
         if let Some(h) = &pv.current_hash {

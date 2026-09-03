@@ -425,7 +425,10 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
                 EventKind::Info => "·",
             };
             ListItem::new(Line::from(vec![
-                Span::styled(format!(" {} ", e.timestamp), Style::default().fg(theme::INK_FAINT)),
+                Span::styled(
+                    format!(" {} ", e.timestamp),
+                    Style::default().fg(theme::INK_FAINT),
+                ),
                 Span::styled(kind_sym, Style::default().fg(kind_color)),
                 Span::raw(" "),
                 Span::styled(&e.message, Style::default().fg(theme::INK)),
@@ -635,7 +638,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
                                 Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[o]", Style::default().fg(bc)),
-                                Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
+                                Span::styled(
+                                    " operations  ",
+                                    Style::default().fg(theme::INK_FAINT),
+                                ),
                                 Span::styled("[/]", Style::default().fg(bc)),
                                 Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
                             ])
@@ -762,7 +768,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Span::styled("[↑↓/jk]", Style::default().fg(bc)),
                                 Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled("[o]", Style::default().fg(bc)),
-                                Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
+                                Span::styled(
+                                    " operations  ",
+                                    Style::default().fg(theme::INK_FAINT),
+                                ),
                                 Span::styled("[/]", Style::default().fg(bc)),
                                 Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
                             ])
@@ -775,7 +784,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 match &app.history_view.confirm {
                     HistoryConfirm::CherryPick => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("cherry-pick commit?  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled(
+                            "cherry-pick commit?  ",
+                            Style::default().fg(theme::INK_FAINT),
+                        ),
                         Span::styled("[y]", Style::default().fg(bc)),
                         Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[any]", Style::default().fg(bc)),
@@ -783,7 +795,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     ]),
                     HistoryConfirm::Clean => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("clean history & GC?  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled(
+                            "clean history & GC?  ",
+                            Style::default().fg(theme::INK_FAINT),
+                        ),
                         Span::styled("[y]", Style::default().fg(bc)),
                         Span::styled(" confirm  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[any]", Style::default().fg(bc)),
@@ -800,7 +815,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     ]),
                     HistoryConfirm::RemoveFile => Line::from(vec![
                         Span::raw(" "),
-                        Span::styled("remove file from history: ", Style::default().fg(theme::BAD)),
+                        Span::styled(
+                            "remove file from history: ",
+                            Style::default().fg(theme::BAD),
+                        ),
                         Span::styled(
                             app.history_view.input.as_str(),
                             Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
@@ -916,7 +934,9 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Span::styled("rename ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(theme::WARN)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
@@ -935,10 +955,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("edit url for ", Style::default().fg(theme::INK_FAINT)),
+                                Span::styled(
+                                    "edit url for ",
+                                    Style::default().fg(theme::INK_FAINT),
+                                ),
                                 Span::styled(
                                     name.to_string(),
-                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(theme::WARN)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled(": ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
@@ -956,10 +981,15 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("rename mirror ", Style::default().fg(theme::INK_FAINT)),
+                                Span::styled(
+                                    "rename mirror ",
+                                    Style::default().fg(theme::INK_FAINT),
+                                ),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(theme::WARN)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
@@ -1000,18 +1030,19 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             Span::styled("█", Style::default().fg(bc)),
                         ]),
                         RemoteConfirm::MirrorAddType => {
-                            let (replica_style, primary_style) =
-                                if app.remote_view.new_mirror_type == 0 {
-                                    (
-                                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
-                                        Style::default().fg(theme::INK_FAINT),
-                                    )
-                                } else {
-                                    (
-                                        Style::default().fg(theme::INK_FAINT),
-                                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
-                                    )
-                                };
+                            let (replica_style, primary_style) = if app.remote_view.new_mirror_type
+                                == 0
+                            {
+                                (
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                                    Style::default().fg(theme::INK_FAINT),
+                                )
+                            } else {
+                                (
+                                    Style::default().fg(theme::INK_FAINT),
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                                )
+                            };
                             Line::from(vec![
                                 Span::raw(" "),
                                 Span::styled("type: ", Style::default().fg(theme::INK_FAINT)),
@@ -1033,7 +1064,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 .unwrap_or("?");
                             Line::from(vec![
                                 Span::raw(" "),
-                                Span::styled("remove remote ", Style::default().fg(theme::INK_FAINT)),
+                                Span::styled(
+                                    "remove remote ",
+                                    Style::default().fg(theme::INK_FAINT),
+                                ),
                                 Span::styled(
                                     name.to_string(),
                                     Style::default().fg(theme::BAD).add_modifier(Modifier::BOLD),
@@ -1159,7 +1193,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         PrConfirm::CreateHead => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select source branch  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(
+                                " select source branch  ",
+                                Style::default().fg(theme::INK_FAINT),
+                            ),
                             Span::styled("[Enter]", Style::default().fg(bc)),
                             Span::styled(" next  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[Esc]", Style::default().fg(bc)),
@@ -1260,7 +1297,10 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     match &app.workspace_view.confirm {
                         WorkspaceConfirm::DeleteWorkspace => Line::from(vec![
                             Span::raw(" "),
-                            Span::styled("delete workspace?  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(
+                                "delete workspace?  ",
+                                Style::default().fg(theme::INK_FAINT),
+                            ),
                             Span::styled(
                                 "[y]",
                                 Style::default().fg(bc).add_modifier(Modifier::BOLD),
@@ -1319,7 +1359,9 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Span::styled("rename ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
                                     old.to_string(),
-                                    Style::default().fg(theme::WARN).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(theme::WARN)
+                                        .add_modifier(Modifier::BOLD),
                                 ),
                                 Span::styled(" → ", Style::default().fg(theme::INK_FAINT)),
                                 Span::styled(
@@ -1334,23 +1376,38 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                                 Line::from(vec![
                                     Span::raw(" "),
                                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                    Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
+                                    Span::styled(
+                                        " navigate  ",
+                                        Style::default().fg(theme::INK_FAINT),
+                                    ),
                                     Span::styled("[→/l]", Style::default().fg(bc)),
                                     Span::styled(" repos  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[o]", Style::default().fg(bc)),
-                                    Span::styled(" operations", Style::default().fg(theme::INK_FAINT)),
+                                    Span::styled(
+                                        " operations",
+                                        Style::default().fg(theme::INK_FAINT),
+                                    ),
                                 ])
                             } else {
                                 Line::from(vec![
                                     Span::raw(" "),
                                     Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                                    Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
+                                    Span::styled(
+                                        " navigate  ",
+                                        Style::default().fg(theme::INK_FAINT),
+                                    ),
                                     Span::styled("[Enter]", Style::default().fg(bc)),
                                     Span::styled(" open  ", Style::default().fg(theme::INK_FAINT)),
                                     Span::styled("[o]", Style::default().fg(bc)),
-                                    Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
+                                    Span::styled(
+                                        " operations  ",
+                                        Style::default().fg(theme::INK_FAINT),
+                                    ),
                                     Span::styled("[←/h]", Style::default().fg(bc)),
-                                    Span::styled(" workspaces", Style::default().fg(theme::INK_FAINT)),
+                                    Span::styled(
+                                        " workspaces",
+                                        Style::default().fg(theme::INK_FAINT),
+                                    ),
                                 ])
                             }
                         }
