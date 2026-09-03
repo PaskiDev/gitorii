@@ -341,3 +341,140 @@ fn view_for_action(id: &str) -> Option<View> {
         _ => return None,
     })
 }
+
+// ── The TUI's own settings ───────────────────────────────────────────────────
+
+/// One row of the TUI settings tab.
+pub struct TuiSetting {
+    pub label: &'static str,
+    pub value: String,
+    pub note: &'static str,
+}
+
+impl App {
+    /// The rows of the TUI settings tab, in the order they are drawn.
+    pub fn tui_settings_rows(&self) -> Vec<TuiSetting> {
+        vec![
+            TuiSetting {
+                label: "mouse",
+                value: if self.settings.mouse { "on" } else { "off" }.to_string(),
+                // The cost is worth stating where the switch is: with the
+                // pointer captured, the terminal's own selection needs Shift.
+                note: "off gives the terminal back its text selection",
+            },
+            TuiSetting {
+                label: "border",
+                value: match self.settings.border_style {
+                    crate::tui::app::BorderStyle::Rounded => "rounded",
+                    crate::tui::app::BorderStyle::Sharp => "sharp",
+                }
+                .to_string(),
+                note: "corners of the window",
+            },
+            TuiSetting {
+                label: "graph",
+                value: self.settings.graph_style.as_str().to_string(),
+                note: "nodes and lanes in the log",
+            },
+        ]
+    }
+
+    /// Flip or cycle the selected setting, and write the file.
+    ///
+    /// Returns whether the pointer capture has to be turned on or off, which
+    /// only the loop that owns the terminal can do.
+    pub fn tui_setting_toggle(&mut self) -> Option<bool> {
+        let mut mouse_changed = None;
+        match self.config_view.tui_idx {
+            0 => {
+                self.settings.mouse = !self.settings.mouse;
+                mouse_changed = Some(self.settings.mouse);
+            }
+            1 => {
+                self.settings.border_style = match self.settings.border_style {
+                    crate::tui::app::BorderStyle::Rounded => crate::tui::app::BorderStyle::Sharp,
+                    crate::tui::app::BorderStyle::Sharp => crate::tui::app::BorderStyle::Rounded,
+                }
+            }
+            2 => {
+                use crate::graph::GraphStyle::*;
+                self.settings.graph_style = match self.settings.graph_style {
+                    Curves => Heavy,
+                    Heavy => Bubbles,
+                    Bubbles => Ascii,
+                    _ => Curves,
+                };
+                // The log draws from the cached rows, so they are rebuilt or
+                // the change would not show until the next reload.
+                self.recompute_graph_rows();
+            }
+            _ => {}
+        }
+        self.settings.save();
+        self.config_view.status = Some("saved to ~/.torii/tui-settings.toml".into());
+        mouse_changed
+    }
+}
+
+// ── Rows a pointer can address ───────────────────────────────────────────────
+
+impl App {
+    /// Which row of a named list is selected, if the list is one the pointer
+    /// knows about.
+    ///
+    /// The names are the ones the render registers with, and a list missing
+    /// from here simply has no pointer support — never the wrong selection.
+    pub fn selected_row(&self, list: &str) -> Option<usize> {
+        Some(match list {
+            "log" => self.log.idx,
+            "branch" => self.branch_view.idx,
+            "tag" => self.tag_view.idx,
+            "remote" => self.remote_view.idx,
+            "issue" => self.issue_view.idx,
+            "pr" => self.pr_view.idx,
+            "snapshot" => self.snapshot_view.idx,
+            "worktree" => self.worktree_view.idx,
+            "submodule" => self.submodule_view.idx,
+            "auth" => self.auth_view.idx,
+            "config" => self.config_view.idx,
+            "config.keys" => self.config_view.keys_idx,
+            "config.tui" => self.config_view.tui_idx,
+            "safety.rules" => self.ignore_view.idx,
+            "safety.scanner" => self.ignore_view.scanner_idx,
+            "stats.people" => self.stats_view.people_idx,
+            "palette" => self.palette.idx,
+            _ => return None,
+        })
+    }
+
+    /// Move the selection of a named list.
+    pub fn select_row(&mut self, list: &str, index: usize) {
+        match list {
+            "log" => {
+                self.log.idx = index;
+                self.sync_log_scroll();
+                self.log_load_commit_files();
+            }
+            "branch" => self.branch_view.idx = index,
+            "tag" => self.tag_view.idx = index,
+            "remote" => self.remote_view.idx = index,
+            "issue" => self.issue_view.idx = index,
+            "pr" => self.pr_view.idx = index,
+            "snapshot" => self.snapshot_view.idx = index,
+            "worktree" => self.worktree_view.idx = index,
+            "submodule" => self.submodule_view.idx = index,
+            "auth" => self.auth_view.idx = index,
+            "config" => self.config_view.idx = index,
+            "config.keys" => self.config_view.keys_idx = index,
+            "config.tui" => self.config_view.tui_idx = index,
+            "safety.rules" => self.ignore_view.idx = index,
+            "safety.scanner" => self.ignore_view.scanner_idx = index,
+            "stats.people" => self.stats_view.people_idx = index,
+            "palette" => self.palette.idx = index,
+            _ => return,
+        }
+        // A click is also a statement about where the focus is: the sidebar
+        // does not keep it while a row of a view is being picked.
+        self.sidebar_focused = false;
+    }
+}

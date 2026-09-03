@@ -152,6 +152,8 @@ pub fn render(f: &mut Frame, app: &App) {
     }
 
     let area = f.area();
+    // The map describes the frame being drawn, so it starts empty every time.
+    app.hits.borrow_mut().clear();
 
     // One window, the way the site draws it: a single border, and hairline
     // rules inside it wherever there used to be another box.
@@ -1612,6 +1614,17 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Span::styled("[r]", Style::default().fg(bc)),
                 Span::styled(" measure again", Style::default().fg(theme::INK_FAINT)),
             ]),
+            View::Config if app.config_view.tab == crate::tui::app::ConfigTab::Tui => {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" change  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[1]", Style::default().fg(bc)),
+                    Span::styled(" values", Style::default().fg(theme::INK_FAINT)),
+                ])
+            }
             View::Config if app.config_view.tab == crate::tui::app::ConfigTab::Keys => {
                 if app.config_view.capturing.is_some() {
                     Line::from(vec![
@@ -1924,6 +1937,26 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     spans.extend(theme::key_hint(app, "e", events_label.trim()));
     spans.push(Span::raw(" "));
 
+    // The key spans are registered as their own zones, so the foot of the
+    // window works as a row of buttons. A key is recognised by its style —
+    // the accent is only ever used for keys on this line — which keeps the
+    // registration out of two thousand lines of match arm.
+    {
+        let accent = theme::accent(app);
+        let mut hits = app.hits.borrow_mut();
+        let mut x = area.x;
+        for span in &spans {
+            let width = span.content.chars().count() as u16;
+            if span.style.fg == Some(accent) && !span.content.trim().is_empty() {
+                hits.push(
+                    ratatui::layout::Rect::new(x, area.y, width, 1),
+                    crate::tui::hit::Zone::Key(span.content.trim().to_string()),
+                );
+            }
+            x = x.saturating_add(width);
+        }
+    }
+
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
@@ -1984,6 +2017,21 @@ fn render_sidebar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
 
     // The list outgrew the shortest terminals, so it scrolls: whichever row
     // is in play — the sidebar cursor, or the open view — stays on screen.
+    // One zone per visible tab, so a click lands on the view it names.
+    {
+        let mut hits = app.hits.borrow_mut();
+        for (i, _) in TABS.iter().enumerate() {
+            let y = rows[0].y + i as u16;
+            if y >= rows[0].bottom() {
+                break;
+            }
+            hits.push(
+                ratatui::layout::Rect::new(rows[0].x, y, rows[0].width, 1),
+                crate::tui::hit::Zone::Sidebar(i),
+            );
+        }
+    }
+
     let mut state = ListState::default();
     let focus_row = if app.sidebar_focused {
         app.sidebar_idx
@@ -2409,6 +2457,125 @@ mod tests {
                 screen.contains("pgp"),
                 "the signature format shows: {screen}"
             );
+        }
+    }
+
+    /// The pointer resolves against what was actually drawn: render a frame,
+    /// then ask the map what is under a cell.
+    #[test]
+    fn a_click_on_the_sidebar_finds_the_row_it_names() {
+        let mut app = App::new().expect("a repository to look at");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        // The third row of the sidebar, inside its column.
+        let zone = app.hits.borrow().at(3, 5).cloned();
+        let Some(crate::tui::hit::Zone::Sidebar(index)) = zone else {
+            panic!("expected a sidebar row, got {zone:?}");
+        };
+        // Row 0 is the first tab drawn, and the header sits above it.
+        assert!(index < TABS.len());
+
+        // And clicking it goes to the view that row names.
+        app.sidebar_idx = index;
+        app.sidebar_enter();
+        assert_eq!(app.view, TABS[index].view);
+    }
+
+    /// The keys on the foot of the window are buttons: the accent is only
+    /// used there for keys, which is what makes them findable.
+    #[test]
+    fn the_hint_keys_are_clickable() {
+        let app = App::new().expect("a repository to look at");
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        let hits = app.hits.borrow();
+        let mut found = Vec::new();
+        for x in 0..100u16 {
+            if let Some(crate::tui::hit::Zone::Key(key)) = hits.at(x, 28) {
+                if !found.contains(key) {
+                    found.push(key.clone());
+                }
+            }
+        }
+        assert!(
+            found.iter().any(|k| k == "e"),
+            "the events key must be clickable: {found:?}"
+        );
+    }
+
+    /// Rows are registered where they were drawn, so a click on a person in
+    /// the stats screen resolves to that person.
+    #[test]
+    fn a_click_on_a_list_row_resolves_to_that_row() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Stats);
+        app.sidebar_focused = false;
+        app.stats_view.mode = crate::tui::app::StatsMode::People;
+        app.stats_view.people = (0..4)
+            .map(|i| crate::stats::Person {
+                name: format!("Person {i}"),
+                email: format!("p{i}@example.com"),
+                commits: 10 - i,
+                ..Default::default()
+            })
+            .collect();
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        // Find the row zone for the third person and check the index matches.
+        let hits = app.hits.borrow();
+        let mut seen = None;
+        for y in 0..24u16 {
+            if let Some(crate::tui::hit::Zone::Row { list, index }) = hits.at(20, y) {
+                if list == "stats.people" && *index == 2 {
+                    seen = Some(y);
+                }
+            }
+        }
+        assert!(seen.is_some(), "the third person must have a row on screen");
+    }
+
+    /// The pointer switch says what it costs, and turning it off is a
+    /// keypress away — a captured pointer takes the terminal's own text
+    /// selection with it.
+    #[test]
+    fn the_tui_tab_carries_the_mouse_switch() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Config);
+        app.sidebar_focused = false;
+        app.config_view.tab = crate::tui::app::ConfigTab::Tui;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let screen = dump(terminal.backend().buffer(), 100, 24);
+
+        assert!(screen.contains("mouse"), "{screen}");
+        assert!(
+            screen.contains("text selection"),
+            "the cost is stated where the switch is: {screen}"
+        );
+
+        // Flipping it reports the change so the loop can tell the terminal.
+        // The toggle persists, so the real settings file is put back: a test
+        // has no business editing the machine it runs on.
+        let path = dirs::home_dir().map(|h| h.join(".torii/tui-settings.toml"));
+        let saved = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok());
+
+        let before = app.settings.mouse;
+        app.config_view.tui_idx = 0;
+        assert_eq!(app.tui_setting_toggle(), Some(!before));
+        assert_eq!(app.settings.mouse, !before);
+
+        if let Some(path) = path {
+            match saved {
+                Some(text) => std::fs::write(&path, text).unwrap(),
+                None => {
+                    let _ = std::fs::remove_file(&path);
+                }
+            }
         }
     }
 

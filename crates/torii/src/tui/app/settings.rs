@@ -23,6 +23,9 @@ pub struct TuiSettings {
     /// two always belong to the same colour.
     pub selected_bg_explicit: bool,
     pub event_log_max: usize,
+    /// Whether the pointer is captured. On, the wheel scrolls and clicks
+    /// select; off, the terminal keeps its own text selection.
+    pub mouse: bool,
     pub graph_style: crate::graph::GraphStyle,
 }
 
@@ -39,6 +42,7 @@ impl Default for TuiSettings {
             selected_bg: (40, 40, 60),
             selected_bg_explicit: false,
             event_log_max: 50,
+            mouse: true,
             graph_style: crate::graph::GraphStyle::Curves,
         }
     }
@@ -85,6 +89,7 @@ impl TuiSettings {
                         s.selected_bg_explicit = true;
                     }
                 }
+                "mouse" => s.mouse = val == "true",
                 "event_log_max" => {
                     if let Ok(n) = val.parse::<usize>() {
                         s.event_log_max = n;
@@ -106,16 +111,26 @@ impl TuiSettings {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let content = format!(
-            "border_style = \"{}\"\nshow_help_view = {}\nshow_history_view = {}\nshow_mirror_view = {}\nshow_workspace_view = {}\nshow_remote_view = {}\nbrand_color = \"{},{},{}\"\nselected_bg = \"{},{},{}\"\nevent_log_max = {}\ngraph_style = \"{}\"\n",
+        let mut content = format!(
+            "border_style = \"{}\"\nshow_help_view = {}\nshow_history_view = {}\nshow_mirror_view = {}\nshow_workspace_view = {}\nshow_remote_view = {}\nbrand_color = \"{},{},{}\"\nevent_log_max = {}\ngraph_style = \"{}\"\nmouse = {}\n",
             if self.border_style == BorderStyle::Rounded { "rounded" } else { "sharp" },
             self.show_help_view, self.show_history_view, self.show_mirror_view,
             self.show_workspace_view, self.show_remote_view,
             self.brand_color.0, self.brand_color.1, self.brand_color.2,
-            self.selected_bg.0, self.selected_bg.1, self.selected_bg.2,
             self.event_log_max,
             self.graph_style.as_str(),
+            self.mouse,
         );
+        // `selected_bg` is only written when the user actually chose one.
+        // Writing the default back would make it explicit for ever, and the
+        // selection would stop following the accent — which is how the old
+        // blue survived the restyle for anyone who had ever saved settings.
+        if self.selected_bg_explicit {
+            content.push_str(&format!(
+                "selected_bg = \"{},{},{}\"\n",
+                self.selected_bg.0, self.selected_bg.1, self.selected_bg.2
+            ));
+        }
         let _ = std::fs::write(path, content);
     }
 }

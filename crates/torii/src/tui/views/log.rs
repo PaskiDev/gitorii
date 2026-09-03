@@ -210,6 +210,26 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         chunks[0][1],
         &mut state,
     );
+    // The rows the pointer can address. A filtered log draws the commits in
+    // `display_indices`, so the click has to come back as a commit index, not
+    // a screen line.
+    {
+        let first = state.offset();
+        let mut hits = app.hits.borrow_mut();
+        for (line, commit) in display_indices.iter().skip(first).enumerate() {
+            let y = chunks[0][1].y + line as u16;
+            if y >= chunks[0][1].bottom() {
+                break;
+            }
+            hits.push(
+                Rect::new(chunks[0][1].x, y, chunks[0][1].width, 1),
+                crate::tui::hit::Zone::Row {
+                    list: "log".into(),
+                    index: *commit,
+                },
+            );
+        }
+    }
 
     // ── Files panel ───────────────────────────────────────────────────────────
     let file_items: Vec<ListItem> = if app.log.commit_files.is_empty() {

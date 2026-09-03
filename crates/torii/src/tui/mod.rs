@@ -1,5 +1,6 @@
 pub mod app;
 pub mod events;
+pub mod hit;
 pub mod keys;
 pub mod picker;
 pub mod theme;
@@ -7,6 +8,7 @@ pub mod ui;
 pub mod views;
 
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -60,6 +62,12 @@ pub fn run_with_workspace(ws_name: String) -> crate::error::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new()?;
+    // The pointer is captured only when it is wanted: with it on, the
+    // terminal's own text selection needs Shift, which is a real cost to
+    // anyone who copies from the screen.
+    if app.settings.mouse {
+        let _ = execute!(io::stdout(), EnableMouseCapture);
+    }
     load_auto_interval(&mut app);
     app.active_workspace = Some(ws_name);
     app.go_to(app::View::Workspace);
@@ -68,6 +76,7 @@ pub fn run_with_workspace(ws_name: String) -> crate::error::Result<()> {
     let result = run_loop(&mut terminal, &mut app, &mut events);
 
     disable_raw_mode()?;
+    let _ = execute!(terminal.backend_mut(), DisableMouseCapture);
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     result
 }
@@ -84,6 +93,12 @@ pub fn run_with_view(initial_view: app::View) -> crate::error::Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new()?;
+    // The pointer is captured only when it is wanted: with it on, the
+    // terminal's own text selection needs Shift, which is a real cost to
+    // anyone who copies from the screen.
+    if app.settings.mouse {
+        let _ = execute!(io::stdout(), EnableMouseCapture);
+    }
     load_auto_interval(&mut app);
     app.go_to(initial_view);
     let mut events = EventHandler::new();
@@ -407,6 +422,23 @@ fn run_loop(
 
         if let Some(action) = events.next(app)? {
             match action {
+                Action::MouseCapture(on) => {
+                    // The terminal is only told once, here, so the setting and
+                    // what the terminal is doing cannot disagree.
+                    let _ = if on {
+                        execute!(io::stdout(), EnableMouseCapture)
+                    } else {
+                        execute!(io::stdout(), DisableMouseCapture)
+                    };
+                    app.log_event(
+                        if on {
+                            "mouse on — hold Shift to select text"
+                        } else {
+                            "mouse off — the terminal has its selection back"
+                        },
+                        EventKind::Info,
+                    );
+                }
                 Action::Quit => break,
 
                 Action::SidebarUp => {
