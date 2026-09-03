@@ -630,8 +630,33 @@ impl App {
 
         // Graph is always-on in Log view — recompute every reload.
         self.recompute_graph_rows();
+        self.resync_log_to_commits();
 
         Ok(())
+    }
+
+    /// Everything the log view remembers about the commit list is an index or
+    /// a key into it, and `refresh` has just replaced that list — a checkout
+    /// is the usual reason. Re-derive all of it, or a shorter branch leaves
+    /// the renderer holding an index past the end.
+    fn resync_log_to_commits(&mut self) {
+        // A live search is re-run against the new commits rather than
+        // dropped: the user typed it, and it still means something here.
+        self.log_update_filter();
+
+        let last = self.commits.len().saturating_sub(1);
+        self.log.idx = self.log.idx.min(last);
+        if !self.log.filtered.is_empty() && !self.log.filtered.contains(&self.log.idx) {
+            self.log.idx = self.log.filtered[0];
+        }
+        self.dashboard.log_idx = self.dashboard.log_idx.min(last);
+        self.sync_log_scroll();
+
+        // The files pane and the signature column are caches keyed by the row
+        // and by the commit; both belong to the list that just went away.
+        self.log.last_files_idx = None;
+        self.log.commit_files.clear();
+        self.log.signature_cache.clear();
     }
 
     // Tab cycle: sidebar → view panels → sidebar
@@ -1001,6 +1026,46 @@ mod tests {
             author: author.into(),
             time: "now".into(),
         }
+    }
+
+    /// A checkout replaces the commit list, and everything the log view keeps
+    /// about it — the search results, the selection, the files cache, the
+    /// signature cache — is an index or a key into the list that just died.
+    /// A branch with fewer commits than the one left behind then hands the
+    /// renderer an index past the end.
+    #[test]
+    fn refresh_drops_state_pointing_at_the_old_commit_list() {
+        let mut app = App::new().expect("a repository to look at");
+        app.refresh().expect("a first load");
+        let stale = app.commits.len() + 500;
+
+        app.log.search_query = "feat".to_string();
+        app.log.filtered = vec![stale];
+        app.log.idx = stale;
+        app.log.last_files_idx = Some(stale);
+        app.log
+            .signature_cache
+            .insert("0000000000000000000000000000000000000000".into(), 'G');
+
+        app.refresh().expect("a reload, as a checkout does");
+
+        assert!(
+            app.log.filtered.iter().all(|&i| i < app.commits.len()),
+            "filtered still indexes the old list: {:?} into {} commits",
+            app.log.filtered,
+            app.commits.len()
+        );
+        assert!(
+            app.log.idx < app.commits.len().max(1),
+            "selection {} is past the end of {} commits",
+            app.log.idx,
+            app.commits.len()
+        );
+        assert_eq!(app.log.last_files_idx, None, "files cache kept its old row");
+        assert!(
+            app.log.signature_cache.is_empty(),
+            "signature cache outlived the reload it documents as clearing it"
+        );
     }
 
     #[test]

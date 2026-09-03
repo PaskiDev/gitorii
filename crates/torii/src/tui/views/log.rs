@@ -64,10 +64,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     };
     let msg_width = msg_width.saturating_sub(graph_width + 1);
 
+    // `filtered` is rebuilt whenever the commit list is, but the renderer is
+    // the last line of defence: an index it cannot resolve is skipped rather
+    // than panicking mid-frame.
     let items: Vec<ListItem> = display_indices
         .iter()
-        .map(|&i| {
-            let c = &app.commits[i];
+        .filter_map(|&i| {
+            let c = app.commits.get(i)?;
             let is_sel = i == app.log.idx;
             let style = if is_sel {
                 Style::default()
@@ -147,11 +150,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(theme::INK_FAINT),
             ));
 
-            ListItem::new(Line::from(spans)).style(style)
+            Some(ListItem::new(Line::from(spans)).style(style))
         })
         .collect();
 
-    let sel_pos = display_indices.iter().position(|&i| i == app.log.idx);
+    let sel_pos = display_indices
+        .iter()
+        .filter(|&&i| i < app.commits.len())
+        .position(|&i| i == app.log.idx);
     let mut state = ListState::default();
     if let Some(pos) = sel_pos {
         state.select(Some(pos));

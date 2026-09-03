@@ -1813,6 +1813,21 @@ mod tests {
         assert_eq!(at(&lines[header_rule + 1], spine), '│');
     }
 
+    /// The renderer is handed `filtered` straight from state. If a checkout
+    /// ever leaves an index behind again, the frame must degrade, not panic.
+    #[test]
+    fn the_log_survives_an_index_past_the_end() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Log);
+        app.sidebar_focused = false;
+        app.log.search_query = "feat".to_string();
+        app.log.filtered = vec![0, app.commits.len() + 500];
+        app.log.idx = app.commits.len() + 500;
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, &app)).expect("a frame");
+    }
+
     /// Not an assertion — `cargo test -- --nocapture look_at_it` prints the
     /// screen, which is the only way to review a change of this kind.
     #[test]
