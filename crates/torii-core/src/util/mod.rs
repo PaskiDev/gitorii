@@ -10,6 +10,7 @@ pub mod graph;
 pub mod hooks;
 pub mod http;
 pub mod oauth;
+pub mod output;
 pub mod radicle;
 pub mod ssh;
 pub mod toriignore;

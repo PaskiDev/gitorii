@@ -1063,7 +1063,7 @@ impl GitRepo {
 
     /// Fetch from remote without merging
     pub fn fetch(&self) -> Result<()> {
-        println!("🔄 Fetching from remote...");
+        crate::util::output::note("🔄 Fetching from remote...");
         self.fetch_one("origin")?;
         Ok(())
     }
@@ -1092,9 +1092,9 @@ impl GitRepo {
                 name, list
             )));
         }
-        println!("🔄 Fetching from '{}'...", name);
+        crate::util::output::note(format!("🔄 Fetching from '{}'...", name));
         self.fetch_one(name)?;
-        println!("✅ Fetched from '{}'", name);
+        crate::util::output::note(format!("✅ Fetched from '{}'", name));
         Ok(())
     }
 
@@ -1116,19 +1116,19 @@ impl GitRepo {
                     .to_string(),
             ));
         }
-        println!("🔄 Fetching from {} remote(s)...", names.len());
+        crate::util::output::note(format!("🔄 Fetching from {} remote(s)...", names.len()));
         let mut failures: Vec<(String, String)> = Vec::new();
         for name in &names {
             match self.fetch_one(name) {
-                Ok(()) => println!("  ✅ {}", name),
+                Ok(()) => crate::util::output::note(format!("  ✅ {}", name)),
                 Err(e) => {
-                    println!("  ❌ {}: {}", name, e);
+                    crate::util::output::note(format!("  ❌ {}: {}", name, e));
                     failures.push((name.clone(), e.to_string()));
                 }
             }
         }
         if failures.is_empty() {
-            println!("✅ Fetched from all {} remote(s)", names.len());
+            crate::util::output::note(format!("✅ Fetched from all {} remote(s)", names.len()));
             Ok(())
         } else {
             Err(crate::error::ToriiError::Network {
@@ -1807,6 +1807,12 @@ fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
     use std::io::Write;
     use std::time::Instant;
 
+    // A front end that owns the screen gets no progress line at all: printing
+    // into an alternate screen leaves text the TUI will never paint over.
+    if crate::util::output::silent() {
+        return;
+    }
+
     let last_print = RefCell::new(Instant::now());
     builder.progress(move |path, completed, total| {
         let mut last = last_print.borrow_mut();
@@ -1816,17 +1822,56 @@ fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
         }
         *last = Instant::now();
 
-        let pct = (completed * 100).checked_div(total).unwrap_or(0);
         let name = path
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_default();
-        print!("\r🔀 {pct}%  {completed}/{total} files  {name:<40}");
-        std::io::stdout().flush().ok();
-        if done {
-            println!();
+        if let Some(line) = checkout_progress_line(completed, total, &name) {
+            print!("\r{line}");
+            std::io::stdout().flush().ok();
+            if done {
+                println!();
+            }
         }
     });
+}
+
+/// The progress line itself, so the decision to draw one is testable without
+/// a repository and without a terminal.
+fn checkout_progress_line(completed: usize, total: usize, name: &str) -> Option<String> {
+    if crate::util::output::silent() {
+        return None;
+    }
+    let pct = (completed * 100).checked_div(total).unwrap_or(0);
+    Some(format!("🔀 {pct}%  {completed}/{total} files  {name:<40}"))
+}
+
+#[cfg(test)]
+mod checkout_progress_tests {
+    use super::*;
+
+    /// The TUI shares these functions with the CLI, and there stdout is the
+    /// alternate screen: a progress line printed behind ratatui's back sticks
+    /// to the screen until a full redraw. Silence means no line at all.
+    #[test]
+    fn no_progress_line_while_a_front_end_owns_the_screen() {
+        crate::util::output::set_silent(false);
+        let line = checkout_progress_line(22, 22, "ui.rs").expect("a line for the CLI");
+        assert!(line.contains("100%"), "{line}");
+        assert!(line.contains("22/22 files"), "{line}");
+
+        crate::util::output::set_silent(true);
+        assert_eq!(checkout_progress_line(22, 22, "ui.rs"), None);
+        crate::util::output::set_silent(false);
+    }
+
+    /// A checkout of nothing must not divide by zero on its way to the line.
+    #[test]
+    fn an_empty_checkout_reports_zero_percent() {
+        crate::util::output::set_silent(false);
+        let line = checkout_progress_line(0, 0, "").expect("a line");
+        assert!(line.contains("0%"), "{line}");
+    }
 }
 
 #[cfg(test)]
