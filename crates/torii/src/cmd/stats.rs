@@ -51,6 +51,50 @@ pub struct History {
     pub last: Option<i64>,
 }
 
+/// How a commit was signed, read from the object header — no gpg call, so
+/// this is free. It says a signature is *present*, never that it is valid:
+/// verifying is a subprocess per commit, and the log view already does that
+/// on demand for one commit at a time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigKind {
+    Pgp,
+    Ssh,
+    /// A signature in a format neither preamble matches.
+    Other,
+}
+
+impl SigKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pgp => "pgp",
+            Self::Ssh => "ssh",
+            Self::Other => "signed",
+        }
+    }
+}
+
+/// Everything the repository knows about one person.
+#[derive(Debug, Clone, Default)]
+pub struct Person {
+    /// The name on most of their commits.
+    pub name: String,
+    /// Every other name they have committed under.
+    pub also_known_as: Vec<String>,
+    /// Their address, and any others that resolve to the same identity.
+    pub email: String,
+    pub other_emails: Vec<String>,
+    pub commits: usize,
+    /// Commits carrying a signature header.
+    pub signed: usize,
+    /// The signature formats seen, in the order first met.
+    pub sig_kinds: Vec<SigKind>,
+    pub first: Option<i64>,
+    pub last: Option<i64>,
+    /// Commits where this person is the author but someone else committed —
+    /// a patch applied by a maintainer, a rebase, a cherry-pick.
+    pub committed_by_other: usize,
+}
+
 /// The expensive half: which files keep being touched.
 #[derive(Debug, Clone, Default)]
 pub struct Churn {
@@ -172,6 +216,132 @@ pub fn history(repo_path: &Path, now: i64) -> History {
     authors.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     out.authors = authors;
     out
+}
+
+/// Who commits here, with everything the repository records about them.
+///
+/// Identity is the email address, lower-cased: it is what git actually keys
+/// on, and one person's name is spelled several ways over a long history. The
+/// other spellings are kept and shown rather than discarded.
+pub fn people(repo_path: &Path) -> Vec<Person> {
+    let Ok(repo) = Repository::discover(repo_path) else {
+        return Vec::new();
+    };
+    let Ok(mut walk) = repo.revwalk() else {
+        return Vec::new();
+    };
+    if walk.push_head().is_err() {
+        return Vec::new();
+    }
+
+    // email → person, plus a count of each spelling of the name so the most
+    // used one can lead.
+    let mut by_email: HashMap<String, Person> = HashMap::new();
+    let mut names: HashMap<String, HashMap<String, usize>> = HashMap::new();
+
+    for oid in walk.take(HISTORY_CAP).flatten() {
+        let Ok(commit) = repo.find_commit(oid) else {
+            continue;
+        };
+        let author = commit.author();
+        let email = author.email().unwrap_or("(none)").to_ascii_lowercase();
+        let name = author.name().unwrap_or("(unknown)").to_string();
+
+        let person = by_email.entry(email.clone()).or_insert_with(|| Person {
+            email: email.clone(),
+            ..Default::default()
+        });
+        person.commits += 1;
+        *names
+            .entry(email.clone())
+            .or_default()
+            .entry(name)
+            .or_default() += 1;
+
+        let when = commit.time().seconds();
+        person.first = Some(person.first.map_or(when, |f: i64| f.min(when)));
+        person.last = Some(person.last.map_or(when, |l: i64| l.max(when)));
+
+        if commit
+            .committer()
+            .email()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            != email
+        {
+            person.committed_by_other += 1;
+        }
+
+        if let Some(kind) = signature_kind(&commit) {
+            person.signed += 1;
+            if !person.sig_kinds.contains(&kind) {
+                person.sig_kinds.push(kind);
+            }
+        }
+    }
+
+    let mut people: Vec<Person> = by_email
+        .into_values()
+        .map(|mut p| {
+            if let Some(spellings) = names.get(&p.email) {
+                let mut sorted: Vec<(&String, &usize)> = spellings.iter().collect();
+                sorted.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+                if let Some((main, _)) = sorted.first() {
+                    p.name = (*main).clone();
+                }
+                p.also_known_as = sorted.iter().skip(1).map(|(n, _)| (*n).clone()).collect();
+            }
+            p
+        })
+        .collect();
+
+    // Same name, different addresses: show them together rather than as two
+    // strangers, since that is what a machine change or a work address is.
+    people.sort_by(|a, b| b.commits.cmp(&a.commits).then(a.email.cmp(&b.email)));
+    let mut merged: Vec<Person> = Vec::new();
+    for person in people {
+        match merged.iter_mut().find(|p| p.name == person.name) {
+            Some(existing) => {
+                existing.commits += person.commits;
+                existing.signed += person.signed;
+                existing.committed_by_other += person.committed_by_other;
+                existing.other_emails.push(person.email.clone());
+                existing.other_emails.extend(person.other_emails);
+                for kind in person.sig_kinds {
+                    if !existing.sig_kinds.contains(&kind) {
+                        existing.sig_kinds.push(kind);
+                    }
+                }
+                existing.first = match (existing.first, person.first) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+                existing.last = match (existing.last, person.last) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            None => merged.push(person),
+        }
+    }
+    merged.sort_by(|a, b| b.commits.cmp(&a.commits).then(a.name.cmp(&b.name)));
+    merged
+}
+
+/// Which kind of signature a commit carries, if any. Reads the object header,
+/// so it costs nothing and proves nothing about validity.
+pub fn signature_kind(commit: &git2::Commit<'_>) -> Option<SigKind> {
+    let raw = commit.header_field_bytes("gpgsig").ok()?;
+    let text = String::from_utf8_lossy(&raw);
+    if text.contains("BEGIN SSH SIGNATURE") {
+        Some(SigKind::Ssh)
+    } else if text.contains("BEGIN PGP SIGNATURE") {
+        Some(SigKind::Pgp)
+    } else if text.trim().is_empty() {
+        None
+    } else {
+        Some(SigKind::Other)
+    }
 }
 
 /// Diff the recent commits to find what keeps being touched. Expensive: this
@@ -360,6 +530,128 @@ mod tests {
         assert_eq!(h.commits, 0);
         assert_eq!(churn(tmp.path()).commits, 0);
         assert_eq!(shape(tmp.path()).files, 0);
+    }
+
+    #[test]
+    fn people_are_keyed_by_email_and_keep_every_spelling_of_their_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+        let mut parent: Option<git2::Oid> = None;
+        // The same address under two spellings, then someone else.
+        for (i, (name, email)) in [
+            ("Pasqual Peñalver", "public@paski.dev"),
+            ("paski", "public@paski.dev"),
+            ("Pasqual Peñalver", "public@paski.dev"),
+            ("Other Dev", "other@example.com"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let sig =
+                git2::Signature::new(name, email, &git2::Time::new(1_700_000_000, 0)).unwrap();
+            std::fs::write(tmp.path().join(format!("f{i}")), "x").unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new(&format!("f{i}"))).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<git2::Commit> = parent
+                .iter()
+                .map(|o| repo.find_commit(*o).unwrap())
+                .collect();
+            let refs: Vec<&git2::Commit> = parents.iter().collect();
+            parent = Some(
+                repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &refs)
+                    .unwrap(),
+            );
+        }
+
+        let people = people(tmp.path());
+        assert_eq!(people.len(), 2, "{people:?}");
+
+        let first = &people[0];
+        assert_eq!(first.name, "Pasqual Peñalver", "the usual spelling leads");
+        assert_eq!(first.email, "public@paski.dev");
+        assert_eq!(first.commits, 3);
+        assert_eq!(
+            first.also_known_as,
+            vec!["paski".to_string()],
+            "the other spelling is kept, not thrown away"
+        );
+        assert_eq!(people[1].email, "other@example.com");
+    }
+
+    /// An address is matched case-insensitively, the way git does.
+    #[test]
+    fn the_same_address_in_capitals_is_the_same_person() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+        let mut parent: Option<git2::Oid> = None;
+        for (i, email) in ["Dev@Example.COM", "dev@example.com"].iter().enumerate() {
+            let sig =
+                git2::Signature::new("Dev", email, &git2::Time::new(1_700_000_000, 0)).unwrap();
+            std::fs::write(tmp.path().join(format!("f{i}")), "x").unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new(&format!("f{i}"))).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<git2::Commit> = parent
+                .iter()
+                .map(|o| repo.find_commit(*o).unwrap())
+                .collect();
+            let refs: Vec<&git2::Commit> = parents.iter().collect();
+            parent = Some(
+                repo.commit(Some("HEAD"), &sig, &sig, "c", &tree, &refs)
+                    .unwrap(),
+            );
+        }
+
+        let people = people(tmp.path());
+        assert_eq!(people.len(), 1, "{people:?}");
+        assert_eq!(people[0].commits, 2);
+    }
+
+    /// The signature is read from the object header: present or not, never
+    /// "valid" — proving that needs gpg, and this must stay free.
+    #[test]
+    fn a_signature_is_recognised_by_its_preamble() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = Repository::init(tmp.path()).unwrap();
+        let sig =
+            git2::Signature::new("Dev", "dev@example.com", &git2::Time::new(1_700_000_000, 0))
+                .unwrap();
+        std::fs::write(tmp.path().join("f"), "x").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("f")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+
+        let content = repo
+            .commit_create_buffer(&sig, &sig, "signed", &tree, &[])
+            .unwrap();
+        let armor =
+            "-----BEGIN PGP SIGNATURE-----\n\nnot a real one\n-----END PGP SIGNATURE-----\n";
+        let oid = repo
+            .commit_signed(content.as_str().unwrap(), armor, None)
+            .unwrap();
+        repo.reference("refs/heads/main", oid, true, "test")
+            .unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+
+        let commit = repo.find_commit(oid).unwrap();
+        assert_eq!(signature_kind(&commit), Some(SigKind::Pgp));
+
+        let people = people(tmp.path());
+        assert_eq!(people[0].signed, 1);
+        assert_eq!(people[0].sig_kinds, vec![SigKind::Pgp]);
+    }
+
+    #[test]
+    fn an_unsigned_commit_reports_no_signature() {
+        let tmp = tempfile::tempdir().unwrap();
+        repo_with_history(tmp.path());
+        let people = people(tmp.path());
+        assert!(people.iter().all(|p| p.signed == 0), "{people:?}");
+        assert!(people.iter().all(|p| p.sig_kinds.is_empty()));
     }
 
     #[test]

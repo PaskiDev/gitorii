@@ -12,6 +12,9 @@ pub(super) fn handle_stats(key: event::KeyEvent, app: &mut App) -> Option<Action
     match key.code {
         KeyCode::Char('1') => app.stats_view.mode = StatsMode::Repo,
         KeyCode::Char('2') => app.stats_view.mode = StatsMode::Workspace,
+        KeyCode::Char('3') => app.stats_view.mode = StatsMode::People,
+        KeyCode::Up | KeyCode::Char('k') => app.stats_move(-1),
+        KeyCode::Down | KeyCode::Char('j') => app.stats_move(1),
         KeyCode::Tab => app.stats_toggle_mode(),
         // The numbers are a snapshot; `r` takes another one.
         KeyCode::Char('r') => app.load_stats(),

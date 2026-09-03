@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, List, ListItem, Padding, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -51,6 +51,22 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             theme::hrule_content(f, rows[1], &[]);
             render_workspace(f, app, rows[2]);
         }
+        StatsMode::People => {
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(52), Constraint::Percentage(48)])
+                .split(rows[2]);
+
+            let divider = theme::divider_right();
+            let left = divider.inner(panes[0]);
+            f.render_widget(divider, panes[0]);
+            let spine = panes[0].right().saturating_sub(1);
+            theme::hrule_content(f, rows[1], &[(spine, theme::Tick::Down)]);
+            theme::tie_below(f, rows[2], &[spine]);
+
+            render_people(f, app, left);
+            render_person(f, app, panes[1]);
+        }
     }
 }
 
@@ -73,6 +89,8 @@ fn render_mode_strip(f: &mut Frame, app: &App, area: Rect) {
         Span::styled("1 repo", style(StatsMode::Repo)),
         Span::styled(" · ", Style::default().fg(theme::RULE)),
         Span::styled("2 workspace", style(StatsMode::Workspace)),
+        Span::styled(" · ", Style::default().fg(theme::RULE)),
+        Span::styled("3 people", style(StatsMode::People)),
     ];
     if app.stats_view.mode == StatsMode::Workspace {
         if let Some(ws) = &app.active_workspace {
@@ -410,6 +428,301 @@ fn render_workspace(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         body,
     );
+}
+
+/// Everyone who has committed here, most commits first.
+fn render_people(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+    let sv = &app.stats_view;
+    let active = !app.sidebar_focused;
+
+    let signed_total: usize = sv.people.iter().map(|p| p.signed).sum();
+    let commits_total: usize = sv.people.iter().map(|p| p.commits).sum();
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("people", Some(sv.people.len()), active));
+    heading.push(Span::styled(
+        format!("  {}% signed", signed_total * 100 / commits_total.max(1)),
+        Style::default().fg(if signed_total == 0 {
+            theme::INK_FAINT
+        } else {
+            theme::OK
+        }),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    // Caret, commits, signing share and age all have fixed widths; the name
+    // takes what they leave. A name that still does not fit gets a second
+    // line rather than an ellipsis — it is a person, not a column.
+    const AFTER_NAME: usize = 2 + 7 + 6 + 9;
+    let room = (area.width as usize).saturating_sub(2);
+    let longest = sv
+        .people
+        .iter()
+        .map(|p| p.name.chars().count())
+        .max()
+        .unwrap_or(10);
+    let fits = longest + AFTER_NAME <= room;
+    let name_w = if fits { longest } else { 0 };
+
+    let items: Vec<ListItem> = if sv.people.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "nobody has committed here yet",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
+    } else {
+        sv.people
+            .iter()
+            .enumerate()
+            .map(|(i, person)| {
+                let is_sel = active && i == sv.people_idx;
+                let name_style =
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM });
+                // The signing marker is about presence, not validity: a key
+                // glyph would suggest this has been verified, and it has not.
+                let sig = match (person.signed, person.commits) {
+                    (0, _) => Span::styled("  —   ", Style::default().fg(theme::INK_FAINT)),
+                    (s, c) if s == c => Span::styled("  all ", Style::default().fg(theme::OK)),
+                    (s, c) => Span::styled(
+                        format!("  {:>3}% ", s * 100 / c.max(1)),
+                        Style::default().fg(theme::WARN),
+                    ),
+                };
+                let numbers = vec![
+                    Span::styled(
+                        format!("{:>5}", person.commits),
+                        Style::default().fg(theme::INK_DIM),
+                    ),
+                    sig,
+                    Span::styled(
+                        format!("{:>8}", person.last.map(age).unwrap_or_default()),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                ];
+
+                let lines = if fits {
+                    let mut row = vec![
+                        theme::caret(app, is_sel),
+                        Span::styled(format!("{:<name_w$}  ", person.name), name_style),
+                    ];
+                    row.extend(numbers);
+                    vec![Line::from(row)]
+                } else {
+                    let mut second = vec![Span::raw("    ")];
+                    second.extend(numbers);
+                    vec![
+                        Line::from(vec![
+                            theme::caret(app, is_sel),
+                            Span::styled(person.name.clone(), name_style),
+                        ]),
+                        Line::from(second),
+                    ]
+                };
+
+                ListItem::new(lines).style(if is_sel {
+                    Style::default()
+                        .bg(theme::selection(app))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                })
+            })
+            .collect()
+    };
+
+    let mut state = ListState::default();
+    state.select(Some(sv.people_idx));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
+}
+
+/// Everything the repository records about the selected person.
+fn render_person(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("identity", None, false));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let Some(person) = app.stats_selected_person() else {
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                "  nobody selected",
+                Style::default().fg(theme::INK_FAINT),
+            )),
+            body,
+        );
+        return;
+    };
+
+    // An address is 40 characters more often than not, and half an address is
+    // not an address: the value wraps under its label.
+    let room = (body.width as usize).saturating_sub(12);
+    let field = move |label: &str, value: String, style: Style| -> Vec<Line<'static>> {
+        let chunks = chunk(&value, room.max(8));
+        chunks
+            .into_iter()
+            .enumerate()
+            .map(|(i, part)| {
+                Line::from(vec![
+                    Span::styled(
+                        format!("{:<10}", if i == 0 { label } else { "" }),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                    Span::styled(part, style),
+                ])
+            })
+            .collect()
+    };
+
+    let mut lines = Vec::new();
+    lines.extend(field(
+        "name",
+        person.name.clone(),
+        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+    ));
+    lines.extend(field(
+        "email",
+        person.email.clone(),
+        Style::default().fg(theme::INK),
+    ));
+    // Every other address and spelling is shown: they are the same person to
+    // git only by accident, and knowing about them is the point of the screen.
+    for other in &person.other_emails {
+        lines.extend(field(
+            "",
+            other.clone(),
+            Style::default().fg(theme::INK_DIM),
+        ));
+    }
+    for alias in &person.also_known_as {
+        lines.extend(field(
+            "also",
+            alias.clone(),
+            Style::default().fg(theme::INK_DIM),
+        ));
+    }
+
+    lines.push(Line::from(""));
+    lines.extend(field(
+        "commits",
+        person.commits.to_string(),
+        Style::default().fg(theme::INK),
+    ));
+    lines.extend(field(
+        "first",
+        person.first.map(stamp).unwrap_or_default(),
+        Style::default().fg(theme::INK_DIM),
+    ));
+    lines.extend(field(
+        "last",
+        person.last.map(stamp).unwrap_or_default(),
+        Style::default().fg(theme::INK_DIM),
+    ));
+    if person.committed_by_other > 0 {
+        lines.extend(field(
+            "applied",
+            format!("{} by someone else", person.committed_by_other),
+            Style::default().fg(theme::INK_DIM),
+        ));
+    }
+
+    lines.push(Line::from(""));
+    let signed = person.signed;
+    lines.extend(if signed == 0 {
+        field(
+            "signed",
+            "none".to_string(),
+            Style::default().fg(theme::INK_FAINT),
+        )
+    } else {
+        field(
+            "signed",
+            format!("{signed} of {} commits", person.commits),
+            Style::default().fg(if signed == person.commits {
+                theme::OK
+            } else {
+                theme::WARN
+            }),
+        )
+    });
+    if !person.sig_kinds.is_empty() {
+        lines.extend(field(
+            "format",
+            person
+                .sig_kinds
+                .iter()
+                .map(|k| k.label())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            Style::default().fg(theme::INK_DIM),
+        ));
+    }
+    // The honest caveat, on screen and not only in the code.
+    lines.push(Line::from(Span::styled(
+        "presence, not validity",
+        Style::default().fg(theme::INK_FAINT),
+    )));
+    lines.push(Line::from(Span::styled(
+        "verify one with S in the log",
+        Style::default().fg(theme::INK_FAINT),
+    )));
+
+    f.render_widget(
+        Paragraph::new(lines).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+    );
+}
+
+/// Split a value into pieces that fit, on spaces when there are any and at
+/// the edge when there are none — an address has no spaces to break on.
+fn chunk(text: &str, width: usize) -> Vec<String> {
+    if text.chars().count() <= width {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut rest: Vec<char> = text.chars().collect();
+    while rest.len() > width {
+        // Break where an address reads well — after the `@`, then after a dot,
+        // then at a space — and only cut mid-token when there is nowhere else.
+        let take = ['@', '.', ' ']
+            .iter()
+            .find_map(|sep| rest[..width].iter().rposition(|c| c == sep))
+            .map(|i| i + 1)
+            .unwrap_or(width);
+        out.push(
+            rest[..take]
+                .iter()
+                .collect::<String>()
+                .trim_end()
+                .to_string(),
+        );
+        rest = rest.split_off(take);
+    }
+    if !rest.is_empty() {
+        out.push(rest.into_iter().collect());
+    }
+    out
+}
+
+/// A date, in the European order this project writes dates in.
+fn stamp(when: i64) -> String {
+    let days = when / 86_400;
+    // Civil-from-days, the standard algorithm — no chrono needed for a date.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{:02}-{:02}-{}", d, m, y)
 }
 
 fn sync_span(ahead: usize, behind: usize) -> Span<'static> {
