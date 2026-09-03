@@ -1041,21 +1041,24 @@ impl GitRepo {
             }
         );
 
-        match remote_hash_opt {
-            None => {
-                println!(
-                    "\n❌ Remote `origin` has no `{}` ref. Either the remote is empty \
-                     (push hasn't landed) or the branch lives under a different name.",
-                    branch
-                );
-            }
-            Some(rh) if rh == local_hash => {
-                println!("\n✅ Local and remote are in sync");
-            }
-            Some(_) => {
-                println!("\n⚠️  Local and remote have diverged");
-                println!("💡 Use 'torii sync --force' to push local changes");
-            }
+        let verdict = match remote_hash_opt {
+            None => RemoteVerdict::NoSuchRef { branch },
+            Some(rh) if rh == local_hash => RemoteVerdict::InSync,
+            Some(rh) => match git2::Oid::from_str(&rh)
+                .ok()
+                .filter(|oid| self.repo.find_commit(*oid).is_ok())
+                .and_then(|oid| self.repo.graph_ahead_behind(local_oid, oid).ok())
+            {
+                Some((ahead, behind)) => RemoteVerdict::from_counts(ahead, behind),
+                // The remote's commit is not in this object store, so the two
+                // cannot be compared without fetching. Saying "diverged" here
+                // is what used to send people to --force.
+                None => RemoteVerdict::Unknown,
+            },
+        };
+        println!();
+        for line in verdict.lines() {
+            println!("{line}");
         }
 
         Ok(())
@@ -1802,6 +1805,72 @@ fn report_rebase_outcome(repo_path: &std::path::Path, status: std::process::Exit
 
 /// Live checkout progress (file count + path). Used by branch switches and
 /// other working-tree updates. Throttled to ~10 fps.
+/// What `torii sync --verify` found. Kept apart from the printing so the
+/// wording of each case is testable without a network or a remote.
+///
+/// The distinction matters: "behind" and "ahead" are ordinary states with
+/// ordinary fixes, and only a real fork of history is worth mentioning a
+/// force push for. Calling all three "diverged" — as this did — pointed at
+/// `--force` for a remote that was merely 22 commits behind, which would
+/// have rewritten it.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum RemoteVerdict {
+    InSync,
+    Ahead(usize),
+    Behind(usize),
+    Diverged {
+        ahead: usize,
+        behind: usize,
+    },
+    /// The remote's commit is not in the local object store.
+    Unknown,
+    NoSuchRef {
+        branch: String,
+    },
+}
+
+impl RemoteVerdict {
+    pub(crate) fn from_counts(ahead: usize, behind: usize) -> Self {
+        match (ahead, behind) {
+            (0, 0) => Self::InSync,
+            (a, 0) => Self::Ahead(a),
+            (0, b) => Self::Behind(b),
+            (a, b) => Self::Diverged {
+                ahead: a,
+                behind: b,
+            },
+        }
+    }
+
+    pub(crate) fn lines(&self) -> Vec<String> {
+        match self {
+            Self::InSync => vec!["✅ Local and remote are in sync".into()],
+            Self::Ahead(n) => vec![
+                format!("⬆️  Local is {n} commit(s) ahead of the remote"),
+                "💡 Push with 'torii sync --push' (fast-forward, nothing is rewritten)".into(),
+            ],
+            Self::Behind(n) => vec![
+                format!("⬇️  Local is {n} commit(s) behind the remote"),
+                "💡 Pull with 'torii sync --pull'".into(),
+            ],
+            Self::Diverged { ahead, behind } => vec![
+                format!("⚠️  Diverged: {ahead} commit(s) here the remote lacks, {behind} there you lack"),
+                "💡 Integrate first: 'torii sync --pull' (merge/rebase), then push".into(),
+                "⚠️  'torii sync --force' would DISCARD those {behind} remote commit(s)"
+                    .replace("{behind}", &behind.to_string()),
+            ],
+            Self::Unknown => vec![
+                "❔ The remote's commit is not in this repository's object store".into(),
+                "💡 Fetch first: 'torii sync --fetch', then verify again".into(),
+            ],
+            Self::NoSuchRef { branch } => vec![format!(
+                "❌ Remote `origin` has no `{branch}` ref. Either the remote is empty \
+                 (push hasn't landed) or the branch lives under a different name."
+            )],
+        }
+    }
+}
+
 fn attach_checkout_progress(builder: &mut git2::build::CheckoutBuilder) {
     use std::cell::RefCell;
     use std::io::Write;
@@ -1844,6 +1913,56 @@ fn checkout_progress_line(completed: usize, total: usize, name: &str) -> Option<
     }
     let pct = (completed * 100).checked_div(total).unwrap_or(0);
     Some(format!("🔀 {pct}%  {completed}/{total} files  {name:<40}"))
+}
+
+#[cfg(test)]
+mod verify_tests {
+    use super::*;
+
+    /// The bug this pins: a remote merely behind was reported as "diverged"
+    /// and the fix offered was `--force`, which on a real divergence throws
+    /// the other side's commits away. Behind, ahead and diverged are three
+    /// different states with three different fixes.
+    #[test]
+    fn only_a_real_fork_of_history_mentions_force() {
+        let ahead = RemoteVerdict::from_counts(22, 0);
+        assert_eq!(ahead, RemoteVerdict::Ahead(22));
+        let text = ahead.lines().join(" ");
+        assert!(text.contains("--push"), "{text}");
+        assert!(!text.contains("--force"), "a fast-forward must not: {text}");
+
+        let behind = RemoteVerdict::from_counts(0, 3);
+        assert_eq!(behind, RemoteVerdict::Behind(3));
+        let text = behind.lines().join(" ");
+        assert!(text.contains("--pull"), "{text}");
+        assert!(!text.contains("--force"), "{text}");
+
+        let forked = RemoteVerdict::from_counts(2, 5);
+        let text = forked.lines().join(" ");
+        assert!(text.contains("--pull"), "integrate first: {text}");
+        assert!(
+            text.contains("--force") && text.contains("DISCARD") && text.contains("5"),
+            "force must be named with what it costs: {text}"
+        );
+    }
+
+    #[test]
+    fn equal_counts_are_in_sync() {
+        assert_eq!(RemoteVerdict::from_counts(0, 0), RemoteVerdict::InSync);
+        assert_eq!(
+            RemoteVerdict::InSync.lines(),
+            vec!["✅ Local and remote are in sync".to_string()]
+        );
+    }
+
+    /// Without the remote's commit locally there is nothing to compare, and
+    /// guessing is how the old wording went wrong.
+    #[test]
+    fn an_uncomparable_remote_asks_for_a_fetch() {
+        let text = RemoteVerdict::Unknown.lines().join(" ");
+        assert!(text.contains("--fetch"), "{text}");
+        assert!(!text.contains("--force"), "{text}");
+    }
 }
 
 #[cfg(test)]
@@ -2070,13 +2189,17 @@ mod merge_commit_tests {
         };
         let commit_all = |repo: &git2::Repository, msg: &str, parents: &[git2::Oid]| {
             let mut idx = repo.index().unwrap();
-            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
             idx.write().unwrap();
             let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
-            let pcs: Vec<git2::Commit> =
-                parents.iter().map(|&o| repo.find_commit(o).unwrap()).collect();
+            let pcs: Vec<git2::Commit> = parents
+                .iter()
+                .map(|&o| repo.find_commit(o).unwrap())
+                .collect();
             let prefs: Vec<&git2::Commit> = pcs.iter().collect();
-            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs).unwrap()
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs)
+                .unwrap()
         };
         write("f.txt", "base\n");
         let base = commit_all(&repo, "base", &[]);
