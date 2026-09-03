@@ -62,6 +62,11 @@ const TABS: &[Tab] = &[
     },
     // navigation / history
     Tab {
+        key: "x",
+        label: "ignore",
+        view: View::Ignore,
+    },
+    Tab {
         key: "l",
         label: "log",
         view: View::Log,
@@ -128,11 +133,6 @@ const TABS: &[Tab] = &[
         key: "g",
         label: "config",
         view: View::Config,
-    },
-    Tab {
-        key: "x",
-        label: "ignore",
-        view: View::Ignore,
     },
 ];
 
@@ -1859,6 +1859,36 @@ mod tests {
                     .to_string()
             })
             .collect()
+    }
+
+    /// The sidebar order lives in four places — `TABS` here, `view_for_idx`,
+    /// `go_to` and `go_back` in the app — and nothing but this test makes them
+    /// agree. Moving one entry and forgetting another sends a key to the wrong
+    /// view, or leaves the cursor on a row that is not the open one.
+    #[test]
+    fn the_sidebar_order_agrees_with_itself() {
+        let mut app = App::new().expect("a repository to look at");
+
+        for (i, tab) in TABS.iter().enumerate() {
+            // Walking the sidebar to row `i` must open the view TABS shows there.
+            app.sidebar_idx = i;
+            app.sidebar_enter();
+            assert_eq!(
+                app.view, tab.view,
+                "row {i} shows `{}` but opens another view",
+                tab.label
+            );
+
+            // …and going to that view by any other route must put the cursor
+            // back on row `i`.
+            app.go_to(View::Dashboard);
+            app.go_to(tab.view.clone());
+            assert_eq!(
+                app.sidebar_idx, i,
+                "opening `{}` leaves the cursor somewhere else",
+                tab.label
+            );
+        }
     }
 
     /// The window is one box: a border around the edge, and inside it only

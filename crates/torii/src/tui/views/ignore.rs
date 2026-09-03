@@ -160,7 +160,7 @@ fn render_detail(f: &mut Frame, app: &App, heading_row: Rect, body: Rect) {
                 Span::styled(
                     match rule.origin {
                         Origin::Public => "committed, public",
-                        Origin::Local => "private, never committed",
+                        Origin::Local => "private, not committed",
                     },
                     Style::default().fg(theme::INK_FAINT),
                 ),
