@@ -518,6 +518,75 @@ impl App {
         self.status_msg = Some(msg.into());
     }
 
+    /// Run the secret scanner and put what it found in the event log.
+    ///
+    /// `full` scans the whole history instead of the staged files. Findings
+    /// are the reason the scan was asked for, so a non-empty result also
+    /// raises the event log — otherwise the answer sits behind a keypress
+    /// the user has no reason to think of.
+    pub fn run_secret_scan(&mut self, full: bool) {
+        let path = std::path::PathBuf::from(&self.repo_path);
+        let scope = if full { "history" } else { "staged files" };
+
+        let result = if full {
+            crate::scanner::scan_history(&path).map(|per_commit| {
+                per_commit
+                    .into_iter()
+                    .flat_map(|(commit, findings)| {
+                        let short = commit.chars().take(7).collect::<String>();
+                        // Which commit it came from matters as much as the
+                        // file when the scan covers history.
+                        findings.into_iter().map(move |mut f| {
+                            f.file = format!("{} {}", short, f.file);
+                            f
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            crate::scanner::scan_staged(&path)
+        };
+
+        match result {
+            Ok(findings) if findings.is_empty() => {
+                self.log_event(format!("scan: no secrets in {scope}"), EventKind::Success);
+            }
+            Ok(findings) => {
+                let total = findings.len();
+                // Oldest first, so the summary lands on top of the list.
+                for line in Self::scan_event_lines(&findings, 10).into_iter().rev() {
+                    self.log_event(line, EventKind::Error);
+                }
+                self.log_event(
+                    format!("scan: {total} finding(s) in {scope}"),
+                    EventKind::Error,
+                );
+                self.show_event_log = true;
+            }
+            Err(e) => self.log_event(format!("scan failed: {e}"), EventKind::Error),
+        }
+    }
+
+    /// One line per finding, capped, with a tally for the rest.
+    ///
+    /// The event log holds `event_log_max` entries and drops the oldest, so
+    /// a scan of a repo full of secrets would otherwise push every other
+    /// event out of the window on its way past.
+    pub fn scan_event_lines(findings: &[crate::scanner::Finding], limit: usize) -> Vec<String> {
+        let mut lines: Vec<String> = findings
+            .iter()
+            .take(limit)
+            .map(|f| format!("{}:{} — {}  {}", f.file, f.line, f.pattern_name, f.preview))
+            .collect();
+        if findings.len() > limit {
+            lines.push(format!(
+                "…and {} more — run `torii scan` for the full report",
+                findings.len() - limit
+            ));
+        }
+        lines
+    }
+
     pub fn log_event(&mut self, msg: impl Into<String>, kind: EventKind) {
         use std::time::{SystemTime, UNIX_EPOCH};
         let secs = SystemTime::now()
@@ -1066,6 +1135,110 @@ mod tests {
             app.log.signature_cache.is_empty(),
             "signature cache outlived the reload it documents as clearing it"
         );
+    }
+
+    /// End to end over a real repo: a staged secret has to come out the other
+    /// side as readable events, and the log has to open itself — the whole
+    /// point of the old "check event log" message that pointed at nothing.
+    ///
+    /// The fixture is a staged `.env`, which the scanner flags by name. A
+    /// literal key here would be caught by our own pre-commit scan, and
+    /// weakening that to make a test pass is the wrong trade.
+    #[test]
+    fn a_staged_secret_lands_in_the_event_log_and_opens_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        // Assembled at runtime so this line is not itself a finding.
+        let planted = format!("token={}{}", "z".repeat(8), "9f3a1c");
+        std::fs::write(tmp.path().join(".env"), format!("{planted}\n")).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new(".env")).unwrap();
+        index.write().unwrap();
+
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        assert!(!app.show_event_log);
+
+        app.run_secret_scan(false);
+
+        assert!(app.show_event_log, "findings must raise the log");
+        let messages: Vec<&str> = app.event_log.iter().map(|e| e.message.as_str()).collect();
+        assert!(
+            messages.first().is_some_and(
+                |m| m.starts_with("scan: ") && m.contains("finding(s) in staged files")
+            ),
+            "a summary on top: {messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains(".env")),
+            "the offending path belongs in the log: {messages:?}"
+        );
+        assert!(
+            messages.iter().all(|m| !m.contains(&planted)),
+            "the file's contents must never reach the log: {messages:?}"
+        );
+    }
+
+    /// A clean repo says so once, and does not steal the screen.
+    #[test]
+    fn a_clean_scan_does_not_open_the_event_log() {
+        let tmp = tempfile::tempdir().unwrap();
+        git2::Repository::init(tmp.path()).unwrap();
+
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.run_secret_scan(false);
+
+        assert!(!app.show_event_log);
+        assert_eq!(app.event_log.len(), 1);
+        assert!(app.event_log[0].message.contains("no secrets"));
+    }
+
+    /// The scanner used to run as a subprocess with its output sent to
+    /// /dev/null, so the TUI could say "scan found issues — check event log"
+    /// while the event log held nothing but that sentence. The findings are
+    /// the point, and the event log is where they go.
+    #[test]
+    fn a_scan_reports_each_finding_and_says_how_many_it_hid() {
+        let findings: Vec<_> = (0..14)
+            .map(|i| crate::scanner::Finding {
+                file: format!("src/f{i}.rs"),
+                line: i + 1,
+                pattern_name: "AWS access key".into(),
+                preview: "AKIA****".into(),
+            })
+            .collect();
+
+        let lines = App::scan_event_lines(&findings, 10);
+        assert_eq!(lines.len(), 11, "ten findings and one tally: {lines:?}");
+        assert_eq!(lines[0], "src/f0.rs:1 — AWS access key  AKIA****");
+        assert!(
+            lines[10].contains("4 more"),
+            "the hidden ones must be counted: {}",
+            lines[10]
+        );
+    }
+
+    /// The preview is masked by the scanner; the event log must pass it
+    /// through rather than reconstruct anything.
+    #[test]
+    fn a_finding_carries_the_masked_preview_and_nothing_more() {
+        let finding = crate::scanner::Finding {
+            file: "config.env".into(),
+            line: 3,
+            pattern_name: "Generic API key".into(),
+            preview: "sk-1****************".into(),
+        };
+        let lines = App::scan_event_lines(std::slice::from_ref(&finding), 10);
+        assert_eq!(
+            lines,
+            vec!["config.env:3 — Generic API key  sk-1****************"]
+        );
+    }
+
+    #[test]
+    fn a_clean_scan_produces_no_finding_lines() {
+        assert!(App::scan_event_lines(&[], 10).is_empty());
     }
 
     #[test]

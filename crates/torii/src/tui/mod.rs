@@ -769,29 +769,7 @@ fn run_loop(
 
                 Action::HistoryScan => {
                     let full = app.history_view.scan_full;
-                    let mut cmd = std::process::Command::new(torii_exe());
-                    cmd.args(if full {
-                        vec!["scan", "--history"]
-                    } else {
-                        vec!["scan"]
-                    })
-                    .current_dir(&app.repo_path)
-                    .stdout(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null());
-                    let ok = cmd.status().map(|s| s.success()).unwrap_or(false);
-                    let msg = if ok {
-                        "scan complete — no secrets found".to_string()
-                    } else {
-                        "scan found issues — check event log".to_string()
-                    };
-                    app.log_event(
-                        &msg,
-                        if ok {
-                            EventKind::Success
-                        } else {
-                            EventKind::Error
-                        },
-                    );
+                    app.run_secret_scan(full);
                 }
 
                 Action::HistoryClean => {
