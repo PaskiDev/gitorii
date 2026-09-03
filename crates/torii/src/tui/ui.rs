@@ -68,8 +68,8 @@ const TABS: &[Tab] = &[
     // navigation / history
     Tab {
         key: "x",
-        label: "ignore",
-        view: View::Ignore,
+        label: "safety",
+        view: View::Safety,
     },
     Tab {
         key: "l",
@@ -219,7 +219,7 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Platform => views::platform::render(f, app, content_rows[0]),
         // Config absorbs Settings via tabs since 0.7.2.
         View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
-        View::Ignore => views::ignore::render(f, app, content_rows[0]),
+        View::Safety => views::safety::render(f, app, content_rows[0]),
         View::Stats => views::stats::render(f, app, content_rows[0]),
         View::Diff | View::Help => {}
     }
@@ -1535,7 +1535,18 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     }
                 }
             }
-            View::Ignore => match app.ignore_view.focus {
+            View::Safety if app.ignore_view.tab == crate::tui::app::SafetyTab::Scanner => {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" scroll  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[1]", Style::default().fg(bc)),
+                    Span::styled(" rules  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[r]", Style::default().fg(bc)),
+                    Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
+                ])
+            }
+            View::Safety => match app.ignore_view.focus {
                 crate::tui::app::IgnoreFocus::Input => Line::from(vec![
                     Span::raw(" "),
                     Span::styled("[Tab]", Style::default().fg(bc)),
@@ -1564,8 +1575,8 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     Span::styled(" remove  ", Style::default().fg(theme::INK_FAINT)),
                     Span::styled("[t]", Style::default().fg(bc)),
                     Span::styled(" path/secret  ", Style::default().fg(theme::INK_FAINT)),
-                    Span::styled("[r]", Style::default().fg(bc)),
-                    Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[2]", Style::default().fg(bc)),
+                    Span::styled(" scanner", Style::default().fg(theme::INK_FAINT)),
                 ]),
             },
             View::Stats => Line::from(vec![
@@ -2151,7 +2162,7 @@ mod tests {
     /// `look_at_it` cannot show, since the crate directory has no
     /// `.toriignore` of its own.
     #[test]
-    fn look_at_the_ignore_view() {
+    fn look_at_the_safety_view() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join(".toriignore"),
@@ -2166,9 +2177,9 @@ mod tests {
 
         let mut app = App::new().expect("a repository to look at");
         app.repo_path = tmp.path().to_string_lossy().into_owned();
-        app.go_to(View::Ignore);
+        app.go_to(View::Safety);
         app.sidebar_focused = false;
-        app.load_ignore_rules();
+        app.load_safety();
         // A private rule, so the pane has to name the file it came from.
         app.ignore_view.idx = app
             .ignore_view
@@ -2179,24 +2190,31 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let lines: Vec<String> = (0..24)
-            .map(|y| {
-                (0..100)
-                    .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
-                    .collect::<String>()
-                    .trim_end()
-                    .to_string()
-            })
-            .collect();
-        println!("{}", lines.join("\n"));
+        let screen = dump(terminal.backend().buffer(), 100, 24);
+        println!("{screen}");
 
-        let screen = lines.join("\n");
         assert!(screen.contains("rules (6)"), "{screen}");
         assert!(screen.contains("local"), "the private rules must be marked");
         assert!(
             screen.contains(".toriignore.local"),
             "the detail names the file the rule lives in"
+        );
+
+        // The scanner tab: the machinery behind those rules.
+        app.ignore_view.tab = crate::tui::app::SafetyTab::Scanner;
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let screen = dump(terminal.backend().buffer(), 100, 24);
+        println!("{screen}");
+
+        assert!(screen.contains("built in"), "{screen}");
+        assert!(
+            screen.contains("blocks and asks"),
+            "the screen must say what a hit does: {screen}"
+        );
+        assert!(
+            screen.contains(&crate::scanner::builtin_pattern_count().to_string()),
+            "the built-in count is shown: {screen}"
         );
     }
 
@@ -2459,7 +2477,7 @@ mod tests {
         View::Issue,
         View::Pr,
         View::Platform,
-        View::Ignore,
+        View::Safety,
     ];
 
     #[test]

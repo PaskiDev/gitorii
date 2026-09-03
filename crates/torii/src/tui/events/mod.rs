@@ -12,12 +12,12 @@ mod branch;
 mod commit;
 mod config;
 mod history;
-mod ignore;
 mod issue;
 mod log;
 mod platform;
 mod pr;
 mod remote;
+mod safety;
 mod snapshot;
 mod stats;
 mod submodule;
@@ -31,12 +31,12 @@ pub use commit::COMMIT_TYPES;
 use commit::*;
 use config::*;
 use history::*;
-use ignore::*;
 use issue::*;
 use log::*;
 use platform::*;
 use pr::*;
 use remote::*;
+use safety::*;
 use snapshot::*;
 use stats::*;
 use submodule::*;
@@ -594,7 +594,7 @@ impl EventHandler {
                     View::Worktree => handle_worktree(key, app),
                     View::Submodule => handle_submodule(key, app),
                     View::Bisect => handle_bisect(key, app),
-                    View::Ignore => handle_ignore(key, app),
+                    View::Safety => handle_safety(key, app),
                     View::Stats => handle_stats(key, app),
                     View::Auth => handle_auth(key, app),
                     // 0.7.12 — unified Platform view.

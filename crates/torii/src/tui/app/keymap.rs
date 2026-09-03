@@ -56,7 +56,7 @@ impl App {
             View::Snapshot => {
                 self.snapshot_view.search_mode || self.snapshot_view.focus == SnapshotFocus::Create
             }
-            View::Ignore => self.ignore_view.focus == IgnoreFocus::Input,
+            View::Safety => self.ignore_view.focus == IgnoreFocus::Input,
             View::Config | View::Settings => self.config_view.editing,
             View::Branch => self.branch_view.confirm == BranchConfirm::NewBranch,
             View::Issue => !matches!(self.issue_view.confirm, IssueConfirm::None),
@@ -321,7 +321,9 @@ fn view_for_action(id: &str) -> Option<View> {
         "goto:save" => View::Commit,
         "goto:sync" => View::Sync,
         "goto:snapshot" => View::Snapshot,
-        "goto:ignore" => View::Ignore,
+        "goto:safety" => View::Safety,
+        // The id this view shipped under before it grew the scanner tab.
+        "goto:ignore" => View::Safety,
         "goto:log" => View::Log,
         "goto:branch" => View::Branch,
         "goto:tag" => View::Tag,

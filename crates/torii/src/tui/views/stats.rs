@@ -562,7 +562,7 @@ fn render_person(f: &mut Frame, app: &App, area: Rect) {
     // not an address: the value wraps under its label.
     let room = (body.width as usize).saturating_sub(12);
     let field = move |label: &str, value: String, style: Style| -> Vec<Line<'static>> {
-        let chunks = chunk(&value, room.max(8));
+        let chunks = theme::wrap(&value, room.max(8));
         chunks
             .into_iter()
             .enumerate()
@@ -675,37 +675,6 @@ fn render_person(f: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(lines).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         body,
     );
-}
-
-/// Split a value into pieces that fit, on spaces when there are any and at
-/// the edge when there are none — an address has no spaces to break on.
-fn chunk(text: &str, width: usize) -> Vec<String> {
-    if text.chars().count() <= width {
-        return vec![text.to_string()];
-    }
-    let mut out = Vec::new();
-    let mut rest: Vec<char> = text.chars().collect();
-    while rest.len() > width {
-        // Break where an address reads well — after the `@`, then after a dot,
-        // then at a space — and only cut mid-token when there is nowhere else.
-        let take = ['@', '.', ' ']
-            .iter()
-            .find_map(|sep| rest[..width].iter().rposition(|c| c == sep))
-            .map(|i| i + 1)
-            .unwrap_or(width);
-        out.push(
-            rest[..take]
-                .iter()
-                .collect::<String>()
-                .trim_end()
-                .to_string(),
-        );
-        rest = rest.split_off(take);
-    }
-    if !rest.is_empty() {
-        out.push(rest.into_iter().collect());
-    }
-    out
 }
 
 /// A date, in the European order this project writes dates in.

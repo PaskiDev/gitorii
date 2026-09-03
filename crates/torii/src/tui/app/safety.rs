@@ -1,4 +1,9 @@
-//! Ignore view state + ops — the `.toriignore` pair as editable rules.
+//! Safety view state — everything that keeps a secret out of the repo.
+//!
+//! Two things that were living apart and belong together: the `.toriignore`
+//! pair, and the scanner that reads it. A deny pattern is only meaningful
+//! next to the scanner it feeds, and the scanner's own settings — the size
+//! gate, the hooks — live in the same two files.
 //!
 //! The rules are read with their provenance (see `cmd::ignore_rules`), so the
 //! view can say which file each one lives in and can remove exactly the line
@@ -8,6 +13,16 @@
 
 use super::*;
 use crate::ignore_rules::{Kind, Origin, Rule};
+
+/// Which half of the screen is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SafetyTab {
+    /// The `.toriignore` rules, editable.
+    #[default]
+    Rules,
+    /// What the scanner is made of and what it enforces.
+    Scanner,
+}
 
 /// What the view is doing: reading, typing a new rule, or confirming a delete.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,7 +35,13 @@ pub enum IgnoreFocus {
 
 #[derive(Clone)]
 pub struct IgnoreState {
+    pub tab: SafetyTab,
     pub rules: Vec<Rule>,
+    /// The scanner's own settings, read from the same two files.
+    pub size: crate::toriignore::SizeRules,
+    pub hooks: crate::toriignore::HookRules,
+    /// Row of the scanner tab.
+    pub scanner_idx: usize,
     pub idx: usize,
     pub focus: IgnoreFocus,
     /// What a new rule would be: a path or a secret.
@@ -35,7 +56,11 @@ pub struct IgnoreState {
 impl Default for IgnoreState {
     fn default() -> Self {
         Self {
+            tab: SafetyTab::default(),
             rules: Vec::new(),
+            size: Default::default(),
+            hooks: Default::default(),
+            scanner_idx: 0,
             idx: 0,
             focus: IgnoreFocus::List,
             new_kind: Kind::Path,
@@ -52,6 +77,30 @@ impl Default for IgnoreState {
 }
 
 impl App {
+    /// Everything the safety screen shows: the rules, and what the scanner
+    /// enforces beyond them.
+    pub fn load_safety(&mut self) {
+        self.load_ignore_rules();
+        // The size gate and the hooks come from the merged pair, because that
+        // is what the scanner itself reads.
+        match crate::toriignore::ToriIgnore::load(std::path::Path::new(&self.repo_path)) {
+            Ok(ti) => {
+                self.ignore_view.size = ti.size;
+                self.ignore_view.hooks = ti.hooks;
+            }
+            Err(e) => {
+                self.ignore_view.status = Some(format!("could not read the rules: {e}"));
+            }
+        }
+    }
+
+    pub fn safety_toggle_tab(&mut self) {
+        self.ignore_view.tab = match self.ignore_view.tab {
+            SafetyTab::Rules => SafetyTab::Scanner,
+            SafetyTab::Scanner => SafetyTab::Rules,
+        };
+    }
+
     pub fn load_ignore_rules(&mut self) {
         let root = std::path::PathBuf::from(&self.repo_path);
         match crate::ignore_rules::load(&root) {

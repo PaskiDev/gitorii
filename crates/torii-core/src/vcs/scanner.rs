@@ -142,6 +142,17 @@ fn url_has_real_password(line: &str, scheme_marker: &str) -> bool {
     !(password.starts_with('<') || password.starts_with("${") || password.starts_with('$'))
 }
 
+/// How many patterns the scanner carries out of the box. The safety view
+/// shows it beside the user's own rules so the two are never confused.
+pub fn builtin_pattern_count() -> usize {
+    PATTERNS.len()
+}
+
+/// The name of every built-in pattern, for a screen that lists them.
+pub fn builtin_pattern_names() -> Vec<&'static str> {
+    PATTERNS.iter().map(|p| p.name).collect()
+}
+
 const PATTERNS: &[Pattern] = &[
     Pattern {
         name: "Private key (PEM)",
@@ -474,10 +485,7 @@ pub fn staged_paths(repo_path: &Path) -> Result<Vec<String>> {
 /// Reused by `history replace-text --redact-secrets` to redact matching lines
 /// across history with the same detection logic the pre-save scanner uses.
 pub(crate) fn matching_pattern(line: &str) -> Option<&'static str> {
-    PATTERNS
-        .iter()
-        .find(|p| (p.detect)(line))
-        .map(|p| p.name)
+    PATTERNS.iter().find(|p| (p.detect)(line)).map(|p| p.name)
 }
 
 /// Scan staged content using user-defined regex rules from .toriignore.

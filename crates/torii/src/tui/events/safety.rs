@@ -8,9 +8,9 @@
 use crossterm::event::{self, KeyCode, KeyModifiers};
 
 use super::Action;
-use crate::tui::app::{App, IgnoreFocus};
+use crate::tui::app::{App, IgnoreFocus, SafetyTab};
 
-pub(super) fn handle_ignore(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+pub(super) fn handle_safety(key: event::KeyEvent, app: &mut App) -> Option<Action> {
     match app.ignore_view.focus.clone() {
         IgnoreFocus::List => handle_list(key, app),
         IgnoreFocus::Input => handle_input(key, app),
@@ -19,6 +19,37 @@ pub(super) fn handle_ignore(key: event::KeyEvent, app: &mut App) -> Option<Actio
 }
 
 fn handle_list(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    // The tabs answer from either side.
+    match key.code {
+        KeyCode::Char('1') => {
+            app.ignore_view.tab = SafetyTab::Rules;
+            return None;
+        }
+        KeyCode::Char('2') => {
+            app.ignore_view.tab = SafetyTab::Scanner;
+            return None;
+        }
+        KeyCode::Tab => {
+            app.safety_toggle_tab();
+            return None;
+        }
+        _ => {}
+    }
+    if app.ignore_view.tab == SafetyTab::Scanner {
+        // The scanner tab is a report: it scrolls, and sends you to the rules
+        // tab for anything that can be changed.
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.ignore_view.scanner_idx = app.ignore_view.scanner_idx.saturating_add(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.ignore_view.scanner_idx = app.ignore_view.scanner_idx.saturating_sub(1);
+            }
+            KeyCode::Char('r') => app.load_safety(),
+            _ => {}
+        }
+        return None;
+    }
     match key.code {
         KeyCode::Char('j') | KeyCode::Down => app.ignore_move_down(),
         KeyCode::Char('k') | KeyCode::Up => app.ignore_move_up(),
@@ -36,7 +67,7 @@ fn handle_list(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         KeyCode::Char('t') => app.ignore_toggle_kind(),
         KeyCode::Char('r') => {
             app.ignore_view.status = None;
-            app.load_ignore_rules();
+            app.load_safety();
         }
         _ => {}
     }
