@@ -468,7 +468,7 @@ pub const ACTIONS: &[ActionDef] = &[
     def("repo:scan", "Scan for secrets", "repo"),
     def("repo:scan-history", "Scan the whole history", "repo"),
     def("repo:switch-branch", "Switch branch…", "repo"),
-    def("repo:switch-repo", "Switch repo of the workspace…", "repo"),
+    def("repo:switch-repo", "Switch workspace repo…", "repo"),
 ];
 
 const fn def(id: &'static str, label: &'static str, group: &'static str) -> ActionDef {
