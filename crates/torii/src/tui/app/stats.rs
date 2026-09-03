@@ -7,7 +7,7 @@
 //! than freezing the whole TUI on a large repo.
 
 use super::*;
-use crate::stats::{self, Churn, History, Shape};
+use crate::stats::{self, Churn, History, Person, Shape};
 
 /// Which repository the numbers are about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -15,6 +15,9 @@ pub enum StatsMode {
     #[default]
     Repo,
     Workspace,
+    /// Everyone who has committed, with every address and signature the repo
+    /// records for them.
+    People,
 }
 
 /// One line of the workspace table.
@@ -38,6 +41,9 @@ pub struct StatsState {
     pub churn: Option<Churn>,
     pub churn_rx: Option<std::sync::mpsc::Receiver<Churn>>,
     pub rows: Vec<RepoRow>,
+    pub people: Vec<Person>,
+    /// Row of the people table.
+    pub people_idx: usize,
     /// Which repo path the numbers belong to, so a switch of repo is noticed.
     pub loaded_for: Option<String>,
 }
@@ -53,6 +59,8 @@ impl Clone for StatsState {
             churn: self.churn.clone(),
             churn_rx: None,
             rows: self.rows.clone(),
+            people: self.people.clone(),
+            people_idx: self.people_idx,
             loaded_for: self.loaded_for.clone(),
         }
     }
@@ -79,6 +87,10 @@ impl App {
             let _ = tx.send(stats::churn(&path));
         });
         self.stats_view.churn_rx = Some(rx);
+
+        self.stats_view.people = stats::people(std::path::Path::new(&self.repo_path));
+        let last = self.stats_view.people.len().saturating_sub(1);
+        self.stats_view.people_idx = self.stats_view.people_idx.min(last);
 
         self.load_workspace_rows();
     }
@@ -141,8 +153,19 @@ impl App {
     pub fn stats_toggle_mode(&mut self) {
         self.stats_view.mode = match self.stats_view.mode {
             StatsMode::Repo => StatsMode::Workspace,
-            StatsMode::Workspace => StatsMode::Repo,
+            StatsMode::Workspace => StatsMode::People,
+            StatsMode::People => StatsMode::Repo,
         };
+    }
+
+    pub fn stats_move(&mut self, delta: isize) {
+        let last = self.stats_view.people.len().saturating_sub(1) as isize;
+        let idx = self.stats_view.people_idx as isize + delta;
+        self.stats_view.people_idx = idx.clamp(0, last.max(0)) as usize;
+    }
+
+    pub fn stats_selected_person(&self) -> Option<&Person> {
+        self.stats_view.people.get(self.stats_view.people_idx)
     }
 
     /// Totals across the workspace, for the line under the table.

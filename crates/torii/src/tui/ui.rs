@@ -1574,6 +1574,8 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                 Span::styled(" repo  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[2]", Style::default().fg(bc)),
                 Span::styled(" workspace  ", Style::default().fg(theme::INK_FAINT)),
+                Span::styled("[3]", Style::default().fg(bc)),
+                Span::styled(" people  ", Style::default().fg(theme::INK_FAINT)),
                 Span::styled("[r]", Style::default().fg(bc)),
                 Span::styled(" measure again", Style::default().fg(theme::INK_FAINT)),
             ]),
@@ -2286,10 +2288,84 @@ mod tests {
         terminal.draw(|f| render(f, &app)).unwrap();
         println!("{}", dump(terminal.backend().buffer(), 100, 28));
 
+        app.stats_view.mode = crate::tui::app::StatsMode::People;
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        println!("{}", dump(terminal.backend().buffer(), 100, 20));
+
         app.stats_view.mode = crate::tui::app::StatsMode::Workspace;
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
         println!("{}", dump(terminal.backend().buffer(), 100, 16));
+    }
+
+    /// The people screen holds names and addresses, and neither may be cut:
+    /// half an address is not an address.
+    #[test]
+    fn the_people_screen_never_cuts_a_name_or_an_address() {
+        for width in [100u16, 84, 70] {
+            let mut app = App::new().expect("a repository to look at");
+            app.go_to(View::Stats);
+            app.sidebar_focused = false;
+            app.stats_view.mode = crate::tui::app::StatsMode::People;
+            app.stats_view.people = vec![crate::stats::Person {
+                name: "Someone With A Very Long Name Indeed".into(),
+                email: "someone.with.a.long.address@example.com".into(),
+                other_emails: vec!["second.address@example.com".into()],
+                commits: 12,
+                signed: 12,
+                sig_kinds: vec![crate::stats::SigKind::Pgp],
+                first: Some(1_700_000_000),
+                last: Some(1_700_000_000),
+                ..Default::default()
+            }];
+
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal.draw(|f| render(f, &app)).unwrap();
+            let screen = dump(terminal.backend().buffer(), width, 30);
+
+            // A wrapped value spans two lines, so the pane is read as a
+            // column and glued back together: what must survive is the text,
+            // not the line it happens to sit on.
+            // Box characters are multi-byte, so the column is counted in
+            // characters, not bytes.
+            let column = screen
+                .lines()
+                .find_map(|l| {
+                    l.chars()
+                        .collect::<Vec<_>>()
+                        .windows(8)
+                        .position(|w| w.iter().collect::<String>() == "identity")
+                })
+                .expect("the identity pane");
+            let pane: String = screen
+                .lines()
+                .map(|l| l.chars().skip(column).collect::<String>())
+                .map(|l| l.trim_end_matches(['│', ' ']).trim_end().to_string())
+                .collect::<Vec<_>>()
+                .join("")
+                .split_whitespace()
+                .collect();
+
+            assert!(
+                !screen.contains('…'),
+                "at {width} something was cut short:\n{screen}"
+            );
+            for whole in [
+                "SomeoneWithAVeryLongNameIndeed",
+                "someone.with.a.long.address@example.com",
+                "second.address@example.com",
+            ] {
+                assert!(
+                    pane.contains(whole),
+                    "at {width} `{whole}` did not survive:\n{screen}"
+                );
+            }
+            assert!(
+                screen.contains("pgp"),
+                "the signature format shows: {screen}"
+            );
+        }
     }
 
     /// Nothing in the keys screen may be cut: the action id is what has to be
