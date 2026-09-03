@@ -13,6 +13,7 @@ pub mod mirror;
 pub mod pr;
 pub mod remote;
 pub mod snapshot;
+pub mod stats;
 pub mod submodule;
 pub mod sync;
 pub mod tag;

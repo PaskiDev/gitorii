@@ -457,6 +457,7 @@ pub const ACTIONS: &[ActionDef] = &[
     def("goto:bisect", "Bisect", "go"),
     def("goto:auth", "Auth", "go"),
     def("goto:config", "Config", "go"),
+    def("goto:stats", "Stats", "go"),
     // The window itself.
     def("app:events", "Toggle the event log", "app"),
     def("app:help", "Help", "app"),

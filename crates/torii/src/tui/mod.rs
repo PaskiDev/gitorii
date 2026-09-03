@@ -104,6 +104,9 @@ fn run_loop(
 ) -> crate::error::Result<()> {
     loop {
         app.tick = app.tick.wrapping_add(1);
+        // The churn worker answers whenever it answers; picking it up on the
+        // tick keeps the view drawing while it runs.
+        app.poll_stats_worker();
 
         // Poll update check result (background thread)
         if let Some(rx) = &app.update_rx {

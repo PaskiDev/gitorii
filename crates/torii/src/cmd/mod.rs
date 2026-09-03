@@ -14,6 +14,7 @@ pub mod grep;
 pub mod ignore_rules;
 pub mod notes;
 pub mod restore;
+pub mod stats;
 pub mod submodule;
 pub mod subtree;
 pub mod worktree;

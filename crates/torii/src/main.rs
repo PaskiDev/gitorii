@@ -43,6 +43,7 @@ pub use cmd::grep;
 pub use cmd::ignore_rules;
 pub use cmd::notes;
 pub use cmd::restore;
+pub use cmd::stats;
 pub use cmd::submodule;
 pub use cmd::subtree;
 pub use cmd::worktree;

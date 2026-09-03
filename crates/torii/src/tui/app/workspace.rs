@@ -2,6 +2,7 @@
 
 use super::*;
 
+#[derive(Clone)]
 pub struct WorkspaceRepo {
     pub path: String,
     pub branch: String,
@@ -10,6 +11,7 @@ pub struct WorkspaceRepo {
     pub dirty: bool,
 }
 
+#[derive(Clone)]
 pub struct WorkspaceEntry {
     pub name: String,
     pub repos: Vec<WorkspaceRepo>,
