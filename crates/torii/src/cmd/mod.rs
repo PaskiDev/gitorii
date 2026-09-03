@@ -11,6 +11,7 @@ pub mod clean;
 pub mod describe;
 pub mod fileops;
 pub mod grep;
+pub mod ignore_rules;
 pub mod notes;
 pub mod restore;
 pub mod submodule;

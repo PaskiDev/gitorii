@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Padding, Paragraph},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -129,6 +129,11 @@ const TABS: &[Tab] = &[
         label: "config",
         view: View::Config,
     },
+    Tab {
+        key: "x",
+        label: "ignore",
+        view: View::Ignore,
+    },
 ];
 
 pub fn render(f: &mut Frame, app: &App) {
@@ -209,6 +214,7 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Platform => views::platform::render(f, app, content_rows[0]),
         // Config absorbs Settings via tabs since 0.7.2.
         View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
+        View::Ignore => views::ignore::render(f, app, content_rows[0]),
         View::Diff | View::Help => {}
     }
 
@@ -1410,6 +1416,39 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     }
                 }
             }
+            View::Ignore => match app.ignore_view.focus {
+                crate::tui::app::IgnoreFocus::Input => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[Tab]", Style::default().fg(bc)),
+                    Span::styled(" kind  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[^T]", Style::default().fg(bc)),
+                    Span::styled(" target  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Enter]", Style::default().fg(bc)),
+                    Span::styled(" add  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[Esc]", Style::default().fg(bc)),
+                    Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
+                ]),
+                crate::tui::app::IgnoreFocus::ConfirmDelete => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[y]", Style::default().fg(bc)),
+                    Span::styled(" remove  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[n]", Style::default().fg(bc)),
+                    Span::styled(" keep", Style::default().fg(theme::INK_FAINT)),
+                ]),
+                crate::tui::app::IgnoreFocus::List => Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                    Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[a]", Style::default().fg(bc)),
+                    Span::styled(" add  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[d]", Style::default().fg(bc)),
+                    Span::styled(" remove  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[t]", Style::default().fg(bc)),
+                    Span::styled(" path/secret  ", Style::default().fg(theme::INK_FAINT)),
+                    Span::styled("[r]", Style::default().fg(bc)),
+                    Span::styled(" reload", Style::default().fg(theme::INK_FAINT)),
+                ]),
+            },
             View::Config => {
                 // Hint adapts to mode (0.7.5): editing → Enter saves, Esc
                 // cancels; otherwise Enter opens edit + Tab toggles scope.
@@ -1755,9 +1794,19 @@ fn render_sidebar(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         })
         .collect();
 
-    f.render_widget(
+    // The list outgrew the shortest terminals, so it scrolls: whichever row
+    // is in play — the sidebar cursor, or the open view — stays on screen.
+    let mut state = ListState::default();
+    let focus_row = if app.sidebar_focused {
+        app.sidebar_idx
+    } else {
+        TABS.iter().position(|t| t.view == app.view).unwrap_or(0)
+    };
+    state.select(Some(focus_row.min(TABS.len().saturating_sub(1))));
+    f.render_stateful_widget(
         List::new(tab_items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         rows[0],
+        &mut state,
     );
 
     // Help and quit sit on the key line's row, so the foot of the window reads
@@ -1913,6 +1962,59 @@ mod tests {
         );
     }
 
+    /// The ignore view over a repo that actually has rules — the version
+    /// `look_at_it` cannot show, since the crate directory has no
+    /// `.toriignore` of its own.
+    #[test]
+    fn look_at_the_ignore_view() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore"),
+            "build/\ntarget/\n*.log\n\n[secrets]\ndeny: AKIA[0-9A-Z]{16}  # AWS\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore.local"),
+            "internal/billing/\n\n[secrets]\ndeny: xkeysib-[a-z0-9]{20,}  # Brevo\n",
+        )
+        .unwrap();
+
+        let mut app = App::new().expect("a repository to look at");
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.go_to(View::Ignore);
+        app.sidebar_focused = false;
+        app.load_ignore_rules();
+        // A private rule, so the pane has to name the file it came from.
+        app.ignore_view.idx = app
+            .ignore_view
+            .rules
+            .iter()
+            .position(|r| r.origin == crate::ignore_rules::Origin::Local)
+            .expect("a rule from the private file");
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let lines: Vec<String> = (0..24)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect();
+        println!("{}", lines.join("\n"));
+
+        let screen = lines.join("\n");
+        assert!(screen.contains("rules (6)"), "{screen}");
+        assert!(screen.contains("local"), "the private rules must be marked");
+        assert!(
+            screen.contains(".toriignore.local"),
+            "the detail names the file the rule lives in"
+        );
+    }
+
     /// Not an assertion — `cargo test -- --nocapture look_at_it` prints the
     /// screen, which is the only way to review a change of this kind.
     #[test]
@@ -1928,7 +2030,7 @@ mod tests {
     /// grid looked like before the views tied themselves into the chrome.
     /// The views converted to the window chrome so far. A view joins this
     /// list when it stops drawing its own boxes.
-    const CONVERTED: [View; 17] = [
+    const CONVERTED: [View; 18] = [
         View::Dashboard,
         View::Log,
         View::Branch,
@@ -1946,6 +2048,7 @@ mod tests {
         View::Issue,
         View::Pr,
         View::Platform,
+        View::Ignore,
     ];
 
     #[test]
