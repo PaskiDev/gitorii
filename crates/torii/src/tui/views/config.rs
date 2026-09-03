@@ -34,6 +34,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     match app.config_view.tab {
         ConfigTab::Values => render_values(f, app, rows[2]),
         ConfigTab::Keys => render_keys(f, app, rows[2]),
+        ConfigTab::Tui => render_tui(f, app, rows[2]),
     }
 }
 
@@ -58,9 +59,91 @@ fn render_tab_strip(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("1 values", style(ConfigTab::Values)),
             Span::styled(" · ", Style::default().fg(theme::RULE)),
             Span::styled("2 keys", style(ConfigTab::Keys)),
+            Span::styled(" · ", Style::default().fg(theme::RULE)),
+            Span::styled("3 tui", style(ConfigTab::Tui)),
         ])),
         area,
     );
+    // The strip is clickable, and a tab is the digit printed on it.
+    let mut hits = app.hits.borrow_mut();
+    let mut x = area.x + 1;
+    for (index, label) in ["1 values", "2 keys", "3 tui"].iter().enumerate() {
+        let width = label.chars().count() as u16;
+        hits.push(
+            Rect::new(x, area.y, width, 1),
+            crate::tui::hit::Zone::Tab {
+                strip: "config".into(),
+                index,
+            },
+        );
+        x += width + 3;
+    }
+}
+
+/// The TUI's own settings: the ones that live in `tui-settings.toml` rather
+/// than in git config, which is what the values tab shows.
+fn render_tui(f: &mut Frame, app: &App, area: Rect) {
+    let [heading_row, body] = theme::heading_and_body(area);
+    let focused = !app.sidebar_focused;
+    let rows = app.tui_settings_rows();
+
+    let mut heading = vec![Span::raw(" ")];
+    heading.extend(theme::panel_title("tui", Some(rows.len()), focused));
+    heading.push(Span::styled(
+        "  Enter changes · saved on the spot",
+        Style::default().fg(theme::INK_FAINT),
+    ));
+    f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
+
+    let items: Vec<ListItem> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, setting)| {
+            let is_sel = focused && i == app.config_view.tui_idx;
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(
+                    format!("{:<10}", setting.label),
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                ),
+                Span::styled(
+                    format!("{:<10}", setting.value),
+                    Style::default().fg(theme::INK),
+                ),
+                Span::styled(setting.note, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(if is_sel {
+                Style::default()
+                    .bg(theme::selection(app))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            })
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.config_view.tui_idx));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        body,
+        &mut state,
+    );
+    let first = state.offset();
+    app.hits
+        .borrow_mut()
+        .rows(body, "config.tui", first, rows.len().saturating_sub(first));
+
+    if let Some(status) = &app.config_view.status {
+        let line = Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1);
+        f.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {status}"),
+                Style::default().fg(theme::INK_FAINT),
+            )),
+            line,
+        );
+    }
 }
 
 /// The bindings: every action, and what it is on.

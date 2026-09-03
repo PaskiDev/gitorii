@@ -150,6 +150,8 @@ pub struct App {
     pub config_view: ConfigState,
     pub ignore_view: IgnoreState,
     pub stats_view: StatsState,
+    /// Where things were drawn last frame, so a click can find them.
+    pub hits: std::cell::RefCell<crate::tui::hit::HitMap>,
     /// User-defined keys, what is half-pressed of a sequence, and the palette.
     pub keymap: crate::tui::keys::Keymap,
     pub pending_chords: Vec<crate::tui::keys::Chord>,
@@ -242,6 +244,7 @@ impl App {
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
             stats_view: StatsState::default(),
+            hits: Default::default(),
             keymap: crate::tui::keys::Keymap::load(),
             pending_chords: Vec::new(),
             palette: PaletteState::default(),
@@ -315,6 +318,7 @@ impl App {
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
             stats_view: StatsState::default(),
+            hits: Default::default(),
             keymap: crate::tui::keys::Keymap::load(),
             pending_chords: Vec::new(),
             palette: PaletteState::default(),

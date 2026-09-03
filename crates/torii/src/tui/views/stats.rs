@@ -537,6 +537,14 @@ fn render_people(f: &mut Frame, app: &App, area: Rect) {
         body,
         &mut state,
     );
+    // After drawing, the state knows which person is on the first line.
+    let first = state.offset();
+    app.hits.borrow_mut().rows(
+        body,
+        "stats.people",
+        first,
+        sv.people.len().saturating_sub(first),
+    );
 }
 
 /// Everything the repository records about the selected person.

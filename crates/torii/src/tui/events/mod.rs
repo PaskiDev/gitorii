@@ -46,6 +46,9 @@ use worktree::*;
 
 #[allow(dead_code)]
 pub enum Action {
+    /// Turn the pointer capture on or off; only the loop that owns the
+    /// terminal can do it.
+    MouseCapture(bool),
     Quit,
     Refresh,
     SidebarUp,
@@ -133,7 +136,19 @@ impl EventHandler {
             return Ok(None);
         }
 
-        match event::read()? {
+        // A pointer gesture becomes the keypress it stands for, and then goes
+        // through the same handlers, guards and confirmations as the keyboard.
+        // Nothing is reachable by click that is not reachable by key.
+        let key = match event::read()? {
+            Event::Key(key) => key,
+            Event::Mouse(mouse) => match mouse_as_key(mouse, app) {
+                Some(key) => key,
+                None => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+
+        match Event::Key(key) {
             Event::Key(key) => {
                 // The palette owns the keyboard while it is open.
                 if app.palette.open {
@@ -765,4 +780,83 @@ fn handle_capture(key: event::KeyEvent, app: &mut App) {
     if app.config_view.captured.len() < 3 {
         app.config_view.captured.push(Chord::from_event(key));
     }
+}
+
+/// Turn a pointer gesture into the keypress it stands for.
+///
+/// Everything the pointer can do, the keyboard can already do — so the
+/// translation happens here and the rest of the program never learns there is
+/// a mouse. A gesture that means nothing where it landed returns `None`
+/// rather than a key that would do something else.
+fn mouse_as_key(mouse: event::MouseEvent, app: &mut App) -> Option<event::KeyEvent> {
+    use crate::tui::hit::Zone;
+    use event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
+
+    let plain = |code| Some(KeyEvent::new(code, KeyModifiers::NONE));
+
+    match mouse.kind {
+        // The wheel drives the list that has focus, whichever that is.
+        MouseEventKind::ScrollUp => return plain(KeyCode::Up),
+        MouseEventKind::ScrollDown => return plain(KeyCode::Down),
+        MouseEventKind::Down(MouseButton::Left) => {}
+        _ => return None,
+    }
+
+    let zone = app.hits.borrow().at(mouse.column, mouse.row).cloned();
+    match zone? {
+        Zone::Sidebar(index) => {
+            app.sidebar_idx = index;
+            app.sidebar_focused = true;
+            plain(KeyCode::Enter)
+        }
+        Zone::Key(key) => key_named(&key),
+        Zone::Tab { strip, index } => {
+            // A tab strip is numbered on screen, so the click is the digit
+            // the user would have typed.
+            let digit = char::from_digit(index as u32 + 1, 10)?;
+            let _ = strip;
+            plain(KeyCode::Char(digit))
+        }
+        Zone::Row { list, index } => {
+            // The first click selects; a second one on the row already
+            // selected is the Enter that opens it. That way a stray click
+            // never checks out a branch or opens a delete dialog.
+            let already = app.selected_row(&list) == Some(index);
+            if already {
+                plain(KeyCode::Enter)
+            } else {
+                app.select_row(&list, index);
+                None
+            }
+        }
+    }
+}
+
+/// The key a hint-line label stands for. Unknown labels do nothing: the foot
+/// also prints things like `↑↓/jk`, which is a description, not a button.
+fn key_named(label: &str) -> Option<event::KeyEvent> {
+    use event::{KeyCode, KeyEvent, KeyModifiers};
+
+    let (code, mods) = match label {
+        "Enter" => (KeyCode::Enter, KeyModifiers::NONE),
+        "Esc" => (KeyCode::Esc, KeyModifiers::NONE),
+        "Tab" => (KeyCode::Tab, KeyModifiers::NONE),
+        "Space" | "space" => (KeyCode::Char(' '), KeyModifiers::NONE),
+        "↑" => (KeyCode::Up, KeyModifiers::NONE),
+        "↓" => (KeyCode::Down, KeyModifiers::NONE),
+        "←" => (KeyCode::Left, KeyModifiers::NONE),
+        "→" => (KeyCode::Right, KeyModifiers::NONE),
+        other => {
+            let mut chars = other.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => (KeyCode::Char(c), KeyModifiers::NONE),
+                // `^S` and friends, as the hint line writes them.
+                (Some('^'), Some(c)) if other.chars().count() == 2 => {
+                    (KeyCode::Char(c.to_ascii_lowercase()), KeyModifiers::CONTROL)
+                }
+                _ => return None,
+            }
+        }
+    };
+    Some(KeyEvent::new(code, mods))
 }

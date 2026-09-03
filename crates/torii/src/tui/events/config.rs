@@ -15,10 +15,17 @@ pub(super) fn handle_config(key: event::KeyEvent, app: &mut App) -> Option<Actio
             app.config_view.tab = ConfigTab::Keys;
             return None;
         }
+        (KeyModifiers::NONE, KeyCode::Char('3')) if !app.config_view.editing => {
+            app.config_view.tab = ConfigTab::Tui;
+            return None;
+        }
         _ => {}
     }
     if app.config_view.tab == ConfigTab::Keys {
         return handle_keys_tab(key, app);
+    }
+    if app.config_view.tab == ConfigTab::Tui {
+        return handle_tui_tab(key, app);
     }
     if app.config_view.editing {
         match (key.modifiers, key.code) {
@@ -105,6 +112,35 @@ fn handle_keys_tab(key: event::KeyEvent, app: &mut App) -> Option<Action> {
                         app.config_view.status = Some(format!("could not write keys.toml: {e}"));
                     }
                 }
+            }
+        }
+        _ => {}
+    }
+    None
+}
+
+/// The TUI settings tab: pick a row, press Enter, it changes and saves.
+fn handle_tui_tab(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    if let Some(a) = handle_global_nav(key, app) {
+        return Some(a);
+    }
+    let last = app.tui_settings_rows().len().saturating_sub(1);
+    match (key.modifiers, key.code) {
+        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => {
+            app.config_view.tui_idx = app.config_view.tui_idx.saturating_sub(1);
+        }
+        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => {
+            app.config_view.tui_idx = (app.config_view.tui_idx + 1).min(last);
+        }
+        (_, KeyCode::Enter) => {
+            // Only the loop owning the terminal can capture the pointer, so
+            // the setting reports the change and the action carries it out.
+            if let Some(on) = app.tui_setting_toggle() {
+                return Some(if on {
+                    Action::MouseCapture(true)
+                } else {
+                    Action::MouseCapture(false)
+                });
             }
         }
         _ => {}

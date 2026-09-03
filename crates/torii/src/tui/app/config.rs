@@ -29,6 +29,8 @@ pub struct ConfigState {
     pub tab: ConfigTab,
     /// Row of the keys tab.
     pub keys_idx: usize,
+    /// Row of the TUI settings tab.
+    pub tui_idx: usize,
     /// While set, the next keypress is recorded as this action's binding
     /// rather than acted on.
     pub capturing: Option<String>,
@@ -44,6 +46,9 @@ pub struct ConfigState {
 pub enum ConfigTab {
     Values,
     Keys,
+    /// The TUI's own settings — the ones that live in `tui-settings.toml`
+    /// rather than in git config.
+    Tui,
 }
 
 impl Default for ConfigState {
@@ -58,6 +63,7 @@ impl Default for ConfigState {
             status: None,
             tab: ConfigTab::Values,
             keys_idx: 0,
+            tui_idx: 0,
             capturing: None,
             captured: Vec::new(),
             pending_action: None,
