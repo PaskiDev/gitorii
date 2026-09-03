@@ -357,6 +357,26 @@ fn render_enforcement(f: &mut Frame, app: &App, area: Rect) {
         body,
         &mut state,
     );
+    // Section headers sit between the settings, and a setting whose value
+    // wrapped takes two lines; the map is built from what was drawn.
+    {
+        let room = (body.width as usize).saturating_sub(16);
+        let mut lines: Vec<Option<usize>> = Vec::new();
+        let mut last_section = "";
+        for (i, setting) in iv.settings.iter().enumerate() {
+            if setting.section != last_section {
+                lines.push(None);
+                last_section = setting.section;
+            }
+            let value = setting.value.clone().unwrap_or_else(|| "not set".into());
+            for n in 0..theme::wrap(&value, room.max(8)).len() {
+                lines.push(if n == 0 { Some(i) } else { None });
+            }
+        }
+        app.hits
+            .borrow_mut()
+            .lines(body, "safety.scanner", state.offset(), &lines);
+    }
 }
 
 /// Typing the value of a setting, with the file it will land in on show.

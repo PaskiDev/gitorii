@@ -144,6 +144,15 @@ fn render_list(f: &mut Frame, app: &App, area: Rect, active: bool) {
         body,
         &mut state,
     );
+    // Rows the pointer can address, mapped from where the list actually
+    // scrolled to.
+    app.hits.borrow_mut().rows(
+        body,
+        "snapshot",
+        state.offset(),
+        // `idx` counts positions in the filtered list, so the rows do too.
+        display_indices.len().saturating_sub(state.offset()),
+    );
 
     if app.snapshot_view.ops_mode && active {
         render_ops(f, app, body);

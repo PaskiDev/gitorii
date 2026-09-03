@@ -541,6 +541,17 @@ fn render_palette(f: &mut Frame, app: &App, area: Rect) {
         rows[1],
         &mut state,
     );
+    // Drawn last, so these rows win the cells they cover — a click inside the
+    // palette must never reach the view behind it.
+    if !matches.is_empty() {
+        let first = state.offset();
+        app.hits.borrow_mut().rows(
+            rows[1],
+            "palette",
+            first,
+            matches.len().saturating_sub(first),
+        );
+    }
 }
 
 /// What has been pressed of a sequence, on the key line.
@@ -2576,6 +2587,120 @@ mod tests {
                     let _ = std::fs::remove_file(&path);
                 }
             }
+        }
+    }
+
+    /// Every view with a list has to answer a click on its rows. A view that
+    /// forgets to register loses the pointer silently, which is exactly the
+    /// kind of gap nobody notices until they try it.
+    #[test]
+    fn every_list_view_registers_its_rows() {
+        // view, the list name it must register, and what has to be loaded for
+        // there to be anything to click on.
+        let cases: &[(View, &str)] = &[
+            (View::Log, "log"),
+            (View::Branch, "branch"),
+            (View::Tag, "tag"),
+            (View::Auth, "auth"),
+            (View::Config, "config"),
+            (View::Safety, "safety.rules"),
+        ];
+
+        for (view, list) in cases {
+            let mut app = App::new().expect("a repository to look at");
+            app.go_to(view.clone());
+            app.sidebar_focused = false;
+
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|f| render(f, &app)).unwrap();
+
+            let hits = app.hits.borrow();
+            let mut found = false;
+            for y in 0..40u16 {
+                for x in 0..120u16 {
+                    if let Some(crate::tui::hit::Zone::Row { list: name, .. }) = hits.at(x, y) {
+                        if name == list {
+                            found = true;
+                        }
+                    }
+                }
+            }
+            assert!(found, "{view:?} draws rows but registers none for `{list}`");
+        }
+    }
+
+    /// A row's index is the item's, not the screen line's: the branch view
+    /// draws group headers between them.
+    #[test]
+    fn a_group_header_does_not_shift_the_rows_under_it() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Branch);
+        app.sidebar_focused = false;
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        // The first branch row on screen must be branch 0, even though a
+        // header was drawn above it.
+        let hits = app.hits.borrow();
+        let mut first_row = None;
+        for y in 0..40u16 {
+            if let Some(crate::tui::hit::Zone::Row { list, index }) = hits.at(20, y) {
+                if list == "branch" && first_row.is_none() {
+                    first_row = Some(*index);
+                }
+            }
+        }
+        assert_eq!(first_row, Some(0), "the first branch row is branch 0");
+    }
+
+    /// Every list a pointer is meant to reach has to register its rows, or a
+    /// click there does nothing and the view looks broken. This walks the
+    /// views that have one and asks the map what it registered.
+    #[test]
+    fn the_lists_register_the_rows_a_click_can_reach() {
+        // (view, the list name it registers, what to set up first)
+        let cases: &[(View, &str)] = &[
+            (View::Log, "log"),
+            (View::Branch, "branch"),
+            (View::Tag, "tag"),
+            (View::Auth, "auth"),
+            (View::Config, "config"),
+            (View::Safety, "safety.rules"),
+        ];
+
+        for (view, list) in cases {
+            let mut app = App::new().expect("a repository to look at");
+            app.go_to(view.clone());
+            app.sidebar_focused = false;
+            if *view == View::Safety {
+                // The rules list is empty in a repo with no .toriignore, and
+                // an empty list has nothing to register.
+                app.ignore_view.rules = vec![crate::ignore_rules::Rule {
+                    origin: crate::ignore_rules::Origin::Public,
+                    kind: crate::ignore_rules::Kind::Path,
+                    line_no: 1,
+                    raw: "build/".into(),
+                    pattern: "build/".into(),
+                    name: None,
+                }];
+            }
+
+            let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+            terminal.draw(|f| render(f, &app)).unwrap();
+
+            let hits = app.hits.borrow();
+            let mut found = false;
+            for y in 0..40u16 {
+                for x in 0..120u16 {
+                    if let Some(crate::tui::hit::Zone::Row { list: name, .. }) = hits.at(x, y) {
+                        if name == list {
+                            found = true;
+                        }
+                    }
+                }
+            }
+            assert!(found, "`{list}` registers no rows for a click");
         }
     }
 

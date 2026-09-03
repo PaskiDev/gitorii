@@ -122,6 +122,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         list_body,
         &mut state,
     );
+    // Headers and the blank between the groups take lines of their own; the
+    // index the click yields has to stay the one `remote_view.idx` uses.
+    {
+        let mut lines: Vec<Option<usize>> = Vec::new();
+        if !remotes.is_empty() {
+            lines.push(None);
+            lines.extend((0..remotes.len()).map(Some));
+        }
+        if !mirrors.is_empty() {
+            if !remotes.is_empty() {
+                lines.push(None);
+            }
+            lines.push(None);
+            lines.extend((0..mirrors.len()).map(|i| Some(remotes.len() + i)));
+        }
+        app.hits
+            .borrow_mut()
+            .lines(list_body, "remote", state.offset(), &lines);
+    }
 
     // ── Info pane ─────────────────────────────────────────────────────────────
     let mut info_title = vec![Span::raw(" ")];

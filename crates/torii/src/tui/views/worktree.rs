@@ -209,6 +209,14 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         body,
         &mut state,
     );
+    // Rows the pointer can address, mapped from where the list actually
+    // scrolled to.
+    app.hits.borrow_mut().rows(
+        body,
+        "worktree",
+        state.offset(),
+        app.worktree_view.items.len().saturating_sub(state.offset()),
+    );
 }
 
 fn render_detail(f: &mut Frame, app: &App, area: Rect) {
