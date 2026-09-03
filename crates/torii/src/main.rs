@@ -40,6 +40,7 @@ pub use cmd::clean;
 pub use cmd::describe;
 pub use cmd::fileops;
 pub use cmd::grep;
+pub use cmd::ignore_rules;
 pub use cmd::notes;
 pub use cmd::restore;
 pub use cmd::submodule;

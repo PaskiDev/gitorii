@@ -6,6 +6,7 @@ pub mod config;
 pub mod dashboard;
 pub mod diff;
 pub mod help;
+pub mod ignore;
 pub mod issue;
 pub mod log;
 pub mod mirror;

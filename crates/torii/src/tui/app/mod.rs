@@ -9,6 +9,7 @@ mod config;
 mod dashboard;
 mod diff;
 mod history;
+mod ignore;
 mod issue;
 mod log;
 mod platform;
@@ -30,6 +31,7 @@ pub use config::*;
 pub use dashboard::*;
 pub use diff::*;
 pub use history::*;
+pub use ignore::*;
 pub use issue::*;
 pub use log::*;
 pub use platform::*;
@@ -78,6 +80,8 @@ pub enum View {
     /// packages across the active remote (and `--remote all` aggregations).
     Platform,
     Config,
+    /// New in 0.14.1 — the `.toriignore` pair, as editable rules.
+    Ignore,
     /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
     #[allow(dead_code)]
     Settings,
@@ -137,6 +141,7 @@ pub struct App {
     pub pr_view: PrState,
     pub issue_view: IssueState,
     pub config_view: ConfigState,
+    pub ignore_view: IgnoreState,
     pub settings_view: SettingsState,
     pub settings: TuiSettings,
 
@@ -223,6 +228,7 @@ impl App {
             pr_view: PrState::default(),
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
+            ignore_view: IgnoreState::default(),
             settings_view: SettingsState::default(),
             settings: TuiSettings::load(),
             worktree_view: WorktreeState::default(),
@@ -291,6 +297,7 @@ impl App {
             pr_view: PrState::default(),
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
+            ignore_view: IgnoreState::default(),
             settings_view: SettingsState::default(),
             settings: TuiSettings::default(),
             worktree_view: WorktreeState::default(),
@@ -361,13 +368,14 @@ impl App {
             14 => View::Bisect,
             15 => View::Auth,
             16 => View::Config,
+            17 => View::Ignore,
             _ => View::Dashboard,
         }
     }
 
     /// Total entries in the sidebar — keep in sync with `view_for_idx`
     /// and TABS in ui.rs.
-    const SIDEBAR_LEN: usize = 17;
+    const SIDEBAR_LEN: usize = 18;
 
     pub fn sidebar_up(&mut self) {
         if self.sidebar_idx > 0 {
@@ -416,6 +424,7 @@ impl App {
             View::Pr => self.load_prs(),
             View::Issue => self.load_issues(),
             View::Config | View::Settings => self.load_config(),
+            View::Ignore => self.load_ignore_rules(),
             // 0.7.2: refresh the four new informative views on entry.
             View::Worktree => crate::tui::views::worktree::refresh(self),
             View::Submodule => crate::tui::views::submodule::refresh(self),
@@ -451,6 +460,7 @@ impl App {
             View::Auth => 15,
             View::Config => 16,
             View::Settings => 16, // fused into Config
+            View::Ignore => 17,
             _ => self.sidebar_idx,
         };
         self.view = view;
@@ -482,6 +492,7 @@ impl App {
                 View::Auth => 15,
                 View::Config => 16,
                 View::Settings => 16, // fused into Config
+                View::Ignore => 17,
                 _ => 0,
             };
             // If returning to a view with its own content, keep focus in the view
@@ -1192,6 +1203,144 @@ mod tests {
         assert!(!app.show_event_log);
         assert_eq!(app.event_log.len(), 1);
         assert!(app.event_log[0].message.contains("no secrets"));
+    }
+
+    /// The view exists to make the difference between the two files visible,
+    /// so provenance is what the state must carry — a rule that forgot which
+    /// file it came from could be neither labelled nor removed.
+    #[test]
+    fn the_ignore_view_loads_both_files_and_keeps_them_apart() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore"),
+            "build/
+",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore.local"),
+            "internal/
+",
+        )
+        .unwrap();
+
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_ignore_rules();
+
+        assert_eq!(app.ignore_view.rules.len(), 2);
+        assert_eq!(
+            app.ignore_view.rules[0].origin,
+            crate::ignore_rules::Origin::Public
+        );
+        assert_eq!(
+            app.ignore_view.rules[1].origin,
+            crate::ignore_rules::Origin::Local
+        );
+    }
+
+    /// Choosing "secret" also moves the target to the private file: a pattern
+    /// describing your credentials is recon material in a public repo. It can
+    /// still be sent public deliberately.
+    #[test]
+    fn a_secret_rule_aims_at_the_private_file_by_default() {
+        let mut app = App::test_blank();
+        assert_eq!(
+            app.ignore_view.new_origin,
+            crate::ignore_rules::Origin::Public
+        );
+
+        app.ignore_toggle_kind();
+        assert_eq!(app.ignore_view.new_kind, crate::ignore_rules::Kind::Secret);
+        assert_eq!(
+            app.ignore_view.new_origin,
+            crate::ignore_rules::Origin::Local
+        );
+
+        app.ignore_toggle_origin();
+        assert_eq!(
+            app.ignore_view.new_origin,
+            crate::ignore_rules::Origin::Public,
+            "the deliberate override stays available"
+        );
+    }
+
+    #[test]
+    fn adding_a_rule_writes_it_and_selects_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_ignore_rules();
+
+        app.ignore_view.input = "coverage/".to_string();
+        app.ignore_commit_input();
+
+        let written = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert!(written.contains("coverage/"), "{written}");
+        assert_eq!(
+            app.ignore_selected().map(|r| r.pattern.as_str()),
+            Some("coverage/")
+        );
+        assert_eq!(
+            app.ignore_view.focus,
+            IgnoreFocus::List,
+            "the overlay closes"
+        );
+        assert!(app.ignore_view.input.is_empty());
+    }
+
+    /// A rejected rule must not close the overlay: what was typed is the only
+    /// copy, and it is one character away from being right.
+    #[test]
+    fn a_bad_regex_keeps_the_text_and_says_why() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.ignore_toggle_kind(); // secret
+        app.ignore_view.focus = IgnoreFocus::Input;
+        app.ignore_view.input = "AKIA[0-9".to_string();
+
+        app.ignore_commit_input();
+
+        assert_eq!(app.ignore_view.focus, IgnoreFocus::Input);
+        assert_eq!(app.ignore_view.input, "AKIA[0-9");
+        assert!(
+            app.ignore_view
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("invalid regex")),
+            "{:?}",
+            app.ignore_view.status
+        );
+        assert!(!tmp.path().join(".toriignore.local").exists());
+    }
+
+    #[test]
+    fn deleting_a_rule_takes_it_out_of_its_own_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join(".toriignore"),
+            "build/
+target/
+",
+        )
+        .unwrap();
+        let mut app = App::test_blank();
+        app.repo_path = tmp.path().to_string_lossy().into_owned();
+        app.load_ignore_rules();
+        app.ignore_view.idx = 1; // target/
+
+        app.ignore_delete_selected();
+
+        let text = std::fs::read_to_string(tmp.path().join(".toriignore")).unwrap();
+        assert_eq!(
+            text,
+            "build/
+"
+        );
+        assert_eq!(app.ignore_view.rules.len(), 1);
+        assert_eq!(app.ignore_view.idx, 0, "the selection stays in range");
+        assert_eq!(app.ignore_view.focus, IgnoreFocus::List);
     }
 
     /// The scanner used to run as a subprocess with its output sent to
