@@ -1,5 +1,6 @@
 pub mod app;
 pub mod events;
+pub mod keys;
 pub mod picker;
 pub mod theme;
 pub mod ui;

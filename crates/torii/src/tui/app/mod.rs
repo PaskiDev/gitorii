@@ -11,6 +11,7 @@ mod diff;
 mod history;
 mod ignore;
 mod issue;
+mod keymap;
 mod log;
 mod platform;
 mod pr;
@@ -33,6 +34,7 @@ pub use diff::*;
 pub use history::*;
 pub use ignore::*;
 pub use issue::*;
+pub use keymap::*;
 pub use log::*;
 pub use platform::*;
 pub use pr::*;
@@ -142,6 +144,10 @@ pub struct App {
     pub issue_view: IssueState,
     pub config_view: ConfigState,
     pub ignore_view: IgnoreState,
+    /// User-defined keys, what is half-pressed of a sequence, and the palette.
+    pub keymap: crate::tui::keys::Keymap,
+    pub pending_chords: Vec<crate::tui::keys::Chord>,
+    pub palette: PaletteState,
     pub settings_view: SettingsState,
     pub settings: TuiSettings,
 
@@ -229,6 +235,9 @@ impl App {
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
+            keymap: crate::tui::keys::Keymap::load(),
+            pending_chords: Vec::new(),
+            palette: PaletteState::default(),
             settings_view: SettingsState::default(),
             settings: TuiSettings::load(),
             worktree_view: WorktreeState::default(),
@@ -298,6 +307,9 @@ impl App {
             issue_view: IssueState::default(),
             config_view: ConfigState::default(),
             ignore_view: IgnoreState::default(),
+            keymap: crate::tui::keys::Keymap::load(),
+            pending_chords: Vec::new(),
+            palette: PaletteState::default(),
             settings_view: SettingsState::default(),
             settings: TuiSettings::default(),
             worktree_view: WorktreeState::default(),
@@ -1341,6 +1353,97 @@ target/
         assert_eq!(app.ignore_view.rules.len(), 1);
         assert_eq!(app.ignore_view.idx, 0, "the selection stays in range");
         assert_eq!(app.ignore_view.focus, IgnoreFocus::List);
+    }
+
+    /// The rule the whole feature hangs on: a letter typed into a field is a
+    /// letter, whatever it is bound to — otherwise writing "gs" in a commit
+    /// message would jump to the sync view mid-sentence.
+    #[test]
+    fn a_bound_letter_does_not_fire_inside_a_text_field() {
+        use crate::tui::keys::{parse_binding, Chord};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::test_blank();
+        app.keymap.bind(parse_binding("g s").unwrap(), "goto:sync");
+        app.keymap
+            .bind(parse_binding("ctrl+g").unwrap(), "goto:log");
+
+        // In the commit message field…
+        app.view = View::Commit;
+        app.commit_view.focus = CommitFocus::Input;
+        assert!(app.is_typing());
+
+        let g = Chord::new(KeyCode::Char('g'), KeyModifiers::empty());
+        assert!(!app.keymap_consume(g), "the letter belongs to the message");
+        assert_eq!(app.view, View::Commit);
+
+        // …while a modified chord still works, because nothing types it.
+        let ctrl_g = Chord::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        assert!(app.keymap_consume(ctrl_g));
+        assert_eq!(app.view, View::Log);
+    }
+
+    #[test]
+    fn a_sequence_fires_outside_a_text_field() {
+        use crate::tui::keys::{parse_binding, Chord};
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::test_blank();
+        app.keymap.bind(parse_binding("g s").unwrap(), "goto:sync");
+        app.view = View::Dashboard;
+        assert!(!app.is_typing());
+
+        let g = Chord::new(KeyCode::Char('g'), KeyModifiers::empty());
+        let s = Chord::new(KeyCode::Char('s'), KeyModifiers::empty());
+        assert!(app.keymap_consume(g), "the first chord is held");
+        assert_eq!(app.pending_chords.len(), 1);
+        assert!(app.keymap_consume(s));
+        assert_eq!(app.view, View::Sync);
+        assert!(app.pending_chords.is_empty());
+    }
+
+    /// The palette is the way out of a bad binding, so its key works even
+    /// where every other bound key is refused.
+    #[test]
+    fn the_palette_opens_even_while_typing() {
+        use crate::tui::keys::Chord;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        let mut app = App::test_blank();
+        app.view = View::Commit;
+        app.commit_view.focus = CommitFocus::Input;
+
+        let leader = Chord::new(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert!(app.keymap_consume(leader));
+        assert!(app.palette.open);
+    }
+
+    #[test]
+    fn the_palette_runs_what_it_selects() {
+        let mut app = App::test_blank();
+        app.palette.open = true;
+        app.palette.query = "Sync".into();
+        app.palette.idx = 0;
+
+        app.palette_accept();
+
+        assert_eq!(app.view, View::Sync);
+        assert!(!app.palette.open);
+    }
+
+    /// An action id that no longer exists — a hand-edited file, or one written
+    /// by an older version — must say so instead of looking like a dead key.
+    #[test]
+    fn an_unknown_action_is_reported() {
+        let mut app = App::test_blank();
+        app.run_action("goto:nowhere");
+        assert!(
+            app.event_log
+                .first()
+                .is_some_and(|e| e.message.contains("no such action")),
+            "{:?}",
+            app.event_log.first().map(|e| e.message.clone())
+        );
     }
 
     /// The scanner used to run as a subprocess with its output sent to
