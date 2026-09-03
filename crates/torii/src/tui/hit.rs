@@ -64,6 +64,30 @@ impl HitMap {
         }
     }
 
+    /// Register rows for a list whose screen lines and item indices differ.
+    ///
+    /// A list with group headers draws more lines than it has items, so the
+    /// caller passes what it actually drew: one entry per line, holding the
+    /// item index or `None` for a header. Registering `line == index` there
+    /// selects the wrong row by however many headers came before it.
+    pub fn lines(&mut self, area: Rect, list: &str, first: usize, lines: &[Option<usize>]) {
+        for (offset, index) in lines.iter().skip(first).enumerate() {
+            let y = area.y + offset as u16;
+            if y >= area.bottom() {
+                break;
+            }
+            if let Some(index) = index {
+                self.push(
+                    Rect::new(area.x, y, area.width, 1),
+                    Zone::Row {
+                        list: list.to_string(),
+                        index: *index,
+                    },
+                );
+            }
+        }
+    }
+
     /// What is at `(x, y)`, or nothing.
     pub fn at(&self, x: u16, y: u16) -> Option<&Zone> {
         self.zones
@@ -132,6 +156,33 @@ mod tests {
                 list: "log".into(),
                 index: 22
             })
+        );
+    }
+
+    /// A header draws a line and is not an item: registering line-for-index
+    /// would select the row after every header it sits above.
+    #[test]
+    fn headers_do_not_shift_the_rows_below_them() {
+        let mut map = HitMap::default();
+        // header, item 0, item 1, header, item 2
+        let lines = [None, Some(0), Some(1), None, Some(2)];
+        map.lines(Rect::new(0, 0, 20, 5), "branch", 0, &lines);
+
+        assert_eq!(map.at(1, 0), None, "the header is not a row");
+        assert_eq!(
+            map.at(1, 1),
+            Some(&Zone::Row {
+                list: "branch".into(),
+                index: 0
+            })
+        );
+        assert_eq!(
+            map.at(1, 4),
+            Some(&Zone::Row {
+                list: "branch".into(),
+                index: 2
+            }),
+            "the second group starts where the second header left off"
         );
     }
 

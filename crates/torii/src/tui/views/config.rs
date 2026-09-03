@@ -328,6 +328,13 @@ fn render_keys(f: &mut Frame, app: &App, area: Rect) {
         body,
         &mut state,
     );
+    let first = state.offset();
+    app.hits.borrow_mut().rows(
+        body,
+        "config.keys",
+        first,
+        keys::ACTIONS.len().saturating_sub(first),
+    );
 }
 
 fn render_values(f: &mut Frame, app: &App, area: Rect) {
@@ -499,6 +506,12 @@ fn render_entries(f: &mut Frame, app: &App, area: Rect) {
         List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         body,
         &mut state,
+    );
+    app.hits.borrow_mut().rows(
+        body,
+        "config",
+        state.offset(),
+        app.config_view.entries.len().saturating_sub(state.offset()),
     );
 }
 

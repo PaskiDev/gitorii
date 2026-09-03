@@ -89,6 +89,25 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         body,
         &mut state,
     );
+    // The drawn lines, headers included, so a click maps to the branch and
+    // not to the line it happens to sit on.
+    {
+        let mut lines: Vec<Option<usize>> = Vec::new();
+        if !locals.is_empty() {
+            lines.push(None);
+            lines.extend(locals.iter().map(|(i, _)| Some(*i)));
+        }
+        if !remotes.is_empty() {
+            if !locals.is_empty() {
+                lines.push(None); // the blank line between the groups
+            }
+            lines.push(None);
+            lines.extend(remotes.iter().map(|(i, _)| Some(*i)));
+        }
+        app.hits
+            .borrow_mut()
+            .lines(body, "branch", state.offset(), &lines);
+    }
 
     // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.branch_view.ops_mode {

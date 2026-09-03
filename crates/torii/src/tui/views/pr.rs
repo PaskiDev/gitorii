@@ -126,6 +126,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         list_body,
         &mut list_state,
     );
+    // Rows the pointer can address, mapped from where the list actually
+    // scrolled to.
+    app.hits.borrow_mut().rows(
+        list_body,
+        "pr",
+        list_state.offset(),
+        pr.prs.len().saturating_sub(list_state.offset()),
+    );
 
     // ── The detail ────────────────────────────────────────────────────────────
     let mut detail_title = vec![Span::raw(" ")];

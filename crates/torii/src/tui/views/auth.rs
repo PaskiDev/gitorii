@@ -188,6 +188,12 @@ fn render_tokens(f: &mut Frame, app: &App, area: Rect, active: bool) {
         body,
         &mut state,
     );
+    app.hits.borrow_mut().rows(
+        body,
+        "auth",
+        state.offset(),
+        app.auth_view.items.len().saturating_sub(state.offset()),
+    );
 }
 
 /// Contextual operations for the selected provider. The list is built
