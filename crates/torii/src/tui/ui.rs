@@ -2219,6 +2219,64 @@ mod tests {
             .join("\n")
     }
 
+    /// Nothing in the keys screen may be cut: the action id is what has to be
+    /// typed into `keys.toml`, and half an id is worse than none. Narrow
+    /// terminals get a second line, not an ellipsis.
+    ///
+    /// A row below the fold is fine — that is scrolling. What must never
+    /// appear is a *partial* id, so every id-shaped token on screen has to be
+    /// one the catalogue knows.
+    #[test]
+    fn no_action_id_is_ever_clipped() {
+        let known: Vec<&str> = crate::tui::keys::ACTIONS.iter().map(|a| a.id).collect();
+
+        for width in [100u16, 84, 72, 60] {
+            let mut app = App::new().expect("a repository to look at");
+            app.go_to(View::Config);
+            app.sidebar_focused = false;
+            app.config_view.tab = crate::tui::app::ConfigTab::Keys;
+
+            let mut terminal = Terminal::new(TestBackend::new(width, 40)).unwrap();
+            terminal.draw(|f| render(f, &app)).unwrap();
+            let screen = dump(terminal.backend().buffer(), width, 40);
+
+            for token in screen
+                .split(|c: char| c.is_whitespace() || c == '│' || c == '┤')
+                .filter(|t| {
+                    t.contains(':')
+                        && t.chars()
+                            .all(|c| c.is_ascii_lowercase() || ":-".contains(c))
+                })
+            {
+                assert!(
+                    known.contains(&token),
+                    "at {width} columns `{token}` is a cut id:\n{screen}"
+                );
+            }
+            // And at least the first rows must actually be there.
+            assert!(screen.contains("goto:files"), "at {width}:\n{screen}");
+        }
+    }
+
+    /// The same for the palette, whose rows carry a hint on the right.
+    #[test]
+    fn the_palette_keeps_whole_labels() {
+        let mut app = App::new().expect("a repository to look at");
+        app.palette.open = true;
+        app.palette.query = "switch".into();
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let screen = dump(terminal.backend().buffer(), 100, 24);
+
+        assert!(screen.contains("Switch branch…"), "{screen}");
+        assert!(screen.contains("Switch workspace repo…"), "{screen}");
+        assert!(
+            screen.contains("ctrl+o"),
+            "the binding stays visible: {screen}"
+        );
+    }
+
     /// Not an assertion — `cargo test -- --nocapture look_at_it` prints the
     /// screen, which is the only way to review a change of this kind.
     #[test]

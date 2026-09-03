@@ -142,6 +142,29 @@ fn render_keys(f: &mut Frame, app: &App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
+    // Columns are measured, not guessed: a label that outgrew a fixed width
+    // used to push the id off the edge of the pane.
+    let label_w = keys::ACTIONS
+        .iter()
+        .map(|a| a.label.chars().count())
+        .max()
+        .unwrap_or(20);
+    let binding_w = keys::ACTIONS
+        .iter()
+        .filter_map(|a| app.keymap.binding_for(a.id))
+        .map(|b| b.to_string().chars().count())
+        .max()
+        .unwrap_or(6)
+        .max("press keys…".chars().count());
+    // caret + label + gap + binding + gap + id
+    let id_w = keys::ACTIONS
+        .iter()
+        .map(|a| a.id.chars().count())
+        .max()
+        .unwrap_or(10);
+    let full_w = 2 + label_w + 2 + binding_w + 2 + id_w;
+    let fits = (body.width as usize).saturating_sub(2) >= full_w;
+
     let items: Vec<ListItem> = keys::ACTIONS
         .iter()
         .enumerate()
@@ -175,19 +198,37 @@ fn render_keys(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 theme::INK_FAINT
             };
-            ListItem::new(Line::from(vec![
-                theme::caret(app, is_sel),
-                Span::styled(
-                    format!("{:<28}", action.label),
-                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
-                ),
-                Span::styled(
-                    format!("{binding:<18}"),
-                    Style::default().fg(binding_colour),
-                ),
-                Span::styled(action.id, Style::default().fg(theme::INK_FAINT)),
-            ]))
-            .style(if is_sel {
+            let label_style = Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM });
+            let lines = if fits {
+                vec![Line::from(vec![
+                    theme::caret(app, is_sel),
+                    Span::styled(format!("{:<label_w$}", action.label), label_style),
+                    Span::styled(
+                        format!("  {binding:<binding_w$}"),
+                        Style::default().fg(binding_colour),
+                    ),
+                    Span::styled(
+                        format!("  {}", action.id),
+                        Style::default().fg(theme::INK_FAINT),
+                    ),
+                ])]
+            } else {
+                // Too narrow for one row: the id moves under the label rather
+                // than being cut off — the id is the thing that has to be
+                // typed into keys.toml, so it is the last thing to lose.
+                vec![
+                    Line::from(vec![
+                        theme::caret(app, is_sel),
+                        Span::styled(action.label, label_style),
+                        Span::styled(format!("  {binding}"), Style::default().fg(binding_colour)),
+                    ]),
+                    Line::from(vec![
+                        Span::raw("    "),
+                        Span::styled(action.id, Style::default().fg(theme::INK_FAINT)),
+                    ]),
+                ]
+            };
+            ListItem::new(lines).style(if is_sel {
                 Style::default()
                     .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
