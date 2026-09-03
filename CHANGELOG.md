@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-03
+
+### Added
+
+- **`torii restore`** — put a tracked file back the way it was. The verb the
+  toolbox was missing: `remove` deletes a file, `clean` deletes untracked
+  ones, `snapshot` saves the whole work-in-progress, and none of them undid
+  an edit to a single tracked file, which left `git checkout --` as the only
+  way out.
+  - `torii restore <path>` throws the local edit away and writes back what
+    the index holds. A **snapshot is taken first** and its id printed, the
+    same rule `worktree remove` follows — an edit discarded with
+    `git checkout --` is gone for good, and this one is not. `--no-snapshot`
+    opts out; a path that is already clean is left alone and snapshots
+    nothing.
+  - `torii restore --staged <path>` takes the path out of the next commit and
+    leaves the file on disk untouched.
+  - A directory restores every tracked file under it, an untracked path is
+    refused by name (there is no committed version to go back to), and a
+    staged version of a path survives a working-tree restore.
+
+### Changed
+
+- **The TUI is one window.** Fifteen views stopped drawing their own boxes:
+  where there were nested borders there are now hairline rules that tie into
+  the frame, each panel keeps a heading row instead of a boxed title, and the
+  brand red is spent only on the caret, the badge and the focus ring —
+  `gitorii-web`'s theme says "Torii red is an accent and nothing else", and
+  the terminal now agrees. Popups keep their boxes: a popup is a window.
+  Along the way the per-section rainbow in `config` and the ten per-lane hues
+  in the log graph went with the boxes.
+- **Graph nodes are squares** (`□` root, `■` commit, `▣` merge) for the
+  `curves` / `bubbles` styles, in the TUI and in `torii log --graph` alike.
+  The bullseye family (`〇 ⦿ ◉`) renders wide in several monospace fonts, so
+  a node shifted its own column; squares sit on the same grid as the lane
+  rules. `ascii` (`*`) and `heavy` (`◉`) keep their own vocabulary.
+
+### Fixed
+
+- **The TUI no longer breaks after a branch switch.** A checkout reloads the
+  commit list, and everything the log view kept about it — the search
+  results, the selection, the files pane cache, the signature cache — is an
+  index or a key into the list that just died. Switching to a branch with
+  fewer commits handed the renderer an index past the end and the frame
+  panicked. The reload now re-derives all of it (a live search is re-run
+  against the new commits rather than dropped), and the renderer skips an
+  index it cannot resolve instead of panicking mid-frame.
+- **Core's CLI output no longer leaks onto the TUI.** The checkout progress
+  line (`🔀 100%  22/22 files …`) and the fetch banners are written straight
+  to stdout for CLI users; inside the TUI stdout is the alternate screen, so
+  the text landed wherever the cursor was and ratatui never painted over it,
+  because its own buffer had not changed. A front end that owns the screen
+  now says so once (`util::output::set_silent`) and the library keeps quiet.
+  The CLI is unchanged.
+- **The bisect detail pane wraps its own paragraph** instead of carrying
+  hard-wrapped lines that wrapped a second time at narrow widths.
+- **The key-hint strip measured its gap in bytes**, so every hint containing
+  an arrow pushed the right-hand pair out of place.
+
 ## [0.13.0] - 2026-08-03
 
 ### Added
