@@ -4,12 +4,39 @@
 use super::*;
 use crate::tui::keys::{self, Chord, Resolution};
 
-/// The action palette — a list of every action, filtered by what is typed.
+/// What the overlay is listing.
+///
+/// One widget, three sources: the same filter-and-pick gesture works for
+/// running an action, checking out a branch and moving to another repo of the
+/// workspace, which is the point — the switch is the same muscle everywhere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PaletteMode {
+    #[default]
+    Actions,
+    Branches,
+    Repos,
+}
+
+/// One row of the overlay.
+#[derive(Clone)]
+pub struct PaletteItem {
+    /// What gets acted on: an action id, a branch name, a repo path.
+    pub id: String,
+    pub label: String,
+    /// The dim text on the right: a binding, a marker, a path.
+    pub hint: String,
+}
+
+/// The overlay — a list filtered by what is typed.
 #[derive(Clone, Default)]
 pub struct PaletteState {
     pub open: bool,
+    pub mode: PaletteMode,
     pub query: String,
     pub idx: usize,
+    /// Rows for the branch and repo modes, taken when the overlay opens: the
+    /// list must not shift under the cursor while it is being filtered.
+    pub items: Vec<PaletteItem>,
     /// Set while the config screen is waiting for a binding to be pressed.
     pub capturing_for: Option<String>,
 }
@@ -51,9 +78,7 @@ impl App {
         // The palette's own key wins everywhere, including inside a text
         // field: it is the way out when a binding is wrong or forgotten.
         if self.pending_chords.is_empty() && self.keymap.leader.0 == vec![chord] {
-            self.palette.open = true;
-            self.palette.query.clear();
-            self.palette.idx = 0;
+            self.open_switcher(PaletteMode::Actions);
             return true;
         }
 
@@ -96,13 +121,11 @@ impl App {
                 }
             }
             "app:quit" => self.should_quit = true,
-            "app:palette" => {
-                self.palette.open = true;
-                self.palette.query.clear();
-                self.palette.idx = 0;
-            }
+            "app:palette" => self.open_switcher(PaletteMode::Actions),
             "repo:scan" => self.run_secret_scan(false),
             "repo:scan-history" => self.run_secret_scan(true),
+            "repo:switch-branch" => self.open_switcher(PaletteMode::Branches),
+            "repo:switch-repo" => self.open_switcher(PaletteMode::Repos),
             other => self.log_event(
                 format!("no such action: `{other}` — check ~/.torii/keys.toml"),
                 EventKind::Error,
@@ -110,19 +133,145 @@ impl App {
         }
     }
 
+    // ── Palette and switchers ────────────────────────────────────────────────
+
+    /// Open the overlay on one of its three lists.
+    pub fn open_switcher(&mut self, mode: PaletteMode) {
+        self.palette.mode = mode;
+        self.palette.query.clear();
+        self.palette.idx = 0;
+        self.palette.items.clear();
+
+        match mode {
+            PaletteMode::Actions => {}
+            PaletteMode::Branches => {
+                self.load_branches();
+                self.palette.items = self
+                    .branch_view
+                    .branches
+                    .iter()
+                    // A remote branch is a checkout of a different kind and
+                    // needs the branch view's own flow; this is the fast path
+                    // between branches that already exist here.
+                    .filter(|b| !b.is_remote)
+                    .map(|b| PaletteItem {
+                        id: b.name.clone(),
+                        label: b.name.clone(),
+                        hint: if b.is_current {
+                            "current".into()
+                        } else {
+                            String::new()
+                        },
+                    })
+                    .collect();
+                if self.palette.items.is_empty() {
+                    self.log_event("no local branches to switch to", EventKind::Info);
+                    return;
+                }
+            }
+            PaletteMode::Repos => {
+                let paths = self.workspace_repo_paths();
+                if paths.len() <= 1 {
+                    self.log_event(
+                        "no workspace open — `torii workspace add <name> <path>`",
+                        EventKind::Info,
+                    );
+                    return;
+                }
+                let current = std::fs::canonicalize(&self.repo_path).ok();
+                self.palette.items = paths
+                    .iter()
+                    .map(|p| PaletteItem {
+                        id: p.clone(),
+                        label: std::path::Path::new(p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| p.clone()),
+                        hint: if std::fs::canonicalize(p).ok() == current {
+                            "current".into()
+                        } else {
+                            p.clone()
+                        },
+                    })
+                    .collect();
+            }
+        }
+        self.palette.open = true;
+    }
+
+    /// Check out a local branch from wherever the user happens to be.
+    pub fn switch_to_branch(&mut self, name: &str) {
+        let result =
+            crate::core::GitRepo::open(&self.repo_path).and_then(|r| r.switch_branch(name));
+        match result {
+            Ok(()) => {
+                self.log_event(format!("checkout: {name}"), EventKind::Success);
+                self.set_status(format!("on {name}"));
+                if let Err(e) = self.refresh() {
+                    self.log_event(format!("refresh failed: {e}"), EventKind::Error);
+                }
+            }
+            Err(e) => {
+                // A dirty tree is the usual reason, and the message says so.
+                self.log_event(format!("checkout failed: {e}"), EventKind::Error);
+                self.set_status(format!("checkout failed: {e}"));
+            }
+        }
+    }
+
+    /// Move to another repo of the workspace, keeping the workspace itself.
+    pub fn switch_to_repo(&mut self, path: &str) {
+        self.repo_path = path.to_string();
+        if let Err(e) = self.refresh() {
+            self.log_event(format!("refresh failed: {e}"), EventKind::Error);
+        }
+        let name = std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string());
+        self.log_event(format!("repo: {name}"), EventKind::Success);
+        self.set_status(format!("repo {name}"));
+    }
+
     // ── Palette ──────────────────────────────────────────────────────────────
 
-    /// Actions matching what has been typed, in catalogue order.
-    pub fn palette_matches(&self) -> Vec<&'static keys::ActionDef> {
+    /// The rows matching what has been typed, in source order.
+    pub fn palette_matches(&self) -> Vec<PaletteItem> {
         let q = self.palette.query.to_lowercase();
-        keys::ACTIONS
-            .iter()
-            .filter(|a| {
-                q.is_empty()
-                    || a.label.to_lowercase().contains(&q)
-                    || a.id.to_lowercase().contains(&q)
-            })
-            .collect()
+        let matches = |label: &str, id: &str| {
+            q.is_empty() || label.to_lowercase().contains(&q) || id.to_lowercase().contains(&q)
+        };
+        match self.palette.mode {
+            PaletteMode::Actions => keys::ACTIONS
+                .iter()
+                .filter(|a| matches(a.label, a.id))
+                .map(|a| PaletteItem {
+                    id: a.id.to_string(),
+                    label: a.label.to_string(),
+                    hint: self
+                        .keymap
+                        .binding_for(a.id)
+                        .map(|b| b.to_string())
+                        .unwrap_or_default(),
+                })
+                .collect(),
+            _ => self
+                .palette
+                .items
+                .iter()
+                .filter(|i| matches(&i.label, &i.id))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// What the overlay calls itself.
+    pub fn palette_title(&self) -> &'static str {
+        match self.palette.mode {
+            PaletteMode::Actions => " actions ",
+            PaletteMode::Branches => " switch branch ",
+            PaletteMode::Repos => " switch repo ",
+        }
     }
 
     pub fn palette_move(&mut self, delta: isize) {
@@ -138,21 +287,21 @@ impl App {
     /// Run what the palette has selected, or — when the config screen opened
     /// it to pick an action — take that action back to the capture flow.
     pub fn palette_accept(&mut self) {
-        let Some(action) = self
-            .palette_matches()
-            .get(self.palette.idx)
-            .map(|a| a.id.to_string())
-        else {
+        let Some(picked) = self.palette_matches().get(self.palette.idx).cloned() else {
             return;
         };
+        let mode = self.palette.mode;
         self.palette.open = false;
         self.palette.query.clear();
-        match self.palette.capturing_for.take() {
-            Some(_) => {
+
+        match mode {
+            PaletteMode::Branches => self.switch_to_branch(&picked.id),
+            PaletteMode::Repos => self.switch_to_repo(&picked.id),
+            PaletteMode::Actions => match self.palette.capturing_for.take() {
                 // Picked from the config screen: leave it selected there.
-                self.config_view.pending_action = Some(action);
-            }
-            None => self.run_action(&action),
+                Some(_) => self.config_view.pending_action = Some(picked.id),
+                None => self.run_action(&picked.id),
+            },
         }
     }
 
@@ -160,6 +309,7 @@ impl App {
         self.palette.open = false;
         self.palette.query.clear();
         self.palette.capturing_for = None;
+        self.palette.mode = PaletteMode::Actions;
     }
 }
 
