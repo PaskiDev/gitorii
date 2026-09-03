@@ -32,6 +32,28 @@ pub struct RepoRow {
     pub bytes: u64,
 }
 
+/// The churn worker's thread, joined when it is dropped.
+///
+/// A detached thread outlives the `App` that started it, and this one opens a
+/// libgit2 repository of its own. Several of them still walking commits while
+/// the test binary tears down is what took the whole process out with a
+/// SIGSEGV, so the handle is kept and the thread is joined with the state that
+/// owns it.
+#[derive(Default)]
+struct ChurnWorker(Option<std::thread::JoinHandle<()>>);
+
+impl Drop for ChurnWorker {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.take() {
+            // The channel is unbounded, so the worker never blocks on its
+            // send: this waits for `churn` alone, which stops after
+            // `CHURN_CAP` commits. A panic inside the worker is already
+            // reported by the default hook, so the result has nothing to add.
+            let _ = handle.join();
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct StatsState {
     pub mode: StatsMode,
@@ -40,6 +62,8 @@ pub struct StatsState {
     /// `None` until the worker answers.
     pub churn: Option<Churn>,
     pub churn_rx: Option<std::sync::mpsc::Receiver<Churn>>,
+    /// The thread behind `churn_rx`, held so it is joined and not detached.
+    churn_worker: ChurnWorker,
     pub rows: Vec<RepoRow>,
     pub people: Vec<Person>,
     /// Row of the people table.
@@ -50,7 +74,9 @@ pub struct StatsState {
 
 impl Clone for StatsState {
     /// The receiver is not cloneable and a clone would not be listening to
-    /// anything anyway; a cloned state simply has no worker in flight.
+    /// anything anyway; a cloned state simply has no worker in flight. The
+    /// thread stays with the original, which is the half that can still read
+    /// its answer.
     fn clone(&self) -> Self {
         Self {
             mode: self.mode,
@@ -58,6 +84,7 @@ impl Clone for StatsState {
             history: self.history.clone(),
             churn: self.churn.clone(),
             churn_rx: None,
+            churn_worker: ChurnWorker(None),
             rows: self.rows.clone(),
             people: self.people.clone(),
             people_idx: self.people_idx,
@@ -75,18 +102,31 @@ impl App {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
+        // Walking the sidebar calls `go_to` on every step, so this is entered
+        // once per keypress. Re-reading the cheap halves is what keeps the
+        // numbers fresh; starting a second churn worker for a repository
+        // already being measured only piles up threads behind the first.
+        let measuring_this_repo = self.stats_view.churn_worker.0.is_some()
+            && self.stats_view.loaded_for.as_deref() == Some(self.repo_path.as_str());
+
         self.stats_view.shape = stats::shape(&path);
         self.stats_view.history = stats::history(&path, now);
         self.stats_view.loaded_for = Some(self.repo_path.clone());
-        self.stats_view.churn = None;
 
-        // Churn on a worker: on a big repo this is hundreds of tree diffs, and
-        // the UI must keep drawing while they happen.
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(stats::churn(&path));
-        });
-        self.stats_view.churn_rx = Some(rx);
+        if !measuring_this_repo {
+            self.stats_view.churn = None;
+            // Churn on a worker: on a big repo this is hundreds of tree diffs,
+            // and the UI must keep drawing while they happen. Storing the
+            // handle drops the previous worker, joining it — on the path that
+            // gets here it has already answered, and on a change of repository
+            // waiting for the old one beats leaving it running.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let handle = std::thread::spawn(move || {
+                let _ = tx.send(stats::churn(&path));
+            });
+            self.stats_view.churn_rx = Some(rx);
+            self.stats_view.churn_worker = ChurnWorker(Some(handle));
+        }
 
         self.stats_view.people = stats::people(std::path::Path::new(&self.repo_path));
         let last = self.stats_view.people.len().saturating_sub(1);
@@ -139,12 +179,16 @@ impl App {
             Ok(churn) => {
                 self.stats_view.churn = Some(churn);
                 self.stats_view.churn_rx = None;
+                // It has sent its answer, so it is on its way out: joining it
+                // here costs nothing and leaves no thread behind.
+                self.stats_view.churn_worker = ChurnWorker(None);
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 // The worker died without answering: stop waiting on it, and
                 // show nothing rather than "measuring…" for ever.
                 self.stats_view.churn = Some(Churn::default());
                 self.stats_view.churn_rx = None;
+                self.stats_view.churn_worker = ChurnWorker(None);
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
@@ -178,5 +222,45 @@ impl App {
             rows.iter().map(|r| r.ahead).sum(),
             rows.iter().map(|r| r.behind).sum(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Walking the sidebar calls `go_to` on every step, and Stats sits at
+    /// index 1, so `load_stats` used to start another churn worker per
+    /// keypress — each with a libgit2 repository of its own. One repository
+    /// being measured means one worker measuring it.
+    #[test]
+    fn a_second_load_does_not_stack_another_worker() {
+        let mut app = App::test_blank();
+
+        app.load_stats();
+        assert!(
+            app.stats_view.churn_worker.0.is_some(),
+            "the first load starts the worker"
+        );
+
+        // Nothing has polled the receiver, so the first worker still owns the
+        // answer and the second load has no reason to start a rival.
+        app.load_stats();
+        assert!(
+            app.stats_view.churn_rx.is_some(),
+            "the first worker is still the one being waited on"
+        );
+    }
+
+    /// Dropping the state joins the thread. If it did not, the worker would
+    /// outlive the `App` and keep walking commits through a libgit2 handle
+    /// nobody owns any more.
+    #[test]
+    fn dropping_the_state_leaves_no_worker_running() {
+        let mut app = App::test_blank();
+        app.load_stats();
+        drop(app);
+        // Reaching here at all is the assertion: `drop` returns only once the
+        // worker has been joined.
     }
 }

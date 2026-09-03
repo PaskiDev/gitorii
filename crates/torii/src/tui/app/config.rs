@@ -107,24 +107,26 @@ impl App {
 
         self.config_view.entries.clear();
 
-        // Fetch all current values from torii config list
-        let mut values: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut list_args = vec!["config", "list"];
-        if self.config_view.scope == ConfigScope::Local {
-            list_args.push("--local");
-        }
-        if let Ok(out) = std::process::Command::new(crate::tui::torii_exe())
-            .args(&list_args)
-            .output()
-        {
-            for line in String::from_utf8_lossy(&out.stdout).lines() {
-                let line = line.trim();
-                if let Some((k, v)) = line.split_once('=') {
-                    values.insert(k.trim().to_string(), v.trim().to_string());
-                }
-            }
-        }
+        // The values come straight from the config API, the same one the
+        // `config list` command reads.
+        //
+        // This used to shell out to our own binary instead. Under `cargo test`
+        // that is the test binary — `current_exe()` points at it — and the
+        // arguments `config list` are read there as a pair of test-name
+        // filters. Every test matching "config" or "list" ran again in the
+        // child, several of them reached this function, and each one forked
+        // once more: the suite re-entered itself until the machine ran out of
+        // memory. Reading the config in-process cannot recurse.
+        let loaded = if self.config_view.scope == ConfigScope::Local {
+            crate::config::ToriiConfig::load_local(&self.repo_path)
+        } else {
+            crate::config::ToriiConfig::load_global()
+        };
+        // A config that will not load leaves every key showing "[not set]",
+        // which is what parsing the empty output of a failed command did too.
+        let values: std::collections::HashMap<String, String> = loaded
+            .map(|config| config.list().into_iter().collect())
+            .unwrap_or_default();
 
         for &key in ALL_KEYS {
             let section = key.split('.').next().unwrap_or("").to_string();

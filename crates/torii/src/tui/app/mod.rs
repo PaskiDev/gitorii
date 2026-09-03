@@ -1841,4 +1841,25 @@ target/
         app.commit_backspace();
         assert_eq!(app.commit_view.message, "");
     }
+
+    /// Entering a view must not re-enter the process. `load_config` used to
+    /// run our own binary to read the values, which under `cargo test` is the
+    /// test binary — so the suite forked itself once per call until the
+    /// machine ran out of memory. Walking every sidebar entry is the cheapest
+    /// way to catch that coming back.
+    #[test]
+    fn entering_every_view_stays_in_this_process() {
+        let mut app = App::test_blank();
+        let start = std::time::Instant::now();
+        for idx in 0..App::SIDEBAR_LEN {
+            app.go_to(App::view_for_idx(idx));
+        }
+        // The whole walk is milliseconds of git reads. Spawning anything per
+        // view puts it orders of magnitude above this.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "walking the sidebar took {:?} — a view is spawning a process",
+            start.elapsed()
+        );
+    }
 }
