@@ -548,7 +548,11 @@ mod tests {
     /// because the TUI and the CLI both draw their nodes from this table.
     #[test]
     fn curve_family_nodes_are_squares() {
-        for style in [GraphStyle::Curves, GraphStyle::Bubbles, GraphStyle::BubblesX] {
+        for style in [
+            GraphStyle::Curves,
+            GraphStyle::Bubbles,
+            GraphStyle::BubblesX,
+        ] {
             assert_eq!(style.commit_glyph(0), '□', "root");
             assert_eq!(style.commit_glyph(1), '■', "normal");
             assert_eq!(style.commit_glyph(2), '▣', "merge");
