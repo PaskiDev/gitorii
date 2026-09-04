@@ -1862,4 +1862,32 @@ target/
             start.elapsed()
         );
     }
+
+    /// A window too small for a modal must not take the TUI down.
+    ///
+    /// `Clear` walks its area through the buffer's `Index`, which panics with
+    /// "index outside of buffer" on the first cell that is not there. So an
+    /// overlay asking for more columns than the window has did not draw badly,
+    /// it killed the process. Every view is drawn at sizes no modal fits in,
+    /// with the two overlays that can appear over any of them turned on.
+    #[test]
+    fn a_tiny_window_does_not_take_the_tui_down() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        for (w, h) in [(20u16, 8u16), (12, 5), (40, 10), (60, 20)] {
+            for idx in 0..App::SIDEBAR_LEN {
+                let mut app = App::test_blank();
+                app.go_to(App::view_for_idx(idx));
+                app.show_event_log = true;
+                app.palette.open = true;
+
+                let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+                terminal
+                    .draw(|f| crate::tui::ui::render(f, &app))
+                    .unwrap_or_else(|e| {
+                        panic!("{:?} at {w}x{h}: {e}", App::view_for_idx(idx))
+                    });
+            }
+        }
+    }
 }

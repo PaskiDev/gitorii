@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
@@ -236,7 +236,7 @@ fn render_close_confirm(f: &mut Frame, app: &App, body: Rect) {
         .idx
         .min(body.height.saturating_sub(3) as usize) as u16;
     let overlay = Rect::new(body.x + 2, body.y + row, 32, 3);
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("  close issue? ", Style::default().fg(theme::BAD)),
@@ -311,7 +311,7 @@ fn render_ops(f: &mut Frame, app: &App, body: Rect) {
     let mut state = ListState::default();
     state.select(Some(app.issue_view.ops_idx));
 
-    f.render_widget(Clear, drop_area);
+    let drop_area = theme::clear(f, drop_area);
     f.render_stateful_widget(List::new(items).block(popup(app)), drop_area, &mut state);
 }
 
@@ -322,7 +322,7 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect, label: &str, value
     let oy = area.y + area.height.saturating_sub(oh) / 2;
     let overlay = Rect::new(ox, oy, ow, oh);
 
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(

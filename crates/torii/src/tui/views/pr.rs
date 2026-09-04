@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
@@ -221,7 +221,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             28,
             3,
         );
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         let p = Paragraph::new(Line::from(vec![
             Span::styled("  close PR? ", Style::default().fg(theme::BAD)),
             Span::styled(
@@ -248,7 +248,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             34,
             6,
         );
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         let method_spans: Vec<Span> = methods
             .iter()
             .enumerate()
@@ -297,11 +297,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let pr_label = if pr.platform == "gitlab" { "MR" } else { "PR" };
     if pr.confirm == PrConfirm::CreateTitle {
         const TITLE_MAX: usize = 255;
-        let ow = (area.width.saturating_sub(6)).clamp(52, 80);
-        let oh = 6u16;
+        // The 52-column minimum is a preference, not a promise: a narrower
+        // window gets a narrower box rather than one drawn off the edge.
+        let ow = (area.width.saturating_sub(6)).clamp(52, 80).min(area.width);
+        let oh = 6u16.min(area.height);
         let ox = area.x + area.width.saturating_sub(ow) / 2;
         let oy = area.y + area.height.saturating_sub(oh) / 2;
-        let overlay = Rect::new(ox, oy, ow, oh);
+        let overlay = theme::fit(f, Rect::new(ox, oy, ow, oh));
         let len = pr.create_input.chars().count();
         let inner_w = (ow as usize).saturating_sub(4);
         // show last inner_w chars so cursor is always visible
@@ -353,7 +355,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
             ]),
         ];
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
@@ -394,7 +396,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .collect();
         let mut drop_state = ListState::default();
         drop_state.select(Some(pr.branch_idx));
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(
                 Block::default()
@@ -440,7 +442,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .collect();
         let mut drop_state = ListState::default();
         drop_state.select(Some(pr.branch_idx));
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(
                 Block::default()
@@ -510,7 +512,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(draft_hint, Style::default().fg(theme::WARN)),
         ]));
 
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
@@ -553,7 +555,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
             ]),
         ];
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
@@ -602,7 +604,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("[Esc]", Style::default().fg(theme::accent(app))),
             Span::styled(" cancel", Style::default().fg(theme::INK_DIM)),
         ]));
-        f.render_widget(Clear, overlay);
+        let overlay = theme::clear(f, overlay);
         f.render_widget(
             Paragraph::new(lines).block(
                 Block::default()
@@ -646,7 +648,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let mut drop_state = ListState::default();
         drop_state.select(Some(pr.branch_idx));
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(
                 Block::default()
@@ -713,7 +715,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             "[a] select all"
         };
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(
                 Block::default()
@@ -791,7 +793,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let mut drop_state = ListState::default();
         drop_state.select(Some(pr.platform_idx));
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(
                 Block::default()
@@ -879,7 +881,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .border_type(app.border_type())
             .border_style(Style::default().fg(theme::RULE));
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(drop_block),
             drop_area,

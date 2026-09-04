@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -247,7 +247,7 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let items: Vec<ListItem> = ops
         .iter()
@@ -307,7 +307,7 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     // We mask the input so a paste of a sensitive token doesn't end
     // up rendered on screen — same convention as `auth set <provider> -`
@@ -356,7 +356,7 @@ fn render_oauth_flow(f: &mut Frame, app: &App, area: Rect) {
         width: w,
         height: h,
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let mut body: Vec<Line> = vec![
         Line::from(vec![
@@ -509,7 +509,7 @@ fn render_confirm_remove(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
     let body = vec![
         Line::from(Span::styled(
             format!(
