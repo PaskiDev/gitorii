@@ -11,7 +11,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::tui::app::App;
+use crate::tui::app::{author_query, App};
 use crate::tui::theme;
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {
@@ -203,6 +203,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled("█", Style::default().fg(theme::accent(app))));
+        // A qualifier nobody knows about is worth nothing, and the
+        // empty prompt is the one moment there is room to say it.
+        if app.log.search_query.is_empty() {
+            spans.push(Span::styled(
+                "  author:<who> narrows to one identity",
+                Style::default().fg(theme::INK_FAINT),
+            ));
+        }
         spans
     } else if !app.log.search_query.is_empty() {
         let mut spans = vec![Span::raw(" ")];
@@ -212,9 +220,20 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             focused,
         ));
         spans.push(Span::styled(
-            format!("  matching \"{}\"", app.log.search_query),
+            match author_query(&app.log.search_query) {
+                Some(who) => format!("  by \"{}\"", who),
+                None => format!("  matching \"{}\"", app.log.search_query),
+            },
             Style::default().fg(theme::INK_FAINT),
         ));
+        // The filter only sees the commits already loaded, so a count
+        // that looks like the whole answer has to say it is not one.
+        if !app.log.all_loaded {
+            spans.push(Span::styled(
+                "  of those loaded — ↓ for more",
+                Style::default().fg(theme::INK_FAINT),
+            ));
+        }
         spans
     } else {
         let mut spans = vec![Span::raw(" ")];
@@ -506,7 +525,7 @@ pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
     vec![
         ("diff", "open diff for the selected commit", false),
         ("copy hash", "copy short hash to status bar", false),
-        ("search", "filter commits by message", false),
+        ("search", "filter by message, or author:<who>", false),
         (
             "cherry-pick",
             "apply selected commit to current branch",

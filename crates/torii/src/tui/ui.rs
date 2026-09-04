@@ -805,6 +805,13 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::styled(" clear", Style::default().fg(theme::INK_FAINT)),
                     ])
                 } else {
+                    // `A` is a toggle, so it is named for the half it
+                    // will do next rather than for the feature.
+                    let author_key = if app.log_author_filter_on(app.log.idx) {
+                        " clear author filter"
+                    } else {
+                        " by author"
+                    };
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
@@ -814,7 +821,9 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::styled("[o]", Style::default().fg(bc)),
                         Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[/]", Style::default().fg(bc)),
-                        Span::styled(" search", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled(" search  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[A]", Style::default().fg(bc)),
+                        Span::styled(author_key, Style::default().fg(theme::INK_FAINT)),
                     ])
                 }
             }
@@ -2369,6 +2378,45 @@ mod tests {
 
         let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
         terminal.draw(|f| render(f, &app)).expect("a frame");
+    }
+
+    /// The heading names the filter for what it is. Left as
+    /// `matching "author:paski"` it reads as a search for that literal
+    /// string, which is the one thing it is not.
+    #[test]
+    fn an_author_filter_says_so_in_the_heading() {
+        let mut app = App::new().expect("a repository to look at");
+        app.go_to(View::Log);
+        app.sidebar_focused = false;
+        app.log.search_query = "author:paski".to_string();
+        app.log_update_filter();
+
+        let mut terminal = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        terminal.draw(|f| render(f, &app)).expect("a frame");
+        let buffer = terminal.backend().buffer().clone();
+        let screen: String = (0..30)
+            .map(|y| {
+                (0..100)
+                    .map(|x| buffer.cell((x, y)).unwrap().symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            screen.contains("by \"paski\""),
+            "the heading should name the identity it filtered to:\n{}",
+            screen
+        );
+        // The footer writes its keys bare: `unbracket` turns the `[A]`
+        // the match arm is written with into `A ` — bracket gone, a
+        // space in its place — and the label brings its own leading
+        // space, so two land between them on the screen.
+        assert!(
+            screen.contains("A  by author"),
+            "and the footer should offer the key that toggles it:\n{}",
+            screen
+        );
     }
 
     /// The events popup is the one overlay every view can raise, so it has to

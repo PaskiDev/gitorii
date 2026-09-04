@@ -7,6 +7,26 @@ pub struct CommitFileEntry {
     pub status: char, // 'A' added, 'M' modified, 'D' deleted, 'R' renamed
 }
 
+/// The prefix that turns the log search into an identity filter. The
+/// parser, the `A` key and the heading all have to agree on it, so it
+/// is one constant rather than three string literals.
+pub const AUTHOR_PREFIX: &str = "author:";
+
+/// The identity term of a search query, if it carries one. `None` means
+/// a plain search, which keeps matching message / author / email / hash.
+///
+/// The prefix is matched case-insensitively and `get` does the bounds
+/// check, so a query that opens with a multi-byte character is a miss
+/// rather than a panic on a char boundary.
+pub fn author_query(query: &str) -> Option<&str> {
+    let q = query.trim_start();
+    let head = q.get(..AUTHOR_PREFIX.len())?;
+    if !head.eq_ignore_ascii_case(AUTHOR_PREFIX) {
+        return None;
+    }
+    Some(q[AUTHOR_PREFIX.len()..].trim())
+}
+
 pub struct LogState {
     pub idx: usize,
     pub scroll: usize,
@@ -354,6 +374,13 @@ impl App {
                 .unwrap_or(0);
             if pos + 1 < self.log.filtered.len() {
                 self.log.idx = self.log.filtered[pos + 1];
+            } else {
+                // The bottom of a filtered list is not the end of the
+                // history — the filter only ever saw the page that had
+                // been fetched. Page the way an unfiltered list does;
+                // `refresh` re-runs the filter over what it loaded, so
+                // the matches in the new page appear below the caret.
+                self.log_load_more();
             }
         }
         self.sync_log_scroll();
@@ -417,6 +444,30 @@ impl App {
     }
 
     pub fn log_update_filter(&mut self) {
+        // `author:<who>` narrows to an identity; anything else is the
+        // plain substring search. The author term is matched against the
+        // whole `Name <email>`, which is what lets a bare name, a bare
+        // address and a pasted identity all land on the same commits.
+        let author_term = author_query(&self.log.search_query).map(str::to_lowercase);
+        if let Some(term) = author_term {
+            self.log.filtered = self
+                .commits
+                .iter()
+                .enumerate()
+                .filter(|(_, c)| {
+                    // A bare `author:` is a query still being typed, not
+                    // one that matches nothing — keep the list whole
+                    // under the cursor.
+                    term.is_empty()
+                        || format!("{} <{}>", c.author, c.author_email)
+                            .to_lowercase()
+                            .contains(&term)
+                })
+                .map(|(i, _)| i)
+                .collect();
+            self.snap_to_first_match();
+            return;
+        }
         let q = self.log.search_query.to_lowercase();
         if q.is_empty() {
             self.log.filtered.clear();
@@ -429,11 +480,53 @@ impl App {
             .filter(|(_, c)| {
                 c.message.to_lowercase().contains(&q)
                     || c.author.to_lowercase().contains(&q)
+                    || c.author_email.to_lowercase().contains(&q)
                     || c.hash.to_lowercase().contains(&q)
             })
             .map(|(i, _)| i)
             .collect();
-        // Move selection to first match if current isn't in results
+        self.snap_to_first_match();
+    }
+
+    /// `A` over a commit: narrow the log to that commit's identity, or
+    /// lift the filter when it is already the one showing. Returns the
+    /// line for the event log — a filter that drops most of the list
+    /// should say so rather than leave the shorter list to be noticed.
+    ///
+    /// The count is of the commits *loaded*: the filter runs over
+    /// `self.commits`, which is one page deep until something asks for
+    /// more, so an author further back than that is not missing, just
+    /// not fetched yet.
+    pub fn log_filter_by_author(&mut self, idx: usize) -> Option<String> {
+        let identity = self.commit_identity(idx)?;
+        if self.log_author_filter_on(idx) {
+            self.log.search_query.clear();
+            self.log.filtered.clear();
+            return Some("author filter cleared".to_string());
+        }
+        self.log.search_query = format!("{}{}", AUTHOR_PREFIX, identity);
+        self.log_update_filter();
+        Some(format!(
+            "{} — {} of {} loaded commits",
+            identity,
+            self.log.filtered.len(),
+            self.commits.len()
+        ))
+    }
+
+    /// Whether the log is already narrowed to this commit's identity —
+    /// the state `A` toggles back off. The footer reads it to name the
+    /// key for what it will do, and the toggle reads it to decide, so
+    /// the label and the behaviour cannot drift apart.
+    pub fn log_author_filter_on(&self, idx: usize) -> bool {
+        match self.commit_identity(idx) {
+            Some(id) => self.log.search_query == format!("{}{}", AUTHOR_PREFIX, id),
+            None => false,
+        }
+    }
+
+    /// Keep the caret on a row the filter still shows.
+    fn snap_to_first_match(&mut self) {
         if !self.log.filtered.contains(&self.log.idx) {
             if let Some(&first) = self.log.filtered.first() {
                 self.log.idx = first;

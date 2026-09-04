@@ -189,6 +189,18 @@ pub(super) fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> 
             app.log.search_query.clear();
             app.log.filtered.clear();
         }
+        // `A` narrows the log to the author of the commit under the
+        // caret. It writes the same `author:<who>` query `/` accepts,
+        // so the two are one filter with two ways in, and it uses the
+        // full `Name <email>` because a bare name does not separate two
+        // people who share one — or one person's two addresses.
+        // Pressing it again on the same author lifts the filter.
+        (KeyModifiers::SHIFT, KeyCode::Char('A')) | (_, KeyCode::Char('A')) => {
+            let idx = app.log.idx;
+            if let Some(msg) = app.log_filter_by_author(idx) {
+                app.log_event(msg, EventKind::Info);
+            }
+        }
         // 0.7.36 — toggle the GPG signature column. Populates the
         // verdict cache the first time it turns on (cheap because we
         // only run gpg --verify on the commits already loaded into
@@ -552,5 +564,125 @@ mod ops_prompt_tests {
         app.view = View::Log;
         handle_log(press(KeyCode::Char('/')), &mut app);
         assert!(app.log.search_mode, "`/` still opens the log's search");
+    }
+
+    /// `A` writes the same query `/` accepts, in the identity form —
+    /// anything shorter would fold two people who share a name.
+    #[test]
+    fn a_narrows_the_log_to_the_author_under_the_caret() {
+        let mut app = log_with_two_authors();
+        app.log.idx = 2;
+
+        handle_log(press(KeyCode::Char('A')), &mut app);
+
+        assert_eq!(
+            app.log.search_query,
+            "author:Someone Else <else@example.test>"
+        );
+        assert_eq!(app.log.filtered, vec![2]);
+        assert!(
+            !app.log.search_mode,
+            "the filter applies without opening the search prompt"
+        );
+    }
+
+    /// Pressing it again on the same author is the way back out: the
+    /// filter leaves the caret among that author's commits, so there is
+    /// no row to move to that would clear it by other means.
+    #[test]
+    fn a_second_press_lifts_the_author_filter() {
+        let mut app = log_with_two_authors();
+
+        handle_log(press(KeyCode::Char('A')), &mut app);
+        handle_log(press(KeyCode::Char('A')), &mut app);
+
+        assert!(app.log.search_query.is_empty());
+        assert!(
+            app.log.filtered.is_empty(),
+            "an empty filter shows them all"
+        );
+    }
+
+    /// The term is matched against the whole `Name <email>`, so a bare
+    /// name, a bare address and a pasted identity all land on the same
+    /// commits — and a term that matches neither half matches nothing.
+    #[test]
+    fn the_author_term_matches_either_half_of_the_identity() {
+        let mut app = log_with_two_authors();
+
+        for term in [
+            "paskidev",
+            "old@proton.me",
+            "paskidev <old@proton.me>",
+            "PASKIDEV",
+        ] {
+            app.log.search_query = format!("author:{}", term);
+            app.log_update_filter();
+            assert_eq!(app.log.filtered, vec![0, 1], "term {:?}", term);
+        }
+
+        app.log.search_query = "author:nobody@example.test".into();
+        app.log_update_filter();
+        assert!(app.log.filtered.is_empty());
+    }
+
+    /// A bare `author:` is a query halfway through being typed. Treating
+    /// it as a term that matches nothing would blank the list under the
+    /// cursor between the colon and the first letter.
+    #[test]
+    fn a_bare_author_prefix_keeps_the_list_whole() {
+        let mut app = log_with_two_authors();
+
+        app.log.search_query = "author:".into();
+        app.log_update_filter();
+
+        assert_eq!(app.log.filtered, vec![0, 1, 2]);
+    }
+
+    /// The plain search matches the address too. It always claimed to
+    /// search the author, but it read the name only, so searching for
+    /// the address you are trying to get rid of found nothing.
+    #[test]
+    fn the_plain_search_reaches_the_email() {
+        let mut app = log_with_two_authors();
+
+        app.log.search_query = "proton.me".into();
+        app.log_update_filter();
+
+        assert_eq!(app.log.filtered, vec![0, 1]);
+    }
+
+    /// A filtered list pages like an unfiltered one: `j` past the last
+    /// match asks for the next slice of history, because the filter only
+    /// ever saw the commits already fetched. With everything loaded that
+    /// ask is a no-op and the caret holds still.
+    #[test]
+    fn the_bottom_of_a_filtered_list_holds_when_all_is_loaded() {
+        let mut app = log_with_two_authors();
+        app.log.all_loaded = true;
+        app.log.search_query = "author:paskidev".into();
+        app.log_update_filter();
+        app.log.idx = 1; // the last of the two matches
+
+        handle_log(press(KeyCode::Char('j')), &mut app);
+
+        assert_eq!(
+            app.log.idx, 1,
+            "and it does not fall onto a filtered-out row"
+        );
+    }
+
+    /// The qualifier is case-insensitive and only a qualifier at the
+    /// front. `get` does the bounds check, so a query opening with a
+    /// multi-byte character is a miss and not a panic on a char
+    /// boundary.
+    #[test]
+    fn the_qualifier_is_parsed_off_the_front_only() {
+        assert_eq!(author_query("author:paski"), Some("paski"));
+        assert_eq!(author_query("AUTHOR: paski "), Some("paski"));
+        assert_eq!(author_query("author:"), Some(""));
+        assert_eq!(author_query("fix the author: line"), None);
+        assert_eq!(author_query("Peñalver"), None);
+        assert_eq!(author_query("añ"), None);
     }
 }

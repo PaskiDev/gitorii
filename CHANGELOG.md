@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Filter the log by author.** The search box (`/`) takes an `author:<who>`
+  qualifier that narrows the list to one identity instead of matching the
+  message as well, and `A` applies it to the commit under the caret without
+  going through the prompt — pressing it again lifts the filter, which is the
+  way back out, since a filtered log leaves no row of anyone else's to move to.
+  - The term is matched against the whole `Name <email>`, so a bare name, a
+    bare address and a pasted identity all reach the same commits; `A` writes
+    the identity in full, because a name alone folds together two people who
+    share one, and one person's two addresses.
+  - It pairs with the picking that landed alongside it: filter to the identity
+    you mean to replace, then `space` down the list, and every commit the pick
+    lock would have refused is already gone from the view.
+  - The heading says `of those loaded — ↓ for more` while the log is still
+    paginated. The filter only ever sees the commits already fetched, and a
+    count that looks like the whole answer has to admit it is not one.
+  - **A filtered list pages like an unfiltered one.** `j` past the last match
+    pulls the next slice of history and re-runs the filter over it; it used to
+    stop dead at the bottom of the loaded page, which made an author whose
+    commits were further back look like an author with none.
+- **The plain log search reaches the author's email.** It matched the message,
+  the name and the hash — never the address — so searching for the identity you
+  were trying to get rid of came back empty.
 - **Pick commits in the log, then act on the picks.** `space` marks the commit
   under the caret and the ops dropdown becomes a short menu that takes the
   marked set as its subject — `reauthor picked` and `clear picks`. `Esc` drops
