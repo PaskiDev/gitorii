@@ -161,16 +161,20 @@ Signed-binary plugin discovered in PATH that gates premium features on a renewab
 ### New VCS
 Long horizon. Torii is currently a git wrapper. The long-term goal is a VCS designed around human workflows rather than git's technical model. Torii would provide the migration path.
 
-### Runners observability
-Today torii covers the control plane *above* the runners (pipelines / jobs / releases) but ignores the runners themselves. The plan is **not** to compete with Ansible / Terraform / k8s manifests for runner *provisioning* — equipped teams already have that. The value would be at the diagnostic edge:
+### Runners — observability, and an agent of our own
+Torii covers the control plane *above* the runners (pipelines / jobs / releases). The diagnostic edge is shipped:
 
-- `torii runners list` — flat view of all runners across the user's platforms (GitLab self-hosted, GitHub Actions self-hosted, Bitbucket Pipelines runners, Azure agent pools, Gitea Actions runners). Idle vs busy, version, last seen.
-- `torii runners kill <id>` — for runners that get stuck and block the queue. Hits the platform's REST API; doesn't SSH into the runner host.
+- `torii runner list` — flat view of all runners across the user's platforms (GitLab self-hosted, GitHub Actions self-hosted, Bitbucket Pipelines runners, Azure agent pools, Gitea Actions runners). Idle vs busy, version, last seen.
+- `torii runner remove <id>` — for runners that get stuck and block the queue. Hits the platform's REST API; doesn't SSH into the runner host.
 - Filter by tag, by platform, by status.
 
-Out of scope: registering/unregistering runners, editing configs, changing executor types. Those stay with each platform's native tooling.
+**Revised 04-09-2026: torii will also execute jobs.** Earlier versions of this document ruled that out twice — no provisioning, no registering, no executors, "those stay with each platform's native tooling". What changed the decision was watching this project's own AUR publishing sit blocked for four months behind a self-hosted runner that, when finally checked, did not exist. A tool whose whole subject is talking to forges could describe that and not fix it. Reading the queue but never draining it is half a control plane.
 
-Each platform has a different model (registration tokens, UUIDs vs short IDs, repo/org/enterprise scoping). Implementation order will follow demand — most likely GitLab + GitHub first since those are where self-hosted runners are most common.
+`torii runner serve` polls a forge and runs the job, speaking that forge's own agent protocol — no `gitlab-runner` or `act_runner` installed beside it. The design, and the GitLab wire protocol pinned against both ends of it, is in [docs/CI_AGENT.md](docs/CI_AGENT.md). GitLab first because its protocol is documented and stable, then Gitea/Forgejo/Codeberg, whose `act_runner` speaks open gRPC over Connect and gives three forges for one implementation.
+
+Not planned, and the reason for each, so it does not get re-argued: GitHub and Azure are reverse engineering against a moving target with no third-party compatibility promise; Bitbucket ships its runner as an image rather than a specification; Radicle brokers to adapters instead of exposing a queue to poll.
+
+**SourceHut has no runners at all** — builds are submitted as a manifest to its build API. Any torii support for sourcehut CI is a client of that API, not an agent. Noting it here because a list of five supported forges quietly implies otherwise.
 
 ### Scanner improvements
 - `scan --fix` — auto-remove detected secrets from staged files
