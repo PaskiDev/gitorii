@@ -442,7 +442,7 @@ fn render_entries(f: &mut Frame, app: &App, area: Rect) {
                     Line::from(vec![
                         theme::caret(app, true),
                         Span::styled(
-                            format!("{:<32}", &e.key),
+                            format!("{:<32}", e.key),
                             Style::default().fg(theme::INK_DIM),
                         ),
                         Span::styled(before, Style::default().fg(theme::INK)),
@@ -468,7 +468,7 @@ fn render_entries(f: &mut Frame, app: &App, area: Rect) {
                     Line::from(vec![
                         theme::caret(app, is_sel),
                         Span::styled(
-                            format!("{:<32}", &e.key),
+                            format!("{:<32}", e.key),
                             Style::default().fg(theme::INK_DIM),
                         ),
                         value,

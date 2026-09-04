@@ -50,13 +50,13 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 ListItem::new(Line::from(vec![
                     theme::caret(app, is_sel),
                     Span::styled(
-                        format!("{:<20}", &t.name),
+                        format!("{:<20}", t.name),
                         Style::default()
                             .fg(theme::WARN)
                             .add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!(" {}", &t.time),
+                        format!(" {}", t.time),
                         Style::default().fg(theme::INK_FAINT),
                     ),
                 ]))
