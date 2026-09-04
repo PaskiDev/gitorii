@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-09-03
+
+### Added
+
+- **Mouse support in the TUI.** A click selects, a second click opens — a
+  stray click never checks out a branch or opens a deletion. Every gesture is
+  translated into the key it stands for and enters through the same path as
+  the keyboard, so guards, confirmations and text modes keep working without
+  being touched, and nothing reachable with the mouse stops being reachable
+  with the keys.
+  - The hit map is rebuilt every frame, because the TUI draws in immediate
+    mode and a map that outlived its frame would be stale. Last registration
+    wins, which is how popups get their clicks.
+  - Rows are registered *after* drawing, reading `state.offset()`. Guessing
+    the scroll sends the click to the wrong item. Lists with group headers
+    (branch, remote, safety) go through `HitMap::lines`, which takes one
+    `Option<usize>` per drawn line so a header never shifts the rows under it.
+  - Settings → TUI carries a switch to turn the whole thing off.
+- **The scanner is configurable from the safety view.** Size gate and hooks
+  are edited in place, in the same screen that lists the rules they apply to.
+
+### Fixed
+
+- **The config view no longer forks the test binary.** `load_config` read its
+  values by running our own executable with `config list`. Under `cargo test`
+  that executable *is* the test binary, and those two words are read there as
+  test-name filters: every test matching `config` or `list` ran again in the
+  child, several of them reached this function, and each one forked once
+  more. The suite re-entered itself until the machine ran out of memory —
+  which is what had been killing the runs on CI-sized boxes. Values now come
+  from `ToriiConfig` in process.
+- **The safety view's rules answer the mouse.** They were drawn without being
+  registered, so a click there did nothing.
+- **The stats worker is joined, not abandoned.** `load_stats` started a
+  detached `stats::churn` thread on every sidebar step, each holding a libgit2
+  repository that outlived the `App` that made it. One repository now gets one
+  worker, and it is joined with the state that owns it.
+- **The user's own secret rules apply everywhere**, not only on save.
+
+### Removed
+
+- **`views/mirror.rs`.** Its `render` had had no caller since 0.7.2, when
+  `View::Mirror` started drawing through `views::remote::render`.
+
 ## [0.14.0] - 2026-09-03
 
 ### Added

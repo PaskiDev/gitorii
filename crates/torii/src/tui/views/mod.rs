@@ -8,7 +8,6 @@ pub mod diff;
 pub mod help;
 pub mod issue;
 pub mod log;
-pub mod mirror;
 pub mod pr;
 pub mod remote;
 pub mod safety;
@@ -23,3 +22,5 @@ pub mod worktree;
 pub mod platform;
 // `history` and `settings` modules removed in 0.7.3 — their renders are
 // now served from `log` and `config` respectively (see ui.rs dispatcher).
+// `mirror` removed in 0.15.0 — its `render` had had no caller since 0.7.2,
+// when `View::Mirror` started drawing through `remote::render`.
