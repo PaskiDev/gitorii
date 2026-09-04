@@ -9,6 +9,7 @@ workflow:
 stages:
   - build
   - release
+  - publish
 
 # Two CI pools (history below):
 #
@@ -231,3 +232,131 @@ release:
       else
         echo "Unexpected status $HTTP" && exit 1
       fi
+
+
+# The AUR recipes live in `packaging/aur/` — this repository is their
+# upstream, and the two AUR git repositories are mirrors of that directory.
+#
+# Two jobs, because the two packages stop being blocked at different
+# moments:
+#
+#   publish-aur-src · `gitorii` is built from the tag's source tarball,
+#                     which exists as soon as the tag does. Waits for
+#                     nothing.
+#   publish-aur-bin · `gitorii-bin` hashes the binaries `release`
+#                     uploads, so it cannot start before that job.
+#
+# Neither of them compiles anything: update.sh downloads the sources,
+# recomputes the checksums with updpkgsums and regenerates .SRCINFO with
+# `makepkg --printsrcinfo`. That wants Arch tooling, not the build host's
+# Rust toolchains and cross-compilers — which is why these run in a
+# pinned archlinux image instead of on `tags: [gitorii]`. Publishing to
+# the AUR no longer depends on the self-hosted runner being up.
+#
+# Setup, once, before either job can do anything:
+#   1. Create an SSH key whose public half is registered on the
+#      aur.archlinux.org account that maintains both packages.
+#   2. Protect the tag pattern `v*`. A protected variable reaches only
+#      pipelines running on a protected branch or a protected tag, and
+#      this project protects `main` and nothing else — so skipping this
+#      step leaves the key invisible to every tag pipeline and both jobs
+#      skip in silence, on a green pipeline.
+#   3. Add the private half as a *file*-type, protected CI variable named
+#      AUR_SSH_PRIVATE_KEY. Not masked: masking wants a single-line value
+#      with no spaces, which a PEM key is not. Nothing here echoes it —
+#      ssh is only ever handed the path — but that is the reason to read
+#      the first trace rather than assume it.
+# Until that variable exists neither job runs at all — see `rules`.
+.publish_aur:
+  stage: publish
+  # Pinned by digest. `base-devel` is a rolling tag: left floating it
+  # would change the toolchain under a release without a line of this
+  # file moving. This is archlinux:base-devel as of 04-09-2026.
+  image: archlinux:base-devel@sha256:84cd9ef000b3cff245ec028e87965b84724f4bf1cc63fc2741ba927b88515ed6
+  retry: 0
+  rules:
+    # Stable tags only: the AUR has no notion of a pre-release, and an rc
+    # pushed there would be offered to every `yay -Syu`. Guarded on the
+    # key as well, so a pipeline without the variable configured (or a
+    # fork, which never gets protected variables) skips the job instead
+    # of failing on a missing credential.
+    - if: $AUR_SSH_PRIVATE_KEY && $CI_COMMIT_TAG =~ /^v[0-9]+\.[0-9]+\.[0-9]+$/
+  variables:
+    AUR_DIR: $CI_PROJECT_DIR/.aur
+  before_script:
+    # base-devel brings makepkg; updpkgsums (pacman-contrib), ssh and git
+    # are ours. A full -Syu rather than a bare -Sy: a partial upgrade is
+    # the one thing Arch does not forgive, and the digest pin above is
+    # what makes the starting point known.
+    - pacman -Syu --noconfirm --needed pacman-contrib openssh git
+    - |
+      for c in makepkg updpkgsums curl git ssh; do
+        command -v "$c" >/dev/null || { echo "$c missing from the image after pacman -Syu" ; exit 1; }
+      done
+    # makepkg refuses to run as root and updpkgsums shells out to it, so
+    # the recipe refresh runs as `build`. Only packaging/aur changes
+    # owner; the checkout itself stays root-owned, hence the system-wide
+    # safe.directory entry — update.sh calls `git rev-parse` inside it.
+    - useradd -m -s /bin/bash build
+    - chown -R build:build "$CI_PROJECT_DIR/packaging/aur"
+    - git config --system --add safe.directory "$CI_PROJECT_DIR"
+    - mkdir -p "$AUR_DIR"
+    - install -m 0600 "$AUR_SSH_PRIVATE_KEY" "$AUR_DIR/key"
+    # Pinned host key rather than ssh-keyscan — trust on first use in CI
+    # is trust in whatever answers on port 22 that day. Fingerprint:
+    # SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4, published in
+    # https://wiki.archlinux.org/title/AUR_submission_guidelines
+    - |
+      cat > "$AUR_DIR/known_hosts" <<'KNOWN_HOSTS'
+      aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+      KNOWN_HOSTS
+  script:
+    - VER="${CI_COMMIT_TAG#v}"
+    - export GIT_SSH_COMMAND="ssh -i $AUR_DIR/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$AUR_DIR/known_hosts -o StrictHostKeyChecking=yes"
+
+    # Re-download the sources and recompute the checksums for this one
+    # package. HOME is set explicitly: runuser keeps root's environment,
+    # and makepkg wants a home it can actually read.
+    - runuser -u build -- env HOME=/home/build ./packaging/aur/update.sh "$VER" "$AUR_PKG"
+
+    # No pre-emptive delete of the clone target: the container is fresh
+    # every run, so something already sitting there means an assumption
+    # broke, and a failed clone is the right way to hear about it.
+    - git clone "ssh://aur@aur.archlinux.org/$AUR_PKG.git" "$AUR_DIR/$AUR_PKG"
+    - install -m 0644 "packaging/aur/$AUR_PKG/PKGBUILD" "$AUR_DIR/$AUR_PKG/PKGBUILD"
+    - install -m 0644 "packaging/aur/$AUR_PKG/.SRCINFO" "$AUR_DIR/$AUR_PKG/.SRCINFO"
+    - git -C "$AUR_DIR/$AUR_PKG" config user.name  "Gitorii CI"
+    - git -C "$AUR_DIR/$AUR_PKG" config user.email "paski@paski.dev"
+    - git -C "$AUR_DIR/$AUR_PKG" add PKGBUILD .SRCINFO
+    - |
+      if git -C "$AUR_DIR/$AUR_PKG" diff --cached --quiet; then
+        echo "$AUR_PKG already at $VER, nothing to push"
+      else
+        git -C "$AUR_DIR/$AUR_PKG" commit -m "$AUR_PKG $VER"
+        git -C "$AUR_DIR/$AUR_PKG" push origin HEAD:master
+        echo "$AUR_PKG pushed $VER"
+      fi
+  after_script:
+    # Redundant while the container is thrown away after the job, kept so
+    # the key cannot leak into a cache or an artifact if either is ever
+    # added here.
+    - rm -f "$CI_PROJECT_DIR/.aur/key"
+
+# The source package. `needs: []` on purpose: what it hashes is GitLab's
+# own archive of the tag, which is ready before any build has started.
+publish-aur-src:
+  extends: .publish_aur
+  needs: []
+  variables:
+    AUR_PKG: gitorii
+
+# The binary package. update.sh refuses to leave a checksum pointing at
+# the previous release, so this job fails loudly if `release` published
+# without the build artifacts.
+publish-aur-bin:
+  extends: .publish_aur
+  needs:
+    - job: release
+      artifacts: false
+  variables:
+    AUR_PKG: gitorii-bin

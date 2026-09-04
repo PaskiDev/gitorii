@@ -1,0 +1,47 @@
+# Maintainer: Paski <paski@paski.dev>
+#
+# Canonical copy. The AUR repository is a mirror of this directory — edit
+# here, never there. `pkgver` and the checksums are rewritten by
+# ../update.sh; the rest is hand-maintained.
+#
+# The binary checksums below are a placeholder of 64 zeros and WILL fail
+# validation. They can only be filled once the CI `release` job has
+# uploaded the artifacts for this tag: the publish-aur-bin job runs
+# ../update.sh right after that upload and pushes the real values. Do not
+# replace them with SKIP — an unverified binary download is the one thing
+# this package must not do.
+
+pkgname=gitorii-bin
+_pkgname=gitorii
+pkgver=0.15.0
+pkgrel=1
+pkgdesc='Human-first Git client: simpler commands, a TUI, snapshots, multi-platform mirrors and a secret scanner (prebuilt binary)'
+arch=('x86_64' 'aarch64')
+url='https://gitorii.com'
+license=('MIT OR Apache-2.0')
+depends=('gcc-libs' 'glibc')
+optdepends=('git: needed by torii grep, archive, notes, patch and subtree, which shell out to it')
+provides=("$_pkgname=$pkgver")
+conflicts=("$_pkgname")
+
+_registry="https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v$pkgver"
+_raw="https://gitlab.com/paskidev/gitorii/-/raw/v$pkgver"
+
+source=("LICENSE-MIT-$pkgver::$_raw/LICENSE-MIT"
+        "LICENSE-APACHE-$pkgver::$_raw/LICENSE-APACHE"
+        "README-$pkgver.md::$_raw/README.md")
+source_x86_64=("torii-$pkgver-x86_64::$_registry/torii-linux-x86_64")
+source_aarch64=("torii-$pkgver-aarch64::$_registry/torii-linux-aarch64")
+
+sha256sums=('617864e1be66fe2d45a5125dd72a33ac5eec934e8da105f83fd16edfb6721a17'
+            '397802c7d19ad8bddc0b92ad38afda29f1a42b5826d979e18b9fd5c3e4bfc962'
+            '22e7965e3f64a13b8ee35839d8b6898ac0c689736cb69730b8dac103d291678b')
+sha256sums_x86_64=('0000000000000000000000000000000000000000000000000000000000000000')
+sha256sums_aarch64=('0000000000000000000000000000000000000000000000000000000000000000')
+
+package() {
+	install -Dm0755 "torii-$pkgver-$CARCH" "$pkgdir/usr/bin/torii"
+	install -Dm0644 "LICENSE-MIT-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
+	install -Dm0644 "LICENSE-APACHE-$pkgver" "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
+	install -Dm0644 "README-$pkgver.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

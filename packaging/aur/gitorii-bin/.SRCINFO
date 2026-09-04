@@ -1,0 +1,25 @@
+pkgbase = gitorii-bin
+	pkgdesc = Human-first Git client: simpler commands, a TUI, snapshots, multi-platform mirrors and a secret scanner (prebuilt binary)
+	pkgver = 0.15.0
+	pkgrel = 1
+	url = https://gitorii.com
+	arch = x86_64
+	arch = aarch64
+	license = MIT OR Apache-2.0
+	depends = gcc-libs
+	depends = glibc
+	optdepends = git: needed by torii grep, archive, notes, patch and subtree, which shell out to it
+	provides = gitorii=0.15.0
+	conflicts = gitorii
+	source = LICENSE-MIT-0.15.0::https://gitlab.com/paskidev/gitorii/-/raw/v0.15.0/LICENSE-MIT
+	source = LICENSE-APACHE-0.15.0::https://gitlab.com/paskidev/gitorii/-/raw/v0.15.0/LICENSE-APACHE
+	source = README-0.15.0.md::https://gitlab.com/paskidev/gitorii/-/raw/v0.15.0/README.md
+	sha256sums = 617864e1be66fe2d45a5125dd72a33ac5eec934e8da105f83fd16edfb6721a17
+	sha256sums = 397802c7d19ad8bddc0b92ad38afda29f1a42b5826d979e18b9fd5c3e4bfc962
+	sha256sums = 22e7965e3f64a13b8ee35839d8b6898ac0c689736cb69730b8dac103d291678b
+	source_x86_64 = torii-0.15.0-x86_64::https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.15.0/torii-linux-x86_64
+	sha256sums_x86_64 = 0000000000000000000000000000000000000000000000000000000000000000
+	source_aarch64 = torii-0.15.0-aarch64::https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.15.0/torii-linux-aarch64
+	sha256sums_aarch64 = 0000000000000000000000000000000000000000000000000000000000000000
+
+pkgname = gitorii-bin
