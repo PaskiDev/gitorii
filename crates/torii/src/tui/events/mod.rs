@@ -77,6 +77,7 @@ pub enum Action {
     HistoryClean,
     HistoryRemoveFile,
     HistoryRewrite,
+    HistoryReauthor,
     HistoryBlame,
     RemoteInfo,
     RemoteFetch,
@@ -248,6 +249,8 @@ impl EventHandler {
                             | HistoryConfirm::RemoveFile
                             | HistoryConfirm::RewriteStart
                             | HistoryConfirm::RewriteEnd
+                            | HistoryConfirm::ReauthorOld
+                            | HistoryConfirm::ReauthorNew
                             | HistoryConfirm::Blame
                     ),
                     View::Remote => matches!(
@@ -372,6 +375,12 @@ impl EventHandler {
                                 app.log.search_query.clear();
                                 app.log.filtered.clear();
                                 true
+                            } else if !app.log.selected.is_empty() {
+                                // Same order as the rest: Esc undoes the
+                                // innermost thing that is open before it
+                                // gives the sidebar its focus back.
+                                app.log_clear_selection();
+                                true
                             } else {
                                 false
                             }
@@ -419,6 +428,12 @@ impl EventHandler {
                                 app.history_view.confirm = HistoryConfirm::None;
                                 app.history_view.input.clear();
                                 app.history_view.input2.clear();
+                                // The view is only ever entered to hold a
+                                // prompt for the log's ops menu, so
+                                // cancelling the prompt goes back to the
+                                // log rather than leaving the user on a
+                                // status bar missing its search hint.
+                                app.view = View::Log;
                                 true
                             } else {
                                 false

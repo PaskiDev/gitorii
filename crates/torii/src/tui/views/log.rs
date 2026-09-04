@@ -64,6 +64,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     };
     let msg_width = msg_width.saturating_sub(graph_width + 1);
 
+    // The pick column only exists while something is picked, so an
+    // ordinary log keeps every column at the width it always had.
+    let picking = app.log.selection_identity.is_some();
+    let msg_width = msg_width.saturating_sub(if picking { 2 } else { 0 });
+
     // `filtered` is rebuilt whenever the commit list is, but the renderer is
     // the last line of defence: an index it cannot resolve is skipped rather
     // than panicking mid-frame.
@@ -79,6 +84,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             } else {
                 Style::default()
             };
+            let style = if app.log.selection_identity.is_some() && !app.log_selectable(i) {
+                style.add_modifier(Modifier::DIM)
+            } else {
+                style
+            };
             let msg = truncate(&c.message, msg_width);
             let msg_color = if !app.log.search_query.is_empty() && !app.log.filtered.is_empty() {
                 theme::OK
@@ -87,6 +97,24 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             };
 
             let mut spans = vec![theme::caret(app, is_sel)];
+            if picking {
+                // ● picked, ○ free to pick, · shut out by the identity
+                // lock. The shut-out ones stay in place and stay
+                // readable — they are the ones you are checking the
+                // selection against.
+                let picked = app.log.selected.iter().any(|h| *h == c.full_hash);
+                let (glyph, color) = if picked {
+                    ("●", theme::OK)
+                } else if app.log_selectable(i) {
+                    ("○", theme::INK_FAINT)
+                } else {
+                    ("·", theme::INK_DIM)
+                };
+                spans.push(Span::styled(
+                    format!("{} ", glyph),
+                    Style::default().fg(color),
+                ));
+            }
             if graph_on {
                 let glyphs = app
                     .log
@@ -283,7 +311,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     // ── Ops dropdown overlay ──────────────────────────────────────────────────
     if app.log.ops_mode {
-        let ops = log_ops();
+        let ops = log_ops_for(app);
         let dropdown_w: u16 = 50;
         let dropdown_h: u16 = ops.len() as u16 + 2;
         let sel_display_pos = sel_pos.unwrap_or(0);
@@ -442,6 +470,33 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// Which of the two menus the dropdown is showing. A selection replaces
+/// the list rather than greying half of it: with commits picked, "blame"
+/// or "compact" are not narrower versions of themselves, they are a
+/// different question, and the menu that answers "what do I do with
+/// *these*" is short on purpose.
+pub fn log_ops_for(app: &App) -> Vec<(&'static str, &'static str, bool)> {
+    if app.log.selected.is_empty() {
+        log_ops()
+    } else {
+        log_ops_selection()
+    }
+}
+
+/// Ops that take the picked commits as their subject. `reauthor` knows
+/// the old identity already — the selection is locked to one — so it
+/// only asks for the replacement.
+pub fn log_ops_selection() -> Vec<(&'static str, &'static str, bool)> {
+    vec![
+        (
+            "reauthor picked",
+            "new identity for the picked commits ⚠",
+            true,
+        ),
+        ("clear picks", "back to the whole-history menu", false),
+    ]
+}
+
 /// 0.8.3 — ops menu for the Log view. Built once and consumed by
 /// both the renderer and the events dispatcher so the index → label
 /// mapping can't drift. Each entry is `(label, description, danger)`.
@@ -470,6 +525,7 @@ pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
         ("blame", "line-by-line origin of a file", false),
         ("remove file", "purge a path from every commit ⚠", true),
         ("rewrite dates", "shift author/committer dates ⚠", true),
+        ("reauthor", "replace an author identity everywhere ⚠", true),
         ("scan history", "find secrets across every commit", false),
         ("compact", "gc + reflog expire (recovers space)", false),
     ]

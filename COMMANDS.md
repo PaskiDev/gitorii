@@ -319,6 +319,7 @@ torii history reauthor --old oldname    --new "New <b@y>"   # match by name only
 torii history reauthor --old a@x        --new "New <b@y>"   # match by email only
 torii history reauthor ... --committer                       # also rewrite committer
 torii history reauthor ... --since v0.6.0                    # limit to a range
+torii history reauthor ... --only a1b2c3d,e4f5a6b            # limit to named commits
 torii history reauthor ... --dry-run                         # preview, no changes
 torii history reauthor ... --no-snapshot                     # skip safety snapshot
 torii history reauthor ... --allow-dirty                     # allow uncommitted changes
@@ -362,6 +363,10 @@ torii sync --verify                    # Compare local vs remote HEAD
   contradict that intent).
 - **Commit/author timestamps are preserved.** Only *who* changes, never
   *when*. Use `torii history rewrite` to change dates.
+- **`--only` narrows the identity change, not the blast radius.** Commits
+  after a rewritten one are recreated whatever you pass, because their parent
+  OID moved — their hashes change too. A rev `--only` names that the walk
+  never reaches is an error, not a quiet no-op.
 - **GPG signatures invalidate** after rewrite — they're computed over the
   old author. Re-sign manually after the rewrite if your repo enforces
   signed commits (`git.sign_commits = true`).

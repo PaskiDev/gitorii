@@ -36,6 +36,49 @@ pub(crate) fn torii_exe() -> std::ffi::OsString {
     .clone()
 }
 
+/// Run a torii subcommand for a TUI action, returning the command's own
+/// diagnostic when it fails.
+///
+/// The history actions used to send both streams to /dev/null and log a
+/// bare "<verb> failed", which collapses two very different outcomes into
+/// one line: a repository torii declined to rewrite, and an argument it
+/// never accepted in the first place. `history rewrite` is where that
+/// hurt — a date in a format the parser rejects and a rewrite that blew
+/// up halfway produced the same four words.
+fn run_torii(repo_path: &str, args: &[&str]) -> std::result::Result<(), String> {
+    let out = std::process::Command::new(torii_exe())
+        .args(args)
+        .current_dir(repo_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // The complaint is on stderr; stdout only carries progress chatter,
+    // so its *last* line is the closest thing to a cause when stderr is
+    // empty (a subcommand killed mid-run, say).
+    let detail = stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .or_else(|| {
+            stdout
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .next_back()
+        });
+    Err(match detail {
+        Some(line) => line.to_string(),
+        None => match out.status.code() {
+            Some(code) => format!("exit code {}", code),
+            None => "killed by a signal".to_string(),
+        },
+    })
+}
+
 fn ssh_to_https(url: &str) -> String {
     // git@github.com:owner/repo.git → https://github.com/owner/repo
     if let Some(rest) = url.strip_prefix("git@") {
@@ -777,6 +820,7 @@ fn run_loop(
                 Action::HistoryRebase => {
                     let target = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
+                    app.view = View::Log;
                     if !target.is_empty() {
                         let ok = std::process::Command::new(torii_exe())
                             .args(["history", "rebase", &target])
@@ -836,6 +880,7 @@ fn run_loop(
                 Action::HistoryRemoveFile => {
                     let path = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
+                    app.view = View::Log;
                     if !path.is_empty() {
                         let ok = std::process::Command::new(torii_exe())
                             .args(["history", "remove-file", &path])
@@ -867,28 +912,76 @@ fn run_loop(
                     let end = app.history_view.input2.trim().to_string();
                     app.history_view.input.clear();
                     app.history_view.input2.clear();
+                    app.view = View::Log;
                     if !start.is_empty() && !end.is_empty() {
-                        let ok = std::process::Command::new(torii_exe())
-                            .args(["history", "rewrite", &start, &end])
-                            .current_dir(&app.repo_path)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .map(|s| s.success())
-                            .unwrap_or(false);
-                        let msg = if ok {
-                            format!("rewrote dates: {} → {}", start, end)
-                        } else {
-                            "rewrite failed".to_string()
-                        };
-                        app.log_event(
-                            &msg,
-                            if ok {
-                                EventKind::Success
-                            } else {
-                                EventKind::Error
-                            },
-                        );
+                        match run_torii(&app.repo_path, &["history", "rewrite", &start, &end]) {
+                            Ok(()) => app.log_event(
+                                format!("rewrote dates: {} → {}", start, end),
+                                EventKind::Success,
+                            ),
+                            Err(why) => {
+                                app.log_event(format!("rewrite failed: {}", why), EventKind::Error)
+                            }
+                        }
+                        app.refresh()?;
+                    }
+                }
+
+                // `--committer` is not the CLI default (there, reauthor
+                // touches only the author) but it is the only sensible
+                // reading of "change who wrote these commits" from a menu
+                // with no flags to offer: an identity fixed on the author
+                // and left stale on the committer is the half-rewrite
+                // people come back to complain about. The log line says
+                // which fields moved so the choice isn't silent.
+                Action::HistoryReauthor => {
+                    let old = app.history_view.input.trim().to_string();
+                    let new = app.history_view.input2.trim().to_string();
+                    // Picked commits scope the rewrite to themselves. With
+                    // nothing picked this stays what it was: every commit
+                    // in the history whose identity matches.
+                    let only = app.log.selected.join(",");
+                    let scope = match app.log.selected.len() {
+                        0 => "every matching commit".to_string(),
+                        1 => "1 picked commit".to_string(),
+                        n => format!("{} picked commits", n),
+                    };
+                    app.history_view.input.clear();
+                    app.history_view.input2.clear();
+                    app.view = View::Log;
+                    if !old.is_empty() && !new.is_empty() {
+                        let mut args = vec![
+                            "history",
+                            "reauthor",
+                            "--old",
+                            old.as_str(),
+                            "--new",
+                            new.as_str(),
+                            "--committer",
+                        ];
+                        if !only.is_empty() {
+                            args.push("--only");
+                            args.push(only.as_str());
+                        }
+                        let outcome = run_torii(&app.repo_path, &args);
+                        match outcome {
+                            Ok(()) => {
+                                // The picks named commits that no longer
+                                // exist: every one of them was recreated
+                                // under a new OID.
+                                app.log_clear_selection();
+                                app.log_event(
+                                    format!(
+                                        "reauthored author + committer on {}: {} → {}",
+                                        scope, old, new
+                                    ),
+                                    EventKind::Success,
+                                );
+                            }
+                            Err(why) => {
+                                app.log_event(format!("reauthor failed: {}", why), EventKind::Error)
+                            }
+                        }
                         app.refresh()?;
                     }
                 }
@@ -896,6 +989,7 @@ fn run_loop(
                 Action::HistoryBlame => {
                     let file = app.history_view.input.trim().to_string();
                     app.history_view.input.clear();
+                    app.view = View::Log;
                     if !file.is_empty() {
                         let output = std::process::Command::new(torii_exe())
                             .args(["blame", &file])

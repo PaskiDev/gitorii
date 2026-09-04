@@ -299,6 +299,15 @@ pub struct Options {
     /// Limit walk to commits reachable from HEAD but not from this rev.
     /// `None` means "all reachable commits from HEAD".
     pub since: Option<String>,
+    /// Restrict the *identity change* to exactly these revisions. `None`
+    /// means "every commit the walk reaches".
+    ///
+    /// This narrows which commits get a new signature, not which ones get
+    /// recreated: a rewritten commit moves every descendant it has,
+    /// selected or not, because their parent OID changed. Held as revs
+    /// rather than `Oid`s so a caller can pass `HEAD~2` or a short hash
+    /// and get a real error for a typo — see `rewrite`.
+    pub only: Option<Vec<String>>,
     /// Just report what would change; touch nothing.
     pub dry_run: bool,
     /// Skip the safety snapshot. Off by default — opt-in skip.
@@ -347,6 +356,51 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
 
     pre_flight(&repo, opts.allow_dirty)?;
 
+    // Resolved before the snapshot so a mistyped rev costs nothing. It has
+    // to be an error rather than a miss: a hash that resolves to nothing
+    // would leave every commit unmatched, and a rewrite that touched
+    // nothing reads exactly like one that worked.
+    let only: Option<HashSet<Oid>> = match &opts.only {
+        Some(revs) => {
+            let mut set = HashSet::with_capacity(revs.len());
+            for rev in revs {
+                let obj = repo
+                    .revparse_single(rev)
+                    .map_err(|e| ToriiError::Usage(format!("--only {}: {}", rev, e.message())))?;
+                let commit = obj.peel_to_commit().map_err(|e| {
+                    ToriiError::Usage(format!("--only {}: not a commit: {}", rev, e.message()))
+                })?;
+                set.insert(commit.id());
+            }
+            Some(set)
+        }
+        None => None,
+    };
+
+    // Build the commit list (oldest-first, so parents are processed first).
+    // Ahead of the snapshot so that everything which can be rejected is
+    // rejected before a save point exists to clean up.
+    let oids = collect_commits(&repo, opts.since.as_deref())?;
+
+    // A pick the walk never reaches would rewrite nothing and report it
+    // only as a zero in the summary. Usually it means the commit sits
+    // outside `--since`, or on a branch this walk doesn't touch.
+    if let Some(set) = &only {
+        let reachable: HashSet<Oid> = oids.iter().copied().collect();
+        let mut missing: Vec<String> = set
+            .iter()
+            .filter(|oid| !reachable.contains(oid))
+            .map(|oid| oid.to_string()[..7].to_string())
+            .collect();
+        if !missing.is_empty() {
+            missing.sort();
+            return Err(ToriiError::Usage(format!(
+                "--only: not reachable from the walk: {}",
+                missing.join(", ")
+            )));
+        }
+    }
+
     // Optional: take a safety snapshot before touching anything.
     let snapshot_id = if !opts.no_snapshot && !opts.dry_run {
         let mgr = crate::snapshot::SnapshotManager::new(repo_path)?;
@@ -359,9 +413,6 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
     } else {
         None
     };
-
-    // Build the commit list (oldest-first, so parents are processed first).
-    let oids = collect_commits(&repo, opts.since.as_deref())?;
 
     let mut stats = Stats {
         scanned: oids.len(),
@@ -378,8 +429,17 @@ fn rewrite(repo_path: &Path, mapping: &Mapping, opts: &Options) -> Result<Stats>
     for old_oid in &oids {
         let commit = repo.find_commit(*old_oid).map_err(ToriiError::Git)?;
 
-        let new_author = remap_signature(&commit.author(), mapping);
-        let new_committer = if opts.committer {
+        let in_scope = match &only {
+            Some(set) => set.contains(old_oid),
+            None => true,
+        };
+
+        let new_author = if in_scope {
+            remap_signature(&commit.author(), mapping)
+        } else {
+            None
+        };
+        let new_committer = if in_scope && opts.committer {
             remap_signature(&commit.committer(), mapping)
         } else {
             None

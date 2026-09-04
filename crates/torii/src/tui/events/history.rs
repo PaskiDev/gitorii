@@ -92,6 +92,84 @@ pub(super) fn handle_history(key: event::KeyEvent, app: &mut App) -> Option<Acti
             }
             return None;
         }
+        // Two prompts, same shape as the rewrite pair — but both sides
+        // want the full "Name <email>" form here, where the CLI lets
+        // `--old` match loosely on a bare name or a bare email.
+        //
+        // The looseness is right for a flag and wrong for this menu. A
+        // long history usually carries the same person under several
+        // identities — one name over two or three emails, one email
+        // under two spellings of the name — and a bare half of that pair
+        // sweeps up every one of them. On the CLI you bound the damage
+        // with `--since` and read the dry-run first; the menu offers
+        // neither, so the pair has to be exact on both ends.
+        //
+        // Refusing on Enter — rather than passing it on and letting the
+        // rewrite match the wrong set, or dropping the keystroke with no
+        // word about why — is what `identity_error` carries to `ui.rs`.
+        HistoryConfirm::ReauthorOld => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {
+                    let parsed =
+                        crate::history_reauthor::Identity::parse_full(&app.history_view.input);
+                    match parsed {
+                        Ok(_) => {
+                            app.history_view.identity_error = None;
+                            app.history_view.confirm = HistoryConfirm::ReauthorNew;
+                        }
+                        Err(why) => app.history_view.identity_error = Some(why.to_string()),
+                    }
+                }
+                (_, KeyCode::Backspace) => {
+                    app.history_view.input.pop();
+                    app.history_view.identity_error = None;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+                // Unlike a path or a ref, an identity is full of capitals
+                // and `<>`, which arrive with SHIFT held. The older
+                // prompts only accept NONE and would silently drop every
+                // one of them.
+                (_, KeyCode::Char(c))
+                    if key.modifiers == KeyModifiers::NONE
+                        || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    app.history_view.input.push(c);
+                    app.history_view.identity_error = None;
+                }
+                _ => {}
+            }
+            return None;
+        }
+        HistoryConfirm::ReauthorNew => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Enter) if !app.history_view.input2.trim().is_empty() => {
+                    let parsed =
+                        crate::history_reauthor::Identity::parse_full(&app.history_view.input2);
+                    match parsed {
+                        Ok(_) => {
+                            app.history_view.identity_error = None;
+                            app.history_view.confirm = HistoryConfirm::None;
+                            return Some(Action::HistoryReauthor);
+                        }
+                        Err(why) => app.history_view.identity_error = Some(why.to_string()),
+                    }
+                }
+                (_, KeyCode::Backspace) => {
+                    app.history_view.input2.pop();
+                    app.history_view.identity_error = None;
+                }
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+                (_, KeyCode::Char(c))
+                    if key.modifiers == KeyModifiers::NONE
+                        || key.modifiers == KeyModifiers::SHIFT =>
+                {
+                    app.history_view.input2.push(c);
+                    app.history_view.identity_error = None;
+                }
+                _ => {}
+            }
+            return None;
+        }
         HistoryConfirm::Blame => {
             match (key.modifiers, key.code) {
                 (_, KeyCode::Enter) if !app.history_view.input.trim().is_empty() => {

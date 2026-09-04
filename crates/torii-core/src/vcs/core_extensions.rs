@@ -773,16 +773,16 @@ impl GitRepo {
     pub fn rewrite_history(&self, start_date: &str, end_date: &str) -> Result<()> {
         println!("🔄 Rewriting commit history...");
 
-        let start_ts =
-            NaiveDateTime::parse_from_str(&format!("{} 00:00", start_date), "%Y-%m-%d %H:%M")
-                .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid start date: {}", e)))?
-                .and_utc()
-                .timestamp();
-        let end_ts =
-            NaiveDateTime::parse_from_str(&format!("{} 23:59", end_date), "%Y-%m-%d %H:%M")
-                .map_err(|e| crate::error::ToriiError::Usage(format!("Invalid end date: {}", e)))?
-                .and_utc()
-                .timestamp();
+        let start_ts = parse_rewrite_boundary(start_date, "start", false)?;
+        let end_ts = parse_rewrite_boundary(end_date, "end", true)?;
+        if end_ts < start_ts {
+            return Err(crate::error::ToriiError::Usage(format!(
+                "End date `{}` is before start date `{}` — the rewrite would \
+                 walk history backwards.",
+                end_date.trim(),
+                start_date.trim()
+            )));
+        }
 
         let mut revwalk = self.repo.revwalk().map_err(crate::error::ToriiError::Git)?;
         revwalk.push_head().map_err(crate::error::ToriiError::Git)?;
@@ -1491,6 +1491,34 @@ impl GitRepo {
 
         Ok(())
     }
+}
+
+/// Parse one end of the `torii history rewrite` range.
+///
+/// Both the CLI help and the TUI prompt advertise `YYYY-MM-DD HH:MM`,
+/// and that was the one form the old code could not read: it appended a
+/// time of its own before parsing, so a date that already carried an
+/// hour became `2026-01-01 12:00 00:00` and was rejected as invalid.
+/// The failure surfaced as `Invalid start date` in the CLI and as a
+/// wordless no-op in the TUI, which is how it survived.
+///
+/// Both spellings are accepted now. A bare date keeps the boundaries the
+/// range always had — the first minute of the day for the start, the
+/// last one for the end — so existing invocations are unaffected.
+fn parse_rewrite_boundary(input: &str, which: &str, end_of_day: bool) -> Result<i64> {
+    let input = input.trim();
+    if let Ok(dt) = NaiveDateTime::parse_from_str(input, "%Y-%m-%d %H:%M") {
+        return Ok(dt.and_utc().timestamp());
+    }
+    let implied = if end_of_day { "23:59" } else { "00:00" };
+    NaiveDateTime::parse_from_str(&format!("{} {}", input, implied), "%Y-%m-%d %H:%M")
+        .map(|dt| dt.and_utc().timestamp())
+        .map_err(|_| {
+            crate::error::ToriiError::Usage(format!(
+                "Invalid {} date `{}`. Expected YYYY-MM-DD or YYYY-MM-DD HH:MM.",
+                which, input
+            ))
+        })
 }
 
 /// 0.7.35 — one-letter signature verdict for `log --signatures`.
@@ -2259,5 +2287,56 @@ mod diff_unborn_head_tests {
 
         gr.diff(true, false)
             .expect("diff --staged should work with no commits yet");
+    }
+}
+
+#[cfg(test)]
+mod rewrite_boundary_tests {
+    use super::*;
+
+    const HOUR: i64 = 3600;
+
+    /// The bug this pins: `torii history rewrite --help` and the TUI's
+    /// date prompt both ask for `YYYY-MM-DD HH:MM`, and that was the one
+    /// spelling the parser rejected — it appended `00:00` to whatever it
+    /// was given, so a time supplied by the user produced a string with
+    /// two of them.
+    #[test]
+    fn the_documented_form_with_an_hour_is_accepted() {
+        let with_hour = parse_rewrite_boundary("2026-01-01 12:00", "start", false)
+            .expect("the form the help text documents must parse");
+        let bare = parse_rewrite_boundary("2026-01-01", "start", false).unwrap();
+        assert_eq!(with_hour, bare + 12 * HOUR);
+    }
+
+    #[test]
+    fn a_bare_date_keeps_the_boundaries_it_always_had() {
+        // Start of the day for the start, last minute of it for the end:
+        // unchanged from before, so existing invocations still land on
+        // the same two timestamps.
+        let start = parse_rewrite_boundary("2026-01-01", "start", false).unwrap();
+        let end = parse_rewrite_boundary("2026-01-01", "end", true).unwrap();
+        assert_eq!(end - start, 23 * HOUR + 59 * 60);
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_not_an_error() {
+        // The TUI hands over whatever was typed at the prompt.
+        assert_eq!(
+            parse_rewrite_boundary("  2026-01-01  ", "start", false).unwrap(),
+            parse_rewrite_boundary("2026-01-01", "start", false).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_rejected_date_names_both_accepted_forms() {
+        let err = parse_rewrite_boundary("01/01/2026", "start", false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("YYYY-MM-DD"), "got: {msg}");
+        assert!(msg.contains("HH:MM"), "got: {msg}");
+        assert!(
+            msg.contains("01/01/2026"),
+            "the rejected value belongs in the message: {msg}"
+        );
     }
 }

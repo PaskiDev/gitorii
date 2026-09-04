@@ -725,12 +725,14 @@ impl App {
             let hash = full_hash[..7].to_string();
             let message = commit.summary().unwrap_or("").to_string();
             let author = commit.author().name().unwrap_or("").to_string();
+            let author_email = commit.author().email().unwrap_or("").to_string();
             let time = format_age(commit.time().seconds());
             self.commits.push(CommitEntry {
                 hash,
                 full_hash,
                 message,
                 author,
+                author_email,
                 time,
             });
         }
@@ -1132,6 +1134,7 @@ mod tests {
             full_hash: format!("{hash}000000000000000000000000000000000"),
             message: message.into(),
             author: author.into(),
+            author_email: format!("{}@example.test", author.to_lowercase().replace(' ', ".")),
             time: "now".into(),
         }
     }

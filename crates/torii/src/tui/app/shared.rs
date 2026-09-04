@@ -19,6 +19,10 @@ pub struct CommitEntry {
     pub full_hash: String, // full 40-char hash for git ops
     pub message: String,
     pub author: String,
+    /// Author email. The name alone is not an identity — two people can
+    /// share it, and one person routinely has several addresses under
+    /// the same name — and `reauthor` matches on the pair.
+    pub author_email: String,
     pub time: String,
 }
 

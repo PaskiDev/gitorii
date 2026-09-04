@@ -107,6 +107,7 @@ pub(crate) enum HistoryCommands {
   torii history reauthor --old x@y.com --new \"Pasqual <paski@paski.dev>\"            # match by email only
   torii history reauthor --old ... --new ... --committer        # also rewrite committer
   torii history reauthor --old ... --new ... --since v0.6.0     # only commits since v0.6.0
+  torii history reauthor --old ... --new ... --only a1b2c3d,e4f5a6b  # just these two
   torii history reauthor --old ... --new ... --dry-run          # preview, no changes
   torii history reauthor --old ... --new ... --no-snapshot      # skip safety snapshot
   torii history reauthor --old ... --new ... --allow-dirty      # allow uncommitted changes
@@ -127,6 +128,13 @@ the rewrite. A safety snapshot is taken by default (revert with
         /// Limit rewrite to commits since this revision (exclusive).
         #[arg(long, value_name = "REV")]
         since: Option<String>,
+
+        /// Rewrite only these commits (repeatable, or comma-separated).
+        /// Everything else keeps its identity — but commits *after* a
+        /// rewritten one are recreated regardless, so their hashes move
+        /// either way.
+        #[arg(long, value_name = "REV", value_delimiter = ',')]
+        only: Vec<String>,
 
         /// Preview the rewrite without touching the repo.
         #[arg(long)]
@@ -443,6 +451,7 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             old,
             new,
             since,
+            only,
             dry_run,
             no_snapshot,
             committer,
@@ -454,6 +463,7 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             let new_id = history_reauthor::Identity::parse_full(new)?;
             let opts = history_reauthor::Options {
                 since: since.clone(),
+                only: (!only.is_empty()).then(|| only.clone()),
                 dry_run: *dry_run,
                 no_snapshot: *no_snapshot,
                 committer: *committer,
@@ -650,6 +660,7 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
                 }
                 let opts = history_reauthor::Options {
                     since: since.clone(),
+                    only: None,
                     dry_run: *dry_run,
                     no_snapshot: *no_snapshot,
                     committer: *committer,

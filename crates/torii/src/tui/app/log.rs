@@ -19,6 +19,22 @@ pub struct LogState {
     pub last_files_idx: Option<usize>,
     pub ops_mode: bool,
     pub ops_idx: usize,
+
+    /// Commits picked with Space, as full OIDs, in the order they were
+    /// picked. Empty means no selection and the ops menu keeps its
+    /// whole-history list.
+    pub selected: Vec<String>,
+    /// The `Name <email>` every selected commit shares. Set by the first
+    /// pick and cleared with the selection; while it is `Some`, a commit
+    /// authored by anyone else cannot join.
+    ///
+    /// This is the lock the selection exists for. `reauthor` matches on
+    /// an identity, so a set spanning two of them has no single `--old`
+    /// to run with, and the operation people actually want — "these
+    /// commits, this identity" — is only well defined on a set that
+    /// agrees.
+    pub selection_identity: Option<String>,
+
     /// Per-commit graph rows aligned with `App.commits`. Always populated in
     /// the Log view to differentiate it visually from the History view.
     pub graph_rows: Vec<crate::graph::GraphRow>,
@@ -76,6 +92,8 @@ impl Default for LogState {
             last_files_idx: None,
             ops_mode: false,
             ops_idx: 0,
+            selected: vec![],
+            selection_identity: None,
             graph_rows: vec![],
             show_signatures: false,
             signature_cache: std::collections::HashMap::new(),
@@ -245,6 +263,60 @@ impl App {
     }
 
     // ── Dashboard helpers ────────────────────────────────────────────────────
+
+    /// `Name <email>` of a commit in the list, the form `--old` wants.
+    pub fn commit_identity(&self, idx: usize) -> Option<String> {
+        self.commits
+            .get(idx)
+            .map(|c| format!("{} <{}>", c.author, c.author_email))
+    }
+
+    /// Space over a commit. Returns the reason it was refused, if it was.
+    ///
+    /// The first pick sets the identity the rest of the selection is held
+    /// to; unpicking the last one releases it, so the next Space starts a
+    /// fresh set rather than staying bound to whoever came first.
+    pub fn log_toggle_selection(&mut self, idx: usize) -> Option<String> {
+        let identity = self.commit_identity(idx)?;
+        let (oid, short) = match self.commits.get(idx) {
+            Some(c) => (c.full_hash.clone(), c.hash.clone()),
+            None => return None,
+        };
+
+        if let Some(pos) = self.log.selected.iter().position(|s| *s == oid) {
+            self.log.selected.remove(pos);
+            if self.log.selected.is_empty() {
+                self.log.selection_identity = None;
+            }
+            return None;
+        }
+
+        match self.log.selection_identity.clone() {
+            Some(locked) if locked != identity => Some(format!(
+                "{} is authored by {}, not {} — not added",
+                short, identity, locked
+            )),
+            _ => {
+                self.log.selection_identity = Some(identity);
+                self.log.selected.push(oid);
+                None
+            }
+        }
+    }
+
+    pub fn log_clear_selection(&mut self) {
+        self.log.selected.clear();
+        self.log.selection_identity = None;
+    }
+
+    /// Whether a commit can still join the selection — false only for the
+    /// ones the lock shuts out, which is what greys them in the list.
+    pub fn log_selectable(&self, idx: usize) -> bool {
+        match &self.log.selection_identity {
+            None => true,
+            Some(locked) => self.commit_identity(idx).as_ref() == Some(locked),
+        }
+    }
 
     pub fn log_move_up(&mut self) {
         if self.log.filtered.is_empty() {

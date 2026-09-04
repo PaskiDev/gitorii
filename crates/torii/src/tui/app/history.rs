@@ -23,6 +23,8 @@ pub enum HistoryConfirm {
     Rebase,
     RewriteStart,
     RewriteEnd,
+    ReauthorOld,
+    ReauthorNew,
     Blame,
     Scan,
 }
@@ -33,6 +35,10 @@ pub struct HistoryState {
     pub confirm: HistoryConfirm,
     pub input: String,
     pub input2: String,
+    /// Why the identity typed into a reauthor prompt was refused. Shown
+    /// on the prompt line itself; cleared by the next edit. `None` while
+    /// nothing has been rejected.
+    pub identity_error: Option<String>,
     pub scan_full: bool,
     pub ops_mode: bool,
     pub ops_idx: usize,
@@ -46,6 +52,7 @@ impl Default for HistoryState {
             confirm: HistoryConfirm::None,
             input: String::new(),
             input2: String::new(),
+            identity_error: None,
             scan_full: false,
             ops_mode: false,
             ops_idx: 0,

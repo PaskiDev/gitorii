@@ -417,6 +417,55 @@ fn render_repo_picker(f: &mut Frame, app: &App, header_area: Rect) {
     f.render_stateful_widget(List::new(items).block(block), drop_area, &mut state);
 }
 
+/// Word-wrap `s` with a hanging indent: the first line gets `first`
+/// columns (what is left after the timestamp and the symbol), every line
+/// after it gets `rest`.
+///
+/// A word longer than the line — a hash, a path, an identity — is broken
+/// rather than left to run off the edge, because running off the edge is
+/// exactly what a `Line` in a `List` does: ratatui clips, it does not
+/// wrap.
+fn wrap_message(s: &str, first: usize, rest: usize) -> Vec<String> {
+    let first = first.max(1);
+    let rest = rest.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+
+    for word in s.split_whitespace() {
+        let mut word = word;
+        loop {
+            let width = if lines.is_empty() { first } else { rest };
+            let room = if current.is_empty() {
+                width
+            } else {
+                width.saturating_sub(current.chars().count() + 1)
+            };
+            if word.chars().count() <= room {
+                if !current.is_empty() {
+                    current.push(' ');
+                }
+                current.push_str(word);
+                break;
+            }
+            if current.is_empty() {
+                let head: String = word.chars().take(width).collect();
+                let cut = head.len();
+                lines.push(head);
+                word = &word[cut..];
+            } else {
+                lines.push(std::mem::take(&mut current));
+            }
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
 fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     // The preferred size, then what the window can actually spare. A minimum
     // wider than the terminal is not a minimum, it is an overflow: asking for
@@ -446,6 +495,14 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     let panel_area = theme::clear(f, panel_area);
     f.render_widget(block, panel_area);
 
+    // What one line of the list can hold, less the block's own padding.
+    // An event here is a whole sentence — a rewrite's before and after, a
+    // scan's finding, the reason a commit was refused — and the panel is
+    // 55 columns at its widest, so on one line the panel was showing a
+    // timestamp and the first few words of everything.
+    let text_w = inner.width.saturating_sub(2) as usize;
+    const INDENT: usize = 2;
+
     let items: Vec<ListItem> = app
         .event_log
         .iter()
@@ -455,15 +512,35 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
                 EventKind::Success => ("✓", theme::OK),
                 EventKind::Info => ("·", theme::INK_FAINT),
             };
-            ListItem::new(Line::from(vec![
+            // timestamp + space + symbol + space
+            let prefix_w = e.timestamp.chars().count() + 3;
+            let wrapped = wrap_message(
+                &e.message,
+                text_w.saturating_sub(prefix_w),
+                text_w.saturating_sub(INDENT),
+            );
+
+            let mut rows = wrapped.into_iter();
+            let head = rows.next().unwrap_or_default();
+            let mut lines = vec![Line::from(vec![
                 Span::styled(
                     format!("{} ", e.timestamp),
                     Style::default().fg(theme::INK_FAINT),
                 ),
                 Span::styled(sym, Style::default().fg(color)),
                 Span::raw(" "),
-                Span::styled(&e.message, Style::default().fg(theme::INK_DIM)),
-            ]))
+                Span::styled(head, Style::default().fg(theme::INK_DIM)),
+            ])];
+            // The continuation hangs under the symbol rather than under
+            // the message: aligning it there would cost eleven of the
+            // panel's columns on every line.
+            lines.extend(rows.map(|tail| {
+                Line::from(vec![
+                    Span::raw(" ".repeat(INDENT)),
+                    Span::styled(tail, Style::default().fg(theme::INK_DIM)),
+                ])
+            }));
+            ListItem::new(lines)
         })
         .collect();
 
@@ -586,6 +663,24 @@ fn render_pending_chords(f: &mut Frame, app: &App, area: Rect) {
     );
 }
 
+/// The tail of a reauthor prompt: the format the prompt wants, or the
+/// reason the identity just typed was refused.
+///
+/// Both halves of the pair are asked for in full — `"Name <email>"` —
+/// and the old one is asked for in full precisely because it already
+/// exists: it is copied off the commits being fixed, not invented. A
+/// bare name or a bare email would also parse, and would also match
+/// commits nobody asked to touch.
+fn identity_hint<'a>(app: &'a App, hint: &'a str) -> Span<'a> {
+    match &app.history_view.identity_error {
+        Some(why) => Span::styled(format!("  {}", why), Style::default().fg(theme::BAD)),
+        None => Span::styled(
+            format!("  ({})", hint),
+            Style::default().fg(theme::INK_FAINT),
+        ),
+    }
+}
+
 fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let bc = app.brand_color();
     // The sidebar's own keys, and then every view's, land in the same strip:
@@ -687,11 +782,35 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::styled("[Esc]", Style::default().fg(bc)),
                         Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
                     ])
+                } else if !app.log.selected.is_empty() {
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            format!("{} picked ", app.log.selected.len()),
+                            Style::default().fg(theme::OK),
+                        ),
+                        Span::styled(
+                            app.log
+                                .selection_identity
+                                .as_deref()
+                                .unwrap_or("")
+                                .to_string(),
+                            Style::default().fg(theme::INK_FAINT),
+                        ),
+                        Span::styled("  [space]", Style::default().fg(bc)),
+                        Span::styled(" pick  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[o]", Style::default().fg(bc)),
+                        Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[Esc]", Style::default().fg(bc)),
+                        Span::styled(" clear", Style::default().fg(theme::INK_FAINT)),
+                    ])
                 } else {
                     Line::from(vec![
                         Span::raw(" "),
                         Span::styled("[↑↓/jk]", Style::default().fg(bc)),
                         Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[space]", Style::default().fg(bc)),
+                        Span::styled(" pick  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[o]", Style::default().fg(bc)),
                         Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[/]", Style::default().fg(bc)),
@@ -995,6 +1114,38 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                         ),
                         Span::styled("█", Style::default().fg(bc)),
+                    ]),
+                    HistoryConfirm::ReauthorOld => Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("reauthor — old identity: ", Style::default().fg(theme::BAD)),
+                        Span::styled(
+                            app.history_view.input.as_str(),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("█", Style::default().fg(bc)),
+                        identity_hint(
+                            app,
+                            "e.g. Ada Lovelace <ada@example.com> — as it stands in the commits",
+                        ),
+                    ]),
+                    HistoryConfirm::ReauthorNew => Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            match app.log.selected.len() {
+                                0 => "reauthor — new identity: ".to_string(),
+                                n => format!("reauthor {} picked — new identity: ", n),
+                            },
+                            Style::default().fg(theme::BAD),
+                        ),
+                        Span::styled(
+                            app.history_view.input2.as_str(),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("█", Style::default().fg(bc)),
+                        identity_hint(
+                            app,
+                            "e.g. Ada Lovelace <ada@example.com> — both halves required",
+                        ),
                     ]),
                     HistoryConfirm::Blame => Line::from(vec![
                         Span::raw(" "),
@@ -2848,6 +2999,49 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The panel is 55 columns at its widest and the messages are
+    /// sentences. On one `Line` ratatui clipped them: everything past
+    /// the first few words was simply not on screen.
+    #[test]
+    fn event_messages_wrap_instead_of_being_clipped() {
+        let lines = wrap_message(
+            "reauthored author and committer on 3 picked commits",
+            12,
+            18,
+        );
+
+        assert!(lines.len() > 1, "still one line: {lines:?}");
+        assert!(lines[0].chars().count() <= 12, "first line: {:?}", lines[0]);
+        for line in &lines[1..] {
+            assert!(line.chars().count() <= 18, "wrapped line: {line:?}");
+        }
+        assert_eq!(
+            lines.join(" "),
+            "reauthored author and committer on 3 picked commits",
+            "wrapping lost or duplicated words"
+        );
+    }
+
+    /// A hash, a path or an identity has no space to break at, and a word
+    /// wider than the panel would clip exactly like before.
+    #[test]
+    fn a_word_wider_than_the_panel_is_broken() {
+        let lines = wrap_message("44322bdc0ffee1234567890abcdef", 10, 10);
+
+        assert!(lines.len() >= 3);
+        for line in &lines {
+            assert!(line.chars().count() <= 10, "unbroken: {line:?}");
+        }
+        assert_eq!(lines.concat(), "44322bdc0ffee1234567890abcdef");
+    }
+
+    /// Empty in, one empty line out — never an empty item that renders as
+    /// nothing at all.
+    #[test]
+    fn an_empty_message_still_yields_a_line() {
+        assert_eq!(wrap_message("", 10, 10), vec![String::new()]);
     }
 
     #[test]

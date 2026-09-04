@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pick commits in the log, then act on the picks.** `space` marks the commit
+  under the caret and the ops dropdown becomes a short menu that takes the
+  marked set as its subject — `reauthor picked` and `clear picks`. `Esc` drops
+  the selection.
+  - **The first pick locks the set to that author identity**, and commits by
+    anyone else are greyed and refused, with the reason in the event log. That
+    is not a UI nicety: `reauthor` replaces *one* `--old`, so a set spanning
+    two identities has nothing coherent to run with.
+  - Because the set already agrees on an identity, `reauthor picked` never
+    asks for the old one — it is the half that has to match exactly, and the
+    selection already has it right. Only the replacement is typed.
+- **`torii history reauthor --only <rev>...`** — restrict the identity change
+  to named commits (repeatable or comma-separated), which is what the picked
+  menu runs. Note what it does *not* promise: commits after a rewritten one are
+  recreated regardless, because their parent moved, so their hashes change
+  either way. A rev the walk never reaches is an error rather than a silent
+  no-op.
+- **`reauthor` in the log's ops menu.** Replacing an author identity across
+  history was CLI-only — the menu went straight from "rewrite dates" to "scan
+  history". It now prompts for the old identity and then the new one, and
+  rewrites the committer alongside the author: a menu has no room for the CLI's
+  `--committer` flag, and an identity fixed on one field and left stale on the
+  other is the half-rewrite that sends people back to the terminal.
+  - **Both prompts want `Name <email>` in full**, including the old one — the
+    CLI's looser `--old` (a bare name or a bare email) is bounded by `--since`
+    and `--dry-run`, and the menu has neither. A long history keeps the same
+    person under several identities, and half a pair matches all of them.
+  - A malformed identity is refused on the prompt line, with the parser's own
+    reason next to the cursor, instead of Enter doing nothing.
+  - The two prompts accept shifted characters. Every older prompt matches
+    `KeyModifiers::NONE` alone, which is harmless for a path or a ref and
+    quietly eats the capitals and `<>` an identity is made of.
+  - Refusals arrive verbatim, so the dirty-tree guard now reads as
+    "working tree has uncommitted changes" instead of "reauthor failed".
+
+### Fixed
+
+- **Event-log messages wrap instead of being cut off.** Each entry was one
+  ratatui `Line`, and a `Line` in a `List` is clipped, not wrapped — in a panel
+  55 columns wide at most, that left the timestamp and the first few words of
+  every message. Entries now flow over as many lines as they need, with a
+  hanging indent under the status symbol, and a word too wide for the panel
+  (a hash, a path, an identity) is broken rather than lost.
+
 ## [0.15.0] - 2026-09-03
 
 ### Added
