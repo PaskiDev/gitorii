@@ -52,6 +52,7 @@ pub use platforms::pr;
 pub use platforms::registry as platforms_registry;
 pub use platforms::release;
 pub use platforms::runner;
+pub use platforms::variable;
 
 // vcs/
 pub use vcs::commit_scan;

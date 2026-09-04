@@ -16,6 +16,7 @@ pub mod pr;
 pub mod registry;
 pub mod release;
 pub mod runner;
+pub mod variable;
 
 // Per-platform client implementations.
 pub mod azure;

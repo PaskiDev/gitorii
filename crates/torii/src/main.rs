@@ -17,7 +17,7 @@ mod tui;
 pub use torii_lib::{cloud, error, platforms, transport, util, vcs, versioning, workspace};
 
 // platforms/
-pub use torii_lib::{issue, package, pipeline, platforms_registry, pr, release, runner};
+pub use torii_lib::{issue, package, pipeline, platforms_registry, pr, release, runner, variable};
 
 // vcs/
 pub use torii_lib::{

@@ -54,7 +54,7 @@ pub struct CiVariable {
 }
 ```
 
-The same struct is what `torii ci var` and the TUI variables view manage, and
+The same struct is what `torii variable` and the TUI variables view manage, and
 what `poll` hands the executor. Two consumers, one definition:
 
 - `masked` decides what gets struck out of the trace before it is sent.

@@ -28,6 +28,7 @@ mod sign;
 mod snapshot;
 mod tag;
 mod tui;
+mod variable;
 mod workspace;
 mod wrappers;
 
@@ -46,6 +47,7 @@ use remote::RemoteCommands;
 use runner::RunnerCommands;
 use snapshot::SnapshotCommands;
 use tag::TagCommands;
+use variable::VariableCommands;
 use workspace::WorkspaceCommands;
 use wrappers::{
     BisectCommands, NotesCommands, PatchCommands, SubmoduleCommands, SubtreeCommands,
@@ -866,6 +868,43 @@ Platform support:
         remote: String,
     },
 
+    /// Manage CI/CD variables and secrets (GitLab project variables)
+    #[command(
+        alias = "var",
+        after_help = "Examples:
+  torii variable list                            Keys, types and flags; values elided
+  torii variable list --show-values              Print the values too
+  torii variable get DEPLOY_ENV                  One variable's settings
+  torii variable set LOG_LEVEL --value debug     A plain build flag
+  torii variable set AUR_SSH_PRIVATE_KEY --from-file ~/.ssh/aur --file --protected
+  torii variable set TOKEN --stdin --masked      Read the value off a pipe
+  torii variable rm OLD_KEY
+
+  Three ways in for a value, and they are not interchangeable. --value
+  puts it in argv, where any process on the machine can read it: use it
+  for build flags, never for credentials. --from-file keeps newlines
+  intact, which is what an SSH key or a certificate needs. --stdin reads
+  a pipe.
+
+  Anything multi-line has to be a file variable (--file): the job then
+  receives a path to a temporary file instead of the content, because a
+  PEM body in an environment variable arrives mangled. Masking is
+  checked before the write rather than after — a multi-line value cannot
+  be masked on GitLab at all, and being told that here is cheaper than a
+  400 with no reason.
+
+Platform support:
+  - GitLab:  list + get + set + rm on project variables
+  - Others:  not implemented yet"
+    )]
+    Variable {
+        #[command(subcommand)]
+        action: VariableCommands,
+        /// Which git remote to use for platform detection. Default `origin`.
+        #[arg(long, default_value = "origin", global = true)]
+        remote: String,
+    },
+
     /// Manage the platforms registry (self-hosted GitLab, Gitea /
     /// Forgejo, GitHub Enterprise, Bitbucket Data Center).
     ///
@@ -1364,6 +1403,7 @@ impl Cli {
             Commands::Job { action, remote } => pipeline::run_job(action, remote),
             Commands::Platforms { action } => platforms::run(action),
             Commands::Runner { action, remote } => runner::run(action, remote),
+            Commands::Variable { action, remote } => variable::run(action, remote),
             Commands::Package { action, remote } => package::run(action, remote),
             Commands::Release { action, remote } => release::run(action, remote),
             Commands::Ignore { action } => ignore::handle_ignore(action),
