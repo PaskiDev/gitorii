@@ -13,11 +13,21 @@ use super::views;
 #[allow(dead_code)]
 pub const SELECTED_BG: Color = Color::Rgb(40, 40, 60);
 
-// Paleta viva
+// Paleta viva.
+//
+// The tones with no consumer are silenced deliberately, the way SELECTED_BG
+// and C_BORDER already were: this is a palette, and it is kept whole so the
+// next view picks a tone from here instead of inventing one inline. C_WHITE,
+// C_CYAN and C_YELLOW lost their only caller when views/mirror.rs was retired
+// in 0.15.0; dropping them would leave four of seven and the next view that
+// needed white would just redefine it.
+#[allow(dead_code)]
 pub const C_WHITE: Color = Color::Rgb(220, 220, 220);
 pub const C_SUBTLE: Color = Color::Rgb(140, 140, 160);
 pub const C_DIM: Color = Color::Rgb(80, 80, 100);
+#[allow(dead_code)]
 pub const C_CYAN: Color = Color::Rgb(80, 220, 200);
+#[allow(dead_code)]
 pub const C_YELLOW: Color = Color::Rgb(255, 210, 80);
 pub const C_GREEN: Color = Color::Rgb(100, 220, 100);
 pub const C_RED: Color = Color::Rgb(255, 100, 100);
