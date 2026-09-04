@@ -52,11 +52,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 ListItem::new(Line::from(vec![
                     theme::caret(app, is_sel),
                     Span::styled(
-                        format!("{:<12} ", &r.name),
+                        format!("{:<12} ", r.name),
                         Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("{:<10}", &r.platform),
+                        format!("{:<10}", r.platform),
                         Style::default().fg(platform_color(&r.platform)),
                     ),
                     Span::styled(truncate(&r.url, 30), Style::default().fg(theme::INK_FAINT)),
@@ -80,15 +80,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 ListItem::new(Line::from(vec![
                     theme::caret(app, is_sel),
                     Span::styled(
-                        format!("{:<12} ", &m.name),
+                        format!("{:<12} ", m.name),
                         Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
                     Span::styled(
-                        format!("{:<9}", &m.kind),
+                        format!("{:<9}", m.kind),
                         Style::default().fg(kind_color(&m.kind)),
                     ),
                     Span::styled(
-                        format!(" {:<10}", &m.platform),
+                        format!(" {:<10}", m.platform),
                         Style::default().fg(platform_color(&m.platform)),
                     ),
                 ]))

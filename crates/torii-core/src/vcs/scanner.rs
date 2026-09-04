@@ -25,7 +25,7 @@ fn mask(value: &str) -> String {
     let visible = 4;
     format!(
         "{}{}",
-        &chars[..visible].iter().collect::<String>(),
+        chars[..visible].iter().collect::<String>(),
         "*".repeat(chars.len() - visible)
     )
 }

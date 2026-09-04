@@ -90,7 +90,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             ListItem::new(Line::from(vec![
                 theme::caret(app, is_active),
                 Span::styled(
-                    format!("{:<18}", &ws.name),
+                    format!("{:<18}", ws.name),
                     Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                 ),
                 Span::styled(
@@ -145,10 +145,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                             format!("{:<20}", repo_name(&r.path)),
                             Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
                         ),
-                        Span::styled(
-                            format!(" {:<10}", &r.branch),
-                            Style::default().fg(theme::OK),
-                        ),
+                        Span::styled(format!(" {:<10}", r.branch), Style::default().fg(theme::OK)),
                         sync_span(r.ahead, r.behind),
                         if r.dirty {
                             Span::styled(

@@ -194,7 +194,10 @@ fn render_list(f: &mut Frame, app: &App, area: Rect) {
         body,
         "submodule",
         state.offset(),
-        app.submodule_view.items.len().saturating_sub(state.offset()),
+        app.submodule_view
+            .items
+            .len()
+            .saturating_sub(state.offset()),
     );
 }
 
