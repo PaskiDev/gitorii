@@ -1884,9 +1884,7 @@ target/
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
                 terminal
                     .draw(|f| crate::tui::ui::render(f, &app))
-                    .unwrap_or_else(|e| {
-                        panic!("{:?} at {w}x{h}: {e}", App::view_for_idx(idx))
-                    });
+                    .unwrap_or_else(|e| panic!("{:?} at {w}x{h}: {e}", App::view_for_idx(idx)));
             }
         }
     }
