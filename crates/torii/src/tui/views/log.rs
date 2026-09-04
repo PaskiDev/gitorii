@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -336,7 +336,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .border_type(app.border_type())
             .border_style(Style::default().fg(theme::RULE));
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(drop_items).block(drop_block),
             drop_area,
@@ -367,7 +367,7 @@ fn render_signature_overlay(f: &mut Frame, app: &App, area: Rect) {
         width: w,
         height: h,
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let (title, body): (String, Vec<Line>) = match state {
         SignatureOverlay::Loading { oid } => (

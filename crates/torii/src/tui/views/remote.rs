@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -289,7 +289,7 @@ fn render_ops(f: &mut Frame, app: &App, body: Rect, sel_list_pos: usize) {
     let mut state = ListState::default();
     state.select(Some(app.remote_view.ops_idx));
 
-    f.render_widget(Clear, drop_area);
+    let drop_area = theme::clear(f, drop_area);
     f.render_stateful_widget(List::new(items).block(popup(app)), drop_area, &mut state);
 }
 
@@ -300,7 +300,7 @@ fn render_url_editor(f: &mut Frame, app: &App, area: Rect) {
     let oy = area.y + area.height.saturating_sub(oh) / 2;
     let overlay = Rect::new(ox, oy, ow, oh);
 
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("  new url: ", Style::default().fg(theme::INK_FAINT)),

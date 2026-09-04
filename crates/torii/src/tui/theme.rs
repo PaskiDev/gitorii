@@ -207,6 +207,32 @@ pub fn hrule_content(f: &mut Frame, area: Rect, ticks: &[(u16, Tick)]) {
     hrule(f, widened, ticks);
 }
 
+/// An overlay cut down to what the terminal actually has.
+///
+/// `Clear` walks its area cell by cell through the buffer's `Index`, which
+/// panics with "index outside of buffer" the moment it reaches a cell that is
+/// not there. So a modal wider or taller than the window did not look wrong —
+/// it took the whole TUI down. Every overlay area goes through here first.
+///
+/// A clipped modal draws cut off, which is worse-looking than one that fits
+/// and far better than a crash.
+pub fn fit(f: &Frame, area: Rect) -> Rect {
+    area.intersection(f.area())
+}
+
+/// Clear the ground an overlay is about to draw on, and hand back the area it
+/// actually got.
+///
+/// Callers rebind their own rect to the result, so the box, the list and the
+/// text that follow are laid out inside the clipped area rather than the one
+/// that was asked for. Clearing without doing that would keep the panic one
+/// widget further down.
+pub fn clear(f: &mut Frame, area: Rect) -> Rect {
+    let area = fit(f, area);
+    f.render_widget(ratatui::widgets::Clear, area);
+    area
+}
+
 /// Write a single glyph, ignoring positions outside the viewport.
 fn put(f: &mut Frame, x: u16, y: u16, symbol: &str, style: Style) {
     let inside = f.area();

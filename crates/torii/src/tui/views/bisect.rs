@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Wrap},
     Frame,
 };
 
@@ -107,7 +107,7 @@ fn render_ref_picker(f: &mut Frame, app: &App, area: Rect) {
         width: w,
         height: h,
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     // Build the filtered list.
     let filtered_idx = filter_indexes(&picker.all, &picker.filter);
@@ -516,7 +516,7 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let items: Vec<ListItem> = ops
         .iter()
@@ -572,7 +572,7 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect) {
         width: w,
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let body = vec![
         Line::from(Span::styled(
@@ -613,7 +613,7 @@ fn render_confirm_reset(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
     let body = vec![
         Line::from(Span::styled(
             "  Reset bisect and restore original HEAD?",

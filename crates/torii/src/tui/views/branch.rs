@@ -4,7 +4,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -173,7 +173,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .border_type(app.border_type())
             .border_style(Style::default().fg(theme::RULE));
 
-        f.render_widget(Clear, drop_area);
+        let drop_area = theme::clear(f, drop_area);
         f.render_stateful_widget(
             List::new(items).block(drop_block),
             drop_area,

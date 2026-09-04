@@ -2,7 +2,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -413,16 +413,19 @@ fn render_repo_picker(f: &mut Frame, app: &App, header_area: Rect) {
         .border_type(app.border_type())
         .border_style(Style::default().fg(bc));
 
-    f.render_widget(Clear, drop_area);
+    let drop_area = theme::clear(f, drop_area);
     f.render_stateful_widget(List::new(items).block(block), drop_area, &mut state);
 }
 
 fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
-    let panel_w = (area.width / 3).clamp(28, 55);
-    let panel_h = (area.height / 2).clamp(6, 24);
+    // The preferred size, then what the window can actually spare. A minimum
+    // wider than the terminal is not a minimum, it is an overflow: asking for
+    // 28 columns inside 20 used to put the panel outside the buffer.
+    let panel_w = (area.width / 3).clamp(28, 55).min(area.width);
+    let panel_h = (area.height / 2).clamp(6, 24).min(area.height);
     let x = (area.x + area.width).saturating_sub(panel_w + 1);
     let y = (area.y + area.height).saturating_sub(panel_h + 1);
-    let panel_area = Rect::new(x, y, panel_w, panel_h);
+    let panel_area = theme::fit(f, Rect::new(x, y, panel_w, panel_h));
 
     // A popup keeps its box — it is a window — but the box is a rule, the
     // title is ink, and the keys read like the strip at the foot.
@@ -440,7 +443,7 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
         .border_style(Style::default().fg(theme::RULE));
 
     let inner = block.inner(panel_area);
-    f.render_widget(Clear, panel_area);
+    let panel_area = theme::clear(f, panel_area);
     f.render_widget(block, panel_area);
 
     let items: Vec<ListItem> = app
@@ -480,7 +483,7 @@ fn render_palette(f: &mut Frame, app: &App, area: Rect) {
         w,
         h,
     );
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
 
     let block = Block::default()
         .title(Span::styled(
@@ -570,7 +573,7 @@ fn render_pending_chords(f: &mut Frame, app: &App, area: Rect) {
     let label = format!(" {} … ", text.join(" "));
     let w = label.chars().count() as u16;
     let spot = Rect::new(area.x, area.y, w.min(area.width), 1);
-    f.render_widget(Clear, spot);
+    let spot = theme::clear(f, spot);
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
             label,

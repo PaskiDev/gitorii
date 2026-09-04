@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
@@ -405,7 +405,7 @@ fn render_setting_input(f: &mut Frame, app: &App, area: Rect) {
         w,
         h,
     );
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
 
     let cursor = iv.cursor.min(iv.input.len());
     let (before, after) = iv.input.split_at(cursor);
@@ -581,7 +581,7 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
         w,
         h,
     );
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
 
     let msg = &iv.input;
     let cursor = iv.cursor.min(msg.len());
@@ -631,7 +631,7 @@ fn render_confirm(f: &mut Frame, app: &App, area: Rect) {
         w,
         h,
     );
-    f.render_widget(Clear, overlay);
+    let overlay = theme::clear(f, overlay);
 
     let body = vec![
         Line::from(vec![

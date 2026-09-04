@@ -29,7 +29,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph, Tabs, Wrap},
     Frame,
 };
 
@@ -722,7 +722,7 @@ fn render_ops_dropdown(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let items: Vec<ListItem> = ops
         .iter()
@@ -809,7 +809,7 @@ fn render_filter_dropdown(f: &mut Frame, app: &App, area: Rect) {
         width: w.min(area.width),
         height: h.min(area.height),
     };
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let cur_status = pv.filter_status.as_deref().unwrap_or("(any)");
 
@@ -882,7 +882,7 @@ fn render_remote_popup(f: &mut Frame, app: &App, area: Rect) {
         height: h.min(area.height),
     };
 
-    f.render_widget(Clear, popup);
+    let popup = theme::clear(f, popup);
 
     let items: Vec<ListItem> = if pv.remotes.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
