@@ -5,19 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-09-05
 
 ### Added
 
-- **Filter the log by author.** The search box (`/`) takes an `author:<who>`
-  qualifier that narrows the list to one identity instead of matching the
-  message as well, and `A` applies it to the commit under the caret without
-  going through the prompt — pressing it again lifts the filter, which is the
-  way back out, since a filtered log leaves no row of anyone else's to move to.
+- **A clone view in the TUI.** The sidebar's new `clone` entry lists the
+  repositories of whichever account you have a token for, filters them as you
+  type, and clones the one you pick — with a progress bar, because a clone is
+  the one operation in torii that can take a minute and say nothing.
+  - **The destination is on screen before the clone starts, and is editable.**
+    It is `<clone.base_dir>/<repo>`, re-derived every time the caret moves or
+    the URL box changes, and left alone the moment you edit it: a field that
+    overwrites what you typed is not an editable field. An existing path is
+    refused up front rather than by libgit2 halfway in.
+  - **`[u]` takes a URL or a local path**, for everything a listing cannot
+    name — someone else's repository, a host torii has no listing for, a bare
+    repo on this disk. It wins over the selection when it has anything in it,
+    and the destination follows it, so the path shown is always the path used.
+  - **`[p]` switches host** and says which ones have a token here. A host is
+    still selectable without one; the error it gives names the command that
+    sets it, which is more use than a row that cannot be clicked.
+  - **`[t]` picks ssh or https**, seeded the way `torii clone` seeds it —
+    `mirror.default_protocol`, or the presence of an SSH key.
+  - **When it finishes, the repository is open.** It is also registered in the
+    active workspace, if there is one, so the repo switcher and the multi-repo
+    commands see it without being told twice. Cloning a repository in order to
+    then go and find it is two steps too many.
+  - The listing is a background worker, like every other network call in the
+    TUI; the view stays usable while it runs, and a host with no token is
+    never asked, because the answer is already known.
+- **`clone.base_dir`** — where a clone lands when no destination is given.
+  Default is `.`, which is what `git clone` does, so nothing moves for anyone
+  who does not set it. `~` is expanded. `torii config set clone.base_dir
+  ~/repos`.
+- **`list_repos` for Gitea, Forgejo and Codeberg.** All three answer the same
+  API and all three returned "not yet wired", which left the new view with
+  three empty hosts. One paged implementation now serves them, stopping on the
+  first short page and at a ceiling, so a host that ignores `limit` cannot
+  spin. Bitbucket, sourcehut, Azure and Radicle still say they are not wired —
+  they are, at least, saying it in a view that has a URL box next to it.
+- **`GitRepo::clone_repo_with_progress`** — the clone, with libgit2's progress
+  handed to a caller-supplied sink instead of to `stdout`. `clone_repo` is now
+  that function plus the printing sink the CLI wants, so credentials,
+  `TORII_CLONE_DEPTH` and the empty-remote HEAD fixup have one implementation
+  rather than two that drift.
+
+- **Filter the log by author.** `A` opens a dropdown of the identities in the
+  loaded log — most commits first, with a count each — over an "all authors"
+  row that lifts the filter. The cursor starts on whoever is filtered in
+  already, or failing that on the author of the commit under the caret, so the
+  usual ask is `A` then Enter. The search box (`/`) reaches the same filter as
+  an `author:<who>` qualifier, which narrows to one identity instead of
+  matching the message as well.
   - The term is matched against the whole `Name <email>`, so a bare name, a
-    bare address and a pasted identity all reach the same commits; `A` writes
-    the identity in full, because a name alone folds together two people who
-    share one, and one person's two addresses.
+    bare address and a pasted identity all reach the same commits; the menu
+    writes the identity in full, because a name alone folds together two people
+    who share one, and one person's two addresses.
+  - "all authors" is a row rather than a second keybind: with the filter on
+    there is no commit of anyone else's left in the list, so the menu has to
+    carry its own undo.
   - It pairs with the picking that landed alongside it: filter to the identity
     you mean to replace, then `space` down the list, and every commit the pick
     lock would have refused is already gone from the view.
@@ -68,6 +114,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`torii clone` ends its progress line.** The last `📥 …` was written with a
+  carriage return and no newline, so `✅ Cloned repository to: …` landed on top
+  of its tail.
 - **Event-log messages wrap instead of being cut off.** Each entry was one
   ratatui `Line`, and a `Line` in a `List` is clipped, not wrapped — in a panel
   55 columns wide at most, that left the timestamp and the first few words of
