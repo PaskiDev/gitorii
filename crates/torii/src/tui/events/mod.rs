@@ -1,6 +1,6 @@
 use super::app::{
-    App, BranchConfirm, CommitFocus, HistoryConfirm, IssueConfirm, Panel, PrConfirm, RemoteConfirm,
-    SnapshotFocus, TagConfirm, View, WorkspaceConfirm, WorkspaceFocus,
+    App, BranchConfirm, CloneFocus, CommitFocus, HistoryConfirm, IssueConfirm, Panel, PrConfirm,
+    RemoteConfirm, SnapshotFocus, TagConfirm, View, WorkspaceConfirm, WorkspaceFocus,
 };
 use crate::error::Result;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -9,6 +9,7 @@ use std::time::Duration;
 mod auth;
 mod bisect;
 mod branch;
+mod clone;
 mod commit;
 mod config;
 mod history;
@@ -27,6 +28,7 @@ mod worktree;
 use auth::*;
 use bisect::*;
 use branch::*;
+use clone::*;
 pub use commit::COMMIT_TYPES;
 use commit::*;
 use config::*;
@@ -282,6 +284,11 @@ impl EventHandler {
                             | IssueConfirm::Comment
                     ),
                     View::Config => app.config_view.editing,
+                    // 0.16.0 — the clone view's three text fields.
+                    View::Clone => matches!(
+                        app.clone_view.focus,
+                        CloneFocus::Filter | CloneFocus::Url | CloneFocus::Dest
+                    ),
                     _ => false,
                 };
                 if key.code == KeyCode::Char('e') && key.modifiers == KeyModifiers::NONE && !typing
@@ -324,6 +331,7 @@ impl EventHandler {
                             View::Remote | View::Mirror => handle_remote(key, app),
                             View::Workspace => handle_workspace(key, app),
                             View::Config => handle_config(key, app),
+                            View::Clone => handle_clone(key, app),
                             _ => None,
                         });
                     }
@@ -342,6 +350,7 @@ impl EventHandler {
                         View::Workspace => handle_workspace(key, app),
                         View::Pr => handle_pr(key, app),
                         View::Issue => handle_issue(key, app),
+                        View::Clone => handle_clone(key, app),
                         _ => None,
                     };
                     if view_result.is_some() {
@@ -579,6 +588,42 @@ impl EventHandler {
                             }
                         }
 
+                        // 0.16.0 — Clone: innermost first, the same way
+                        // the log's chain walks its overlays. A clone
+                        // still running swallows Esc rather than hiding
+                        // the only thing that reports it.
+                        View::Clone => {
+                            if app.clone_run_in_flight() {
+                                true
+                            } else if app.clone_view.run.is_some() {
+                                app.clone_view.run = None;
+                                true
+                            } else {
+                                match app.clone_view.focus {
+                                    CloneFocus::Platforms | CloneFocus::Url => {
+                                        app.clone_view.focus = CloneFocus::List;
+                                        true
+                                    }
+                                    CloneFocus::Filter => {
+                                        app.clone_view.filter.clear();
+                                        app.clone_refilter();
+                                        app.clone_view.focus = CloneFocus::List;
+                                        true
+                                    }
+                                    CloneFocus::Dest => {
+                                        // Give the field back to the
+                                        // deriver: that is what it held
+                                        // before the edit started.
+                                        app.clone_view.dest_edited = false;
+                                        app.clone_sync_dest();
+                                        app.clone_view.focus = CloneFocus::List;
+                                        true
+                                    }
+                                    CloneFocus::List => false,
+                                }
+                            }
+                        }
+
                         View::Platform => {
                             use crate::tui::app::PlatformFocus;
                             match app.platform_view.focus {
@@ -638,6 +683,8 @@ impl EventHandler {
                     View::Auth => handle_auth(key, app),
                     // 0.7.12 — unified Platform view.
                     View::Platform => handle_platform(key, app),
+                    // 0.16.0 — browse and clone.
+                    View::Clone => handle_clone(key, app),
                     View::Config => handle_config(key, app),
                     View::Settings => handle_config(key, app), // fused into Config
                     View::Help => handle_help(key, app),

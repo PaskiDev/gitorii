@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod bisect;
 pub mod branch;
+pub mod clone;
 pub mod commit;
 pub mod config;
 pub mod dashboard;

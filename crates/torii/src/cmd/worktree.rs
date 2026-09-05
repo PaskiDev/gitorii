@@ -238,7 +238,7 @@ fn resolve_target_path(
     Ok(base.join(leaf))
 }
 
-fn expand_tilde(p: &Path) -> PathBuf {
+pub(crate) fn expand_tilde(p: &Path) -> PathBuf {
     let s = p.to_string_lossy();
     if let Some(stripped) = s.strip_prefix("~/") {
         if let Some(home) = dirs::home_dir() {

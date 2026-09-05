@@ -68,6 +68,10 @@ impl App {
                 self.bisect_view.focus == BisectFocus::InputArgs
                     || self.bisect_view.focus == BisectFocus::RefPicker
             }
+            View::Clone => matches!(
+                self.clone_view.focus,
+                CloneFocus::Filter | CloneFocus::Url | CloneFocus::Dest
+            ),
             _ => false,
         }
     }
@@ -330,6 +334,7 @@ fn view_for_action(id: &str) -> Option<View> {
         "goto:pr" => View::Pr,
         "goto:issue" => View::Issue,
         "goto:platform" => View::Platform,
+        "goto:clone" => View::Clone,
         "goto:remote" => View::Remote,
         "goto:workspace" => View::Workspace,
         "goto:worktree" => View::Worktree,
@@ -436,6 +441,7 @@ impl App {
             "worktree" => self.worktree_view.idx,
             "submodule" => self.submodule_view.idx,
             "auth" => self.auth_view.idx,
+            "clone" => self.clone_view.idx,
             "config" => self.config_view.idx,
             "config.keys" => self.config_view.keys_idx,
             "config.tui" => self.config_view.tui_idx,
@@ -464,6 +470,12 @@ impl App {
             "worktree" => self.worktree_view.idx = index,
             "submodule" => self.submodule_view.idx = index,
             "auth" => self.auth_view.idx = index,
+            // The row is an index into the filtered list, so the
+            // destination has to follow it the way a keypress would.
+            "clone" => {
+                self.clone_view.idx = index;
+                self.clone_sync_dest();
+            }
             "config" => self.config_view.idx = index,
             "config.keys" => self.config_view.keys_idx = index,
             "config.tui" => self.config_view.tui_idx = index,

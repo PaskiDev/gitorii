@@ -4,6 +4,7 @@ use git2::Repository;
 mod auth;
 mod bisect;
 mod branch;
+mod clone;
 mod commit;
 mod config;
 mod dashboard;
@@ -28,6 +29,7 @@ mod worktree;
 pub use auth::*;
 pub use bisect::*;
 pub use branch::*;
+pub use clone::*;
 pub use commit::*;
 pub use config::*;
 pub use dashboard::*;
@@ -89,6 +91,8 @@ pub enum View {
     Safety,
     /// New in 0.14.1 — what the repo, or the whole workspace, looks like.
     Stats,
+    /// New in 0.16.0 — browse an account's repositories and clone one.
+    Clone,
     /// Deprecated in 0.7.2 — merged into `Config` as the "TUI" tab.
     #[allow(dead_code)]
     Settings,
@@ -168,6 +172,9 @@ pub struct App {
     /// 0.7.12 — unified Platform view (pipelines/jobs/releases/packages).
     pub platform_view: PlatformState,
 
+    /// 0.16.0 — the clone browser.
+    pub clone_view: CloneState,
+
     pub event_log: Vec<EventEntry>,
     pub show_event_log: bool,
     pub sync_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
@@ -193,6 +200,15 @@ pub struct App {
     /// a new `OauthStatus`; the main loop pumps the receiver into
     /// `auth_view.oauth_flow.status`.
     pub auth_oauth_rx: Option<std::sync::mpsc::Receiver<crate::tui::app::OauthStatus>>,
+
+    /// 0.16.0 — the clone view's two workers. `clone_repos_rx` carries
+    /// one answer (the account's repositories, or why not); the clone
+    /// itself reports repeatedly over `clone_run_rx` until it ends in
+    /// `Done` or `Error`.
+    pub clone_repos_rx: Option<
+        std::sync::mpsc::Receiver<std::result::Result<Vec<crate::remote::RemoteRepo>, String>>,
+    >,
+    pub clone_run_rx: Option<std::sync::mpsc::Receiver<crate::tui::app::CloneStatus>>,
 
     /// 0.7.36 — armor overlay worker. The handler kicks one off when
     /// the user presses `S` over a signed commit; the worker extracts
@@ -255,6 +271,7 @@ impl App {
             bisect_view: BisectState::default(),
             auth_view: AuthState::default(),
             platform_view: PlatformState::default(),
+            clone_view: CloneState::default(),
             event_log: vec![],
             show_event_log: false,
             sync_rx: None,
@@ -268,6 +285,8 @@ impl App {
             platform_job_log_rx: None,
             platform_action_rx: None,
             auth_oauth_rx: None,
+            clone_repos_rx: None,
+            clone_run_rx: None,
             log_signature_rx: None,
             repo_picker_open: false,
             repo_picker_idx: 0,
@@ -329,6 +348,7 @@ impl App {
             bisect_view: BisectState::default(),
             auth_view: AuthState::default(),
             platform_view: PlatformState::default(),
+            clone_view: CloneState::default(),
             event_log: vec![],
             show_event_log: false,
             sync_rx: None,
@@ -342,6 +362,8 @@ impl App {
             platform_job_log_rx: None,
             platform_action_rx: None,
             auth_oauth_rx: None,
+            clone_repos_rx: None,
+            clone_run_rx: None,
             log_signature_rx: None,
             repo_picker_open: false,
             repo_picker_idx: 0,
@@ -368,7 +390,7 @@ impl App {
     ///   - local action:   save, sync, snapshot
     ///   - navigation:     log, branch, tags
     ///   - broadcast:      pr/mr, issues, platform
-    ///   - multi-platform: remote, workspace, worktrees, submodules
+    ///   - multi-platform: clone, remote, workspace, worktrees, submodules
     ///   - admin:          bisect, auth, config
     ///
     /// Must stay in sync with TABS in src/tui/ui.rs and the sidebar_idx
@@ -387,20 +409,21 @@ impl App {
             9 => View::Pr,
             10 => View::Issue,
             11 => View::Platform,
-            12 => View::Remote,
-            13 => View::Workspace,
-            14 => View::Worktree,
-            15 => View::Submodule,
-            16 => View::Bisect,
-            17 => View::Auth,
-            18 => View::Config,
+            12 => View::Clone,
+            13 => View::Remote,
+            14 => View::Workspace,
+            15 => View::Worktree,
+            16 => View::Submodule,
+            17 => View::Bisect,
+            18 => View::Auth,
+            19 => View::Config,
             _ => View::Dashboard,
         }
     }
 
     /// Total entries in the sidebar — keep in sync with `view_for_idx`
     /// and TABS in ui.rs.
-    const SIDEBAR_LEN: usize = 19;
+    const SIDEBAR_LEN: usize = 20;
 
     pub fn sidebar_up(&mut self) {
         if self.sidebar_idx > 0 {
@@ -459,6 +482,8 @@ impl App {
             // 0.7.12 — unified Platform view: discover remotes + load the
             // current sub-tab in the background.
             View::Platform => self.load_platform_enter(),
+            // 0.16.0 — the clone browser asks its platform on entry.
+            View::Clone => self.load_clone_enter(),
             _ => {}
         }
         // Sidebar order in 0.7.2 (16 entries, see TABS in ui.rs).
@@ -479,15 +504,16 @@ impl App {
             View::Pr => 9,
             View::Issue => 10,
             View::Platform => 11,
-            View::Remote => 12,
-            View::Mirror => 12, // fused into Remote
-            View::Workspace => 13,
-            View::Worktree => 14,
-            View::Submodule => 15,
-            View::Bisect => 16,
-            View::Auth => 17,
-            View::Config => 18,
-            View::Settings => 18, // fused into Config
+            View::Clone => 12,
+            View::Remote => 13,
+            View::Mirror => 13, // fused into Remote
+            View::Workspace => 14,
+            View::Worktree => 15,
+            View::Submodule => 16,
+            View::Bisect => 17,
+            View::Auth => 18,
+            View::Config => 19,
+            View::Settings => 19, // fused into Config
             _ => self.sidebar_idx,
         };
         self.view = view;
@@ -512,15 +538,16 @@ impl App {
                 View::Pr => 9,
                 View::Issue => 10,
                 View::Platform => 11,
-                View::Remote => 12,
-                View::Mirror => 12, // fused into Remote
-                View::Workspace => 13,
-                View::Worktree => 14,
-                View::Submodule => 15,
-                View::Bisect => 16,
-                View::Auth => 17,
-                View::Config => 18,
-                View::Settings => 18, // fused into Config
+                View::Clone => 12,
+                View::Remote => 13,
+                View::Mirror => 13, // fused into Remote
+                View::Workspace => 14,
+                View::Worktree => 15,
+                View::Submodule => 16,
+                View::Bisect => 17,
+                View::Auth => 18,
+                View::Config => 19,
+                View::Settings => 19, // fused into Config
                 _ => 0,
             };
             // If returning to a view with its own content, keep focus in the view
@@ -1883,6 +1910,17 @@ target/
                 app.go_to(App::view_for_idx(idx));
                 app.show_event_log = true;
                 app.palette.open = true;
+                app.log.authors_mode = true;
+                // The clone view's two overlays: the host menu, and the
+                // modal a running clone reports through. Both are
+                // `Clear`ed rects placed from the view's own geometry,
+                // which is exactly the shape this test exists to catch.
+                app.clone_view.focus = CloneFocus::Platforms;
+                app.clone_view.run = Some(CloneRun {
+                    url: "https://example.invalid/o/r.git".into(),
+                    dest: "/tmp/r".into(),
+                    status: CloneStatus::Starting,
+                });
 
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
                 terminal

@@ -370,7 +370,7 @@ torii config edit
 torii config reset
 ```
 
-Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `auth.gitea_token`, `auth.forgejo_token`, `auth.codeberg_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `mirror.autofetch_enabled`, `snapshot.auto_enabled`, `snapshot.auto_interval_minutes`, `ui.colors`, `ui.emoji`, `ui.verbose`, `ui.date_format`, `worktree.base_dir`, `worktree.inherit_paths` (comma-separated).
+Available keys: `user.name`, `user.email`, `user.editor`, `auth.github_token`, `auth.gitlab_token`, `auth.gitea_token`, `auth.forgejo_token`, `auth.codeberg_token`, `git.default_branch`, `git.sign_commits`, `git.pull_rebase`, `mirror.default_protocol`, `mirror.autofetch_enabled`, `snapshot.auto_enabled`, `snapshot.auto_interval_minutes`, `ui.colors`, `ui.emoji`, `ui.verbose`, `ui.date_format`, `worktree.base_dir`, `worktree.inherit_paths` (comma-separated), `clone.base_dir`.
 
 ### Auth (gitorii.com cloud)
 

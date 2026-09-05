@@ -92,6 +92,19 @@ pub fn render(f: &mut Frame, app: &crate::tui::app::App) {
             ],
         ),
         (
+            "clone view",
+            &[
+                ("j / ↓ k / ↑", "move through the repositories"),
+                ("p", "host menu — which account to list"),
+                ("/", "filter by name or description"),
+                ("u", "type or paste a URL instead"),
+                ("d", "edit where the clone lands"),
+                ("t", "ssh / https"),
+                ("r", "ask the host again"),
+                ("Enter", "clone it, then open it"),
+            ],
+        ),
+        (
             "sync view",
             &[
                 ("j / ↓", "select operation"),

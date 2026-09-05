@@ -450,6 +450,7 @@ pub const ACTIONS: &[ActionDef] = &[
     def("goto:pr", "Pull requests", "go"),
     def("goto:issue", "Issues", "go"),
     def("goto:platform", "Platform", "go"),
+    def("goto:clone", "Clone a repository", "go"),
     def("goto:remote", "Remotes", "go"),
     def("goto:workspace", "Workspace", "go"),
     def("goto:worktree", "Worktrees", "go"),

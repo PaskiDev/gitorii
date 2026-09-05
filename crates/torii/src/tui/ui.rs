@@ -114,6 +114,11 @@ const TABS: &[Tab] = &[
     },
     // multi-platform / repo layout
     Tab {
+        key: "o",
+        label: "clone",
+        view: View::Clone,
+    },
+    Tab {
         key: "r",
         label: "remote",
         view: View::Remote,
@@ -229,6 +234,8 @@ pub fn render(f: &mut Frame, app: &App) {
         View::Auth => views::auth::render(f, app, content_rows[0]),
         // 0.7.12: unified Platform view.
         View::Platform => views::platform::render(f, app, content_rows[0]),
+        // 0.16.0 — browse an account's repositories and clone one.
+        View::Clone => views::clone::render(f, app, content_rows[0]),
         // Config absorbs Settings via tabs since 0.7.2.
         View::Config | View::Settings => views::config::render(f, app, content_rows[0]),
         View::Safety => views::safety::render(f, app, content_rows[0]),
@@ -1188,6 +1195,96 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             ])
                         }
                     }
+                }
+            }
+            View::Clone => {
+                use crate::tui::app::{CloneFocus, CloneStatus};
+                // A clone in flight owns the strip: while it runs there
+                // is one thing to know, and when it ends there is one
+                // key to press.
+                match app.clone_view.run.as_ref().map(|r| &r.status) {
+                    Some(CloneStatus::Starting) => Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("connecting…", Style::default().fg(theme::INK_FAINT)),
+                    ]),
+                    Some(CloneStatus::Working(p)) => Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled(
+                            if p.resolving_deltas() {
+                                "resolving deltas "
+                            } else {
+                                "receiving objects "
+                            },
+                            Style::default().fg(theme::INK_FAINT),
+                        ),
+                        Span::styled(
+                            format!("{}%", p.percent()),
+                            Style::default().fg(bc).add_modifier(Modifier::BOLD),
+                        ),
+                    ]),
+                    Some(CloneStatus::Done(_)) | Some(CloneStatus::Error(_)) => Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("[Enter]", Style::default().fg(bc)),
+                        Span::styled(" open  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[Esc]", Style::default().fg(bc)),
+                        Span::styled(" dismiss", Style::default().fg(theme::INK_FAINT)),
+                    ]),
+                    None => match app.clone_view.focus {
+                        CloneFocus::Platforms => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                            Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[Enter]", Style::default().fg(bc)),
+                            Span::styled(" switch  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[Esc]", Style::default().fg(bc)),
+                            Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
+                        ]),
+                        CloneFocus::Filter => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("filter: ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(
+                                app.clone_view.filter.clone(),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled("█", Style::default().fg(bc)),
+                        ]),
+                        CloneFocus::Url => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("url: ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(
+                                app.clone_view.url_input.clone(),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled("█", Style::default().fg(bc)),
+                        ]),
+                        CloneFocus::Dest => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("into: ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(
+                                app.clone_view.dest_input.clone(),
+                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled("█", Style::default().fg(bc)),
+                        ]),
+                        CloneFocus::List => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("[Enter]", Style::default().fg(bc)),
+                            Span::styled(" clone  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[p]", Style::default().fg(bc)),
+                            Span::styled(" platform  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[/]", Style::default().fg(bc)),
+                            Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[u]", Style::default().fg(bc)),
+                            Span::styled(" url  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[d]", Style::default().fg(bc)),
+                            Span::styled(" into  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[t]", Style::default().fg(bc)),
+                            Span::styled(
+                                if app.clone_view.ssh { " ssh" } else { " https" },
+                                Style::default().fg(theme::INK_FAINT),
+                            ),
+                        ]),
+                    },
                 }
             }
             View::Remote => {
@@ -3032,7 +3129,7 @@ mod tests {
     /// grid looked like before the views tied themselves into the chrome.
     /// The views converted to the window chrome so far. A view joins this
     /// list when it stops drawing its own boxes.
-    const CONVERTED: [View; 18] = [
+    const CONVERTED: [View; 19] = [
         View::Dashboard,
         View::Log,
         View::Branch,
@@ -3051,6 +3148,7 @@ mod tests {
         View::Pr,
         View::Platform,
         View::Safety,
+        View::Clone,
     ];
 
     #[test]

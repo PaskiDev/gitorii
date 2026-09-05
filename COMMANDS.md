@@ -167,6 +167,26 @@ torii clone github torvalds/linux -d my-linux
 Protocol auto-detected: SSH if keys present, HTTPS otherwise.  
 Override: `torii config set mirror.default_protocol https`
 
+**Where a clone lands.** With no destination, `git clone`'s rule applies: a
+directory named after the repository, under `clone.base_dir` (default `.`, the
+working directory). `~` is expanded.
+
+```bash
+torii config set clone.base_dir .           # default: the working directory
+torii config set clone.base_dir ~/repos     # everything under one roof
+```
+
+**In the TUI.** The `clone` entry in the sidebar lists the repositories of the
+account you have a token for, filters them, and clones the one you pick into
+`<clone.base_dir>/<repo>` — which it shows, and lets you edit, before it starts.
+`[u]` takes a URL or a local path instead, for anything the listing cannot name.
+The repository is opened when the clone finishes, and registered in the active
+workspace if there is one.
+
+Listing an account's repositories needs a token (`torii auth set <platform>
+<token>`), and is wired for `github`, `gitlab`, `gitea`, `forgejo` and
+`codeberg`. The other hosts say so and leave you the URL box.
+
 ---
 
 ## `torii tag`

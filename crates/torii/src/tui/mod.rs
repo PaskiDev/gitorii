@@ -15,7 +15,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
-use app::{App, EventKind, SyncOp, SyncStatus, View};
+use app::{App, CloneStatus, EventKind, SyncOp, SyncStatus, View};
 use events::{Action, EventHandler};
 
 /// Path to the currently-running torii binary. The TUI shells out to
@@ -361,6 +361,69 @@ fn run_loop(
             if let Ok(overlay) = rx.try_recv() {
                 app.log.signature_overlay = Some(overlay);
                 app.log_signature_rx = None;
+            }
+        }
+
+        // 0.16.0 — the clone view's repository listing. One answer, and
+        // it is either the list or the reason there isn't one.
+        if let Some(rx) = &app.clone_repos_rx {
+            if let Ok(result) = rx.try_recv() {
+                app.clone_repos_rx = None;
+                app.clone_view.loading = false;
+                match result {
+                    Ok(repos) => app.clone_apply_repos(repos),
+                    Err(e) => app.clone_view.error = Some(e),
+                }
+            }
+        }
+
+        // 0.16.0 — a clone reports many times before it ends. Everything
+        // waiting this tick is drained into a local vec first, so the
+        // borrow on the receiver is over before the arms below mutate
+        // the rest of `app`; only the last report is worth drawing.
+        let mut clone_updates: Vec<CloneStatus> = Vec::new();
+        if let Some(rx) = &app.clone_run_rx {
+            while let Ok(status) = rx.try_recv() {
+                clone_updates.push(status);
+            }
+        }
+        if let Some(status) = clone_updates.pop() {
+            if let Some(run) = app.clone_view.run.as_mut() {
+                run.status = status.clone();
+            }
+            match status {
+                CloneStatus::Done(path) => {
+                    app.clone_run_rx = None;
+                    app.log_event(format!("cloned → {}", path), EventKind::Success);
+                    // Put it where the user's other repositories are, so
+                    // the repo switcher and the multi-repo commands see
+                    // it without being told twice.
+                    if let Some(ws) = app.active_workspace.clone() {
+                        match run_torii(&path, &["workspace", "add", &ws, &path]) {
+                            Ok(()) => app.log_event(
+                                format!("added to workspace {}", ws),
+                                EventKind::Success,
+                            ),
+                            Err(e) => app.log_event(
+                                format!("workspace add failed: {}", e),
+                                EventKind::Error,
+                            ),
+                        }
+                    }
+                    app.set_status(format!("✓ cloned into {}", path));
+                    // Opening it is the point of having cloned it. The
+                    // modal goes with the move: the Dashboard it lands
+                    // on is the answer the modal was standing in for.
+                    app.clone_view.run = None;
+                    app.repo_path = path;
+                    app.refresh().ok();
+                    app.go_to(View::Dashboard);
+                }
+                CloneStatus::Error(msg) => {
+                    app.clone_run_rx = None;
+                    app.log_event(format!("clone failed: {}", msg), EventKind::Error);
+                }
+                CloneStatus::Starting | CloneStatus::Working(_) => {}
             }
         }
 
