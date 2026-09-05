@@ -1075,6 +1075,71 @@ fn gitea_token<'a>(label: &str, token: &'a Option<String>) -> Result<&'a String>
     })
 }
 
+/// One repository as the Gitea API describes it. Gitea, Forgejo and
+/// Codeberg answer with the same shape, so they share the parse.
+fn gitea_parse_repo(json: &serde_json::Value) -> RemoteRepo {
+    let private = json["private"].as_bool().unwrap_or(true);
+    RemoteRepo {
+        name: json["name"].as_str().unwrap_or("").to_string(),
+        description: json["description"].as_str().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }),
+        visibility: if private {
+            Visibility::Private
+        } else {
+            Visibility::Public
+        },
+        default_branch: json["default_branch"]
+            .as_str()
+            .unwrap_or("main")
+            .to_string(),
+        url: json["html_url"].as_str().unwrap_or("").to_string(),
+        ssh_url: json["ssh_url"].as_str().unwrap_or("").to_string(),
+        clone_url: json["clone_url"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+/// Repositories the token's own account can reach, on any host speaking
+/// the Gitea API (Gitea, Forgejo, Codeberg).
+///
+/// The endpoint is paged and the host decides the page size it is
+/// willing to serve, so the loop cannot trust `limit` to be honoured:
+/// it stops on the first page that comes back short, and at a ceiling
+/// of 20 pages, which is a thousand repositories and a place a
+/// misbehaving host cannot spin forever.
+fn gitea_list_repos(
+    base_url: &str,
+    token: &Option<String>,
+    label: &str,
+) -> Result<Vec<RemoteRepo>> {
+    const PAGE: usize = 50;
+    let tok = gitea_token(label, token)?;
+    let base = base_url.trim_end_matches('/');
+    let ctx = format!("{} list repos", label);
+    let mut repos: Vec<RemoteRepo> = Vec::new();
+
+    for page in 1..=20 {
+        let url = format!("{}/api/v1/user/repos?limit={}&page={}", base, PAGE, page);
+        let req = crate::http::make_client()
+            .get(&url)
+            .header("Authorization", format!("token {}", tok))
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, &ctx)?;
+        let arr = crate::http::extract_array(&json, &ctx)?;
+        let got = arr.len();
+        repos.extend(arr.iter().map(gitea_parse_repo));
+        if got < PAGE {
+            break;
+        }
+    }
+
+    Ok(repos)
+}
+
 fn gitea_set_visibility(
     base_url: &str,
     token: &Option<String>,
@@ -1133,9 +1198,7 @@ impl PlatformClient for GiteaClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Gitea list_repos not yet wired".to_string(),
-        ))
+        gitea_list_repos(&self.base_url, &self.token, "Gitea")
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         gitea_set_visibility(
@@ -1185,9 +1248,7 @@ impl PlatformClient for ForgejoClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Forgejo list_repos not yet wired".to_string(),
-        ))
+        gitea_list_repos(&self.base_url, &self.token, "Forgejo")
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         gitea_set_visibility(
@@ -1237,9 +1298,9 @@ impl PlatformClient for CodebergClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Codeberg list_repos not yet wired".to_string(),
-        ))
+        // Codeberg is a Forgejo instance pinned to codeberg.org, the way
+        // `set_visibility` right below already treats it.
+        gitea_list_repos("https://codeberg.org", &self.token, "Codeberg")
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // Codeberg is just a Forgejo instance pinned to codeberg.org.

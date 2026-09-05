@@ -471,7 +471,10 @@ enum Commands {
 Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo
 
 Protocol is auto-detected: SSH if keys are configured, HTTPS otherwise.
-Override with --protocol or set default: torii config set mirror.default_protocol https")]
+Override with --protocol or set default: torii config set mirror.default_protocol https
+
+With no destination the clone lands under clone.base_dir (default '.'):
+  torii config set clone.base_dir ~/repos          # everything under one roof")]
     Clone {
         /// Platform (github, gitlab, ...) or full URL (https://... / git@...)
         source: String,
@@ -645,7 +648,9 @@ Available keys:
   git.default_branch, git.sign_commits, git.pull_rebase
   mirror.default_protocol, mirror.autofetch_enabled
   snapshot.auto_enabled, snapshot.auto_interval_minutes
-  ui.colors, ui.emoji, ui.verbose, ui.date_format")]
+  ui.colors, ui.emoji, ui.verbose, ui.date_format
+  worktree.base_dir, worktree.inherit_paths
+  clone.base_dir")]
     Config {
         #[command(subcommand)]
         action: ConfigCommands,

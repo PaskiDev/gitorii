@@ -4,6 +4,53 @@ use crate::error::Result;
 use chrono::NaiveDateTime;
 use git2::BranchType;
 
+/// How far a clone has got, as libgit2 reports it.
+///
+/// The two phases share one callback: objects come down first
+/// (`received_objects` climbing to `total_objects`), then deltas are
+/// resolved (`indexed_deltas` climbing to `total_deltas`). A caller
+/// that wants to draw one bar reads [`CloneProgress::percent`]; one
+/// that wants to name the phase reads the fields.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CloneProgress {
+    pub received_objects: usize,
+    pub total_objects: usize,
+    pub indexed_objects: usize,
+    pub indexed_deltas: usize,
+    pub total_deltas: usize,
+    pub received_bytes: usize,
+}
+
+impl CloneProgress {
+    /// True once both phases have finished. `total_objects` is 0 until
+    /// the remote has answered, so an untouched report is not "done".
+    pub fn done(&self) -> bool {
+        let receiving_done = self.total_objects > 0
+            && self.received_objects == self.total_objects
+            && self.indexed_objects == self.total_objects;
+        let deltas_done = self.total_deltas == 0 || self.indexed_deltas == self.total_deltas;
+        receiving_done && deltas_done
+    }
+
+    /// True while the second phase is the one advancing.
+    pub fn resolving_deltas(&self) -> bool {
+        self.total_deltas > 0 && self.received_objects == self.total_objects
+    }
+
+    /// Progress of whichever phase is advancing, 0-100.
+    pub fn percent(&self) -> usize {
+        if self.resolving_deltas() {
+            (self.indexed_deltas * 100)
+                .checked_div(self.total_deltas)
+                .unwrap_or(100)
+        } else {
+            (self.received_objects * 100)
+                .checked_div(self.total_objects)
+                .unwrap_or(0)
+        }
+    }
+}
+
 impl GitRepo {
     /// Show commit history
     #[allow(clippy::too_many_arguments)]
@@ -670,17 +717,82 @@ impl GitRepo {
         self.switch_branch(local_name)
     }
 
-    /// Clone a repository
-    pub fn clone_repo(url: &str, directory: Option<&str>) -> Result<()> {
-        let target = if let Some(dir) = directory {
-            dir.to_string()
-        } else {
-            url.split('/')
+    /// Where a clone would land: the given directory, or the repository
+    /// name derived from the URL.
+    pub fn clone_target_dir(url: &str, directory: Option<&str>) -> String {
+        match directory {
+            Some(dir) => dir.to_string(),
+            None => url
+                .split('/')
                 .next_back()
                 .unwrap_or("repo")
                 .trim_end_matches(".git")
-                .to_string()
-        };
+                .to_string(),
+        }
+    }
+
+    /// Clone a repository, reporting to the terminal.
+    ///
+    /// The work itself is [`clone_repo_with_progress`]; this is the sink
+    /// the CLI wants — a line that rewrites itself. A caller that owns
+    /// the screen (the TUI) passes its own sink instead of inheriting
+    /// prints it cannot place.
+    ///
+    /// [`clone_repo_with_progress`]: GitRepo::clone_repo_with_progress
+    pub fn clone_repo(url: &str, directory: Option<&str>) -> Result<()> {
+        use std::io::Write;
+        use std::time::Instant;
+
+        let target = Self::clone_target_dir(url, directory);
+        println!("🔄 Cloning {url} → {target}");
+
+        // Same 100 ms floor the printing callback has always had: below
+        // that the writes cost more than the information is worth.
+        let mut last = Instant::now();
+        let result = Self::clone_repo_with_progress(url, directory, &mut |p| {
+            if !p.done() && last.elapsed().as_millis() < 100 {
+                return;
+            }
+            last = Instant::now();
+            let mb = p.received_bytes as f64 / (1024.0 * 1024.0);
+            // Two phases: receiving objects, then resolving deltas.
+            // libgit2 reports both through the same callback, so emit
+            // whichever is currently advancing.
+            if p.total_deltas > 0 && p.received_objects == p.total_objects {
+                let pct = (p.indexed_deltas * 100)
+                    .checked_div(p.total_deltas)
+                    .unwrap_or(100);
+                print!(
+                    "\r🧩 Resolving deltas {pct}%  {}/{}                       ",
+                    p.indexed_deltas, p.total_deltas
+                );
+            } else {
+                let pct = (p.received_objects * 100)
+                    .checked_div(p.total_objects)
+                    .unwrap_or(0);
+                print!(
+                    "\r📥 {pct}%  {}/{} objects  {} indexed  {mb:.1} MB       ",
+                    p.received_objects, p.total_objects, p.indexed_objects
+                );
+            }
+            let _ = std::io::stdout().flush();
+        });
+        println!();
+        result
+    }
+
+    /// Clone a repository, handing every progress report to `on_progress`.
+    ///
+    /// Nothing here writes to the terminal: this is the path a caller
+    /// that owns the screen can take. Credentials, the shallow-clone
+    /// env var and the empty-remote HEAD fixup are the same either way,
+    /// because there is one implementation of them.
+    pub fn clone_repo_with_progress(
+        url: &str,
+        directory: Option<&str>,
+        on_progress: &mut dyn FnMut(CloneProgress),
+    ) -> Result<()> {
+        let target = Self::clone_target_dir(url, directory);
 
         // Token lookups inside the credentials closure use the unified
         // resolver in `crate::auth::resolve_token`; no global config
@@ -722,7 +834,17 @@ impl GitRepo {
             git2::Cred::default()
         });
 
-        crate::core::GitRepo::attach_fetch_progress(&mut callbacks);
+        callbacks.transfer_progress(move |stats| {
+            on_progress(CloneProgress {
+                received_objects: stats.received_objects(),
+                total_objects: stats.total_objects(),
+                indexed_objects: stats.indexed_objects(),
+                indexed_deltas: stats.indexed_deltas(),
+                total_deltas: stats.total_deltas(),
+                received_bytes: stats.received_bytes(),
+            });
+            true
+        });
 
         let mut fetch_opts = git2::FetchOptions::new();
         fetch_opts.remote_callbacks(callbacks);
@@ -736,7 +858,6 @@ impl GitRepo {
             }
         }
 
-        println!("🔄 Cloning {url} → {target}");
         let cloned = git2::build::RepoBuilder::new()
             .fetch_options(fetch_opts)
             .clone(url, std::path::Path::new(&target))?;

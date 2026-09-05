@@ -100,6 +100,7 @@ impl App {
             "ui.date_format",
             "worktree.base_dir",
             "worktree.inherit_paths",
+            "clone.base_dir",
         ];
 
         // No sensitive keys anymore in this view — tokens live in Auth.

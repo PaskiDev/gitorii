@@ -32,6 +32,10 @@ pub struct ToriiConfig {
     /// Worktree settings
     #[serde(default)]
     pub worktree: WorktreeConfig,
+
+    /// Clone settings
+    #[serde(default)]
+    pub clone: CloneConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -66,6 +70,26 @@ impl Default for WorktreeConfig {
         Self {
             base_dir: "..".to_string(),
             inherit_paths: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CloneConfig {
+    /// Where a clone lands when no destination is given. Default is `.`
+    /// — the working directory, which is what `git clone` does. Examples:
+    ///   "."             → ./<repo>/
+    ///   "~/repos"       → ~/repos/<repo>/
+    ///   "/srv/src"      → /srv/src/<repo>/
+    /// `~` expansion is honoured. The repository name is appended
+    /// automatically, and an explicit destination still wins over this.
+    pub base_dir: String,
+}
+
+impl Default for CloneConfig {
+    fn default() -> Self {
+        Self {
+            base_dir: ".".to_string(),
         }
     }
 }
@@ -216,6 +240,7 @@ impl Default for ToriiConfig {
             auth: AuthConfig::default(),
             update: UpdateConfig::default(),
             worktree: WorktreeConfig::default(),
+            clone: CloneConfig::default(),
         }
     }
 }
@@ -417,6 +442,7 @@ impl ToriiConfig {
                 .clone()
                 .map(|_| "[set]".to_string()),
             ("worktree", "base_dir") => Some(self.worktree.base_dir.clone()),
+            ("clone", "base_dir") => Some(self.clone.base_dir.clone()),
             ("worktree", "inherit_paths") => {
                 if self.worktree.inherit_paths.is_empty() {
                     None
@@ -532,6 +558,15 @@ impl ToriiConfig {
                     ));
                 }
                 self.worktree.base_dir = value.to_string();
+            }
+            ("clone", "base_dir") => {
+                if value.trim().is_empty() {
+                    return Err(ToriiError::InvalidConfig(
+                        "clone.base_dir must not be empty (use '.' for the working directory)"
+                            .to_string(),
+                    ));
+                }
+                self.clone.base_dir = value.to_string();
             }
             ("worktree", "inherit_paths") => {
                 // Accept comma-separated list; empty string clears.
@@ -681,6 +716,9 @@ impl ToriiConfig {
                 self.worktree.inherit_paths.join(","),
             ));
         }
+
+        // Clone
+        items.push(("clone.base_dir".to_string(), self.clone.base_dir.clone()));
 
         items
     }
