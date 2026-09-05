@@ -391,6 +391,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         );
     }
 
+    // ── Author dropdown overlay ───────────────────────────────────────────────
+    if app.log.authors_mode {
+        render_author_menu(f, app, chunks[0][1], sel_pos);
+    }
+
     if app.log.signature_overlay.is_some() {
         render_signature_overlay(f, app, area);
     }
@@ -548,6 +553,81 @@ pub fn log_ops() -> Vec<(&'static str, &'static str, bool)> {
         ("scan history", "find secrets across every commit", false),
         ("compact", "gc + reflog expire (recovers space)", false),
     ]
+}
+
+/// The author dropdown (`A`): the identities in the loaded log with a
+/// commit count each, over an "all authors" row that lifts the filter.
+///
+/// It walks `log_author_rows` — the same list the key handler applies
+/// from — so the highlighted row and the identity Enter writes are the
+/// same row by construction.
+///
+/// Unlike the ops menu this list has no fixed length: a fifty-commit
+/// page can hold fifty identities. The box is capped at the pane and
+/// `ListState` scrolls the selection into view, so a long list is a
+/// scrolling dropdown rather than one that runs off the screen.
+fn render_author_menu(f: &mut Frame, app: &App, list: Rect, sel_pos: Option<usize>) {
+    let rows = app.log_author_rows();
+    if rows.is_empty() || list.height < 3 {
+        return;
+    }
+    let dropdown_w: u16 = 50;
+    let dropdown_h = (rows.len() as u16 + 2).min(list.height);
+    let entry_y = list.y + sel_pos.unwrap_or(0) as u16 + 1;
+    let drop_y = if entry_y + dropdown_h < list.y + list.height {
+        entry_y
+    } else {
+        list.y + list.height.saturating_sub(dropdown_h)
+    };
+    let drop_area = Rect::new(list.x + 3, drop_y, dropdown_w, dropdown_h);
+
+    let items: Vec<ListItem> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let is_sel = i == app.log.authors_idx;
+            let (label, tail) = match &row.identity {
+                None => ("all authors".to_string(), "clear the filter".to_string()),
+                Some(id) => (
+                    truncate(id, 34),
+                    format!(
+                        "{} commit{}",
+                        row.count,
+                        if row.count == 1 { "" } else { "s" }
+                    ),
+                ),
+            };
+            let color = if is_sel { theme::INK } else { theme::INK_DIM };
+            let style = if is_sel {
+                Style::default()
+                    .bg(theme::selection(app))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(format!("{:<35}", label), Style::default().fg(color)),
+                Span::styled(tail, Style::default().fg(theme::INK_FAINT)),
+            ]))
+            .style(style)
+        })
+        .collect();
+
+    let mut state = ListState::default();
+    state.select(Some(app.log.authors_idx));
+
+    let block = Block::default()
+        .title(Span::styled(
+            " authors — Enter filter · Esc close ",
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_type(app.border_type())
+        .border_style(Style::default().fg(theme::RULE));
+
+    let drop_area = theme::clear(f, drop_area);
+    f.render_stateful_widget(List::new(items).block(block), drop_area, &mut state);
 }
 
 fn file_basename(path: &str) -> String {

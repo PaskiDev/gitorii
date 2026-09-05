@@ -70,7 +70,7 @@ pub fn render(f: &mut Frame, app: &crate::tui::app::App) {
                 ("o", "ops menu (diff / copy hash / search)"),
                 ("space", "pick commits for an op"),
                 ("/", "search commits — author:<who> narrows to one"),
-                ("A", "filter to this commit's author (again to lift)"),
+                ("A", "authors menu — pick one to filter the log by"),
                 ("Esc", "back to files"),
             ],
         ),

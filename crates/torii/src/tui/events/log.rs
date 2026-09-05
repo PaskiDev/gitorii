@@ -90,6 +90,38 @@ pub(super) fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> 
         }
         return None;
     }
+    // The author dropdown takes every key while it is open, the same
+    // way the ops menu does: it is a list to walk, not an overlay to
+    // navigate the log behind.
+    if app.log.authors_mode {
+        let rows = app.log_author_rows();
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.log.authors_idx > 0 => {
+                app.log.authors_idx -= 1;
+            }
+            (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                if app.log.authors_idx + 1 < rows.len() =>
+            {
+                app.log.authors_idx += 1;
+            }
+            (_, KeyCode::Enter) => {
+                app.log.authors_mode = false;
+                if let Some(row) = rows.get(app.log.authors_idx) {
+                    let msg = app.log_apply_author_row(row);
+                    app.log_event(msg, EventKind::Info);
+                }
+            }
+            // `A` closes it as well as opens it, so the key that got you
+            // here gets you out without a reach for Esc.
+            (_, KeyCode::Esc)
+            | (_, KeyCode::Char('A'))
+            | (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
+                app.log.authors_mode = false;
+            }
+            _ => {}
+        }
+        return None;
+    }
     if app.log.ops_mode {
         let ops_len = crate::tui::views::log::log_ops_for(app).len();
         match (key.modifiers, key.code) {
@@ -189,17 +221,15 @@ pub(super) fn handle_log(key: event::KeyEvent, app: &mut App) -> Option<Action> 
             app.log.search_query.clear();
             app.log.filtered.clear();
         }
-        // `A` narrows the log to the author of the commit under the
-        // caret. It writes the same `author:<who>` query `/` accepts,
-        // so the two are one filter with two ways in, and it uses the
-        // full `Name <email>` because a bare name does not separate two
-        // people who share one — or one person's two addresses.
-        // Pressing it again on the same author lifts the filter.
+        // `A` opens the author dropdown: the identities in the loaded
+        // log, with their commit counts, over an "all authors" row that
+        // lifts the filter. Picking one writes the same `author:<who>`
+        // query `/` accepts, so the two are one filter with two ways in,
+        // and it writes the full `Name <email>` because a bare name does
+        // not separate two people who share one — or one person's two
+        // addresses.
         (KeyModifiers::SHIFT, KeyCode::Char('A')) | (_, KeyCode::Char('A')) => {
-            let idx = app.log.idx;
-            if let Some(msg) = app.log_filter_by_author(idx) {
-                app.log_event(msg, EventKind::Info);
-            }
+            app.log_open_author_menu();
         }
         // 0.7.36 — toggle the GPG signature column. Populates the
         // verdict cache the first time it turns on (cheap because we
@@ -566,15 +596,28 @@ mod ops_prompt_tests {
         assert!(app.log.search_mode, "`/` still opens the log's search");
     }
 
-    /// `A` writes the same query `/` accepts, in the identity form —
-    /// anything shorter would fold two people who share a name.
+    /// `A` opens the menu with the cursor already on the author of the
+    /// commit under the caret, and Enter writes the same query `/`
+    /// accepts, in the identity form — anything shorter would fold two
+    /// people who share a name.
     #[test]
-    fn a_narrows_the_log_to_the_author_under_the_caret() {
+    fn the_authors_menu_opens_on_the_author_under_the_caret() {
         let mut app = log_with_two_authors();
         app.log.idx = 2;
 
         handle_log(press(KeyCode::Char('A')), &mut app);
+        assert!(app.log.authors_mode, "`A` opens the dropdown");
+        assert_eq!(
+            app.log_author_rows()[app.log.authors_idx]
+                .identity
+                .as_deref(),
+            Some("Someone Else <else@example.test>"),
+            "and lands on the author the caret is sitting on"
+        );
 
+        handle_log(press(KeyCode::Enter), &mut app);
+
+        assert!(!app.log.authors_mode, "Enter closes it behind the filter");
         assert_eq!(
             app.log.search_query,
             "author:Someone Else <else@example.test>"
@@ -586,20 +629,119 @@ mod ops_prompt_tests {
         );
     }
 
-    /// Pressing it again on the same author is the way back out: the
-    /// filter leaves the caret among that author's commits, so there is
-    /// no row to move to that would clear it by other means.
+    /// The list is ordered `git shortlog -sn`'s way — most commits first
+    /// — under an "all authors" row, and one identity appears once
+    /// however many commits it wrote.
     #[test]
-    fn a_second_press_lifts_the_author_filter() {
+    fn the_authors_menu_lists_each_identity_once_with_its_count() {
+        let app = log_with_two_authors();
+
+        let rows = app.log_author_rows();
+
+        assert_eq!(rows.len(), 3, "two authors under the clear row");
+        assert_eq!(rows[0].identity, None, "the clear row leads");
+        assert_eq!(rows[0].count, 3, "and counts the whole loaded log");
+        assert_eq!(
+            rows[1].identity.as_deref(),
+            Some("paskidev <old@proton.me>")
+        );
+        assert_eq!(rows[1].count, 2);
+        assert_eq!(rows[2].count, 1);
+    }
+
+    /// "all authors" is the way back out, and it is a row rather than a
+    /// second keybind: with the filter on there is no commit of anyone
+    /// else's left in the list to open the menu from, so the menu has to
+    /// carry its own undo.
+    #[test]
+    fn the_all_authors_row_lifts_the_filter() {
         let mut app = log_with_two_authors();
+        app.log.search_query = "author:paskidev".into();
+        app.log_update_filter();
 
         handle_log(press(KeyCode::Char('A')), &mut app);
-        handle_log(press(KeyCode::Char('A')), &mut app);
+        app.log.authors_idx = 0;
+        handle_log(press(KeyCode::Enter), &mut app);
 
         assert!(app.log.search_query.is_empty());
         assert!(
             app.log.filtered.is_empty(),
             "an empty filter shows them all"
+        );
+    }
+
+    /// With a filter already on, the menu opens on the identity it is
+    /// filtered to rather than on whatever row the caret landed on, so
+    /// the list reads as the state of the view.
+    #[test]
+    fn the_menu_opens_on_the_identity_already_filtered_in() {
+        let mut app = log_with_two_authors();
+        app.log.search_query = "author:Someone Else <else@example.test>".into();
+        app.log_update_filter();
+
+        handle_log(press(KeyCode::Char('A')), &mut app);
+
+        assert_eq!(
+            app.log_author_rows()[app.log.authors_idx]
+                .identity
+                .as_deref(),
+            Some("Someone Else <else@example.test>")
+        );
+    }
+
+    /// `A` closes the menu as well as opening it, and so does Esc —
+    /// neither one leaves a filter behind.
+    ///
+    /// Note what this does *not* cover: a bare Esc never arrives here in
+    /// the running TUI. `EventHandler::next` intercepts it first and
+    /// closes the view's overlays from its own chain, so the arm below
+    /// only sees Esc carrying a modifier. The dropdown was missing from
+    /// that chain and this test passed the whole time it was broken —
+    /// the box stayed open and the sidebar took the focus back. The
+    /// chain is not reachable from a unit test today, because `next`
+    /// reads from the terminal itself.
+    #[test]
+    fn a_and_esc_both_close_the_menu_without_filtering() {
+        for key in [KeyCode::Char('A'), KeyCode::Esc] {
+            let mut app = log_with_two_authors();
+            handle_log(press(KeyCode::Char('A')), &mut app);
+
+            handle_log(press(key), &mut app);
+
+            assert!(!app.log.authors_mode, "{:?} closes it", key);
+            assert!(app.log.search_query.is_empty(), "{:?} filters nothing", key);
+        }
+    }
+
+    /// An empty log has nothing to choose from, so the key stays quiet
+    /// instead of opening a box with one dead row in it.
+    #[test]
+    fn the_menu_does_not_open_on_an_empty_log() {
+        let mut app = App::test_blank();
+        app.view = View::Log;
+
+        handle_log(press(KeyCode::Char('A')), &mut app);
+
+        assert!(!app.log.authors_mode);
+    }
+
+    /// The cursor stops at both ends: the guards are on the key arms, so
+    /// a miss leaves the index where it was rather than wrapping.
+    #[test]
+    fn the_menu_cursor_stops_at_both_ends() {
+        let mut app = log_with_two_authors();
+        handle_log(press(KeyCode::Char('A')), &mut app);
+        app.log.authors_idx = 0;
+
+        handle_log(press(KeyCode::Char('k')), &mut app);
+        assert_eq!(app.log.authors_idx, 0);
+
+        for _ in 0..5 {
+            handle_log(press(KeyCode::Char('j')), &mut app);
+        }
+        assert_eq!(
+            app.log.authors_idx, 2,
+            "and does not run past the last identity"
         );
     }
 

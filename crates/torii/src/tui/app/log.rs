@@ -27,6 +27,18 @@ pub fn author_query(query: &str) -> Option<&str> {
     Some(q[AUTHOR_PREFIX.len()..].trim())
 }
 
+/// One row of the author dropdown.
+///
+/// `identity: None` is the "all authors" row that lifts the filter. It
+/// is a row rather than a separate key because the list is the whole
+/// interface: everything the menu can do is on it, including undoing
+/// itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthorRow {
+    pub identity: Option<String>,
+    pub count: usize,
+}
+
 pub struct LogState {
     pub idx: usize,
     pub scroll: usize,
@@ -39,6 +51,12 @@ pub struct LogState {
     pub last_files_idx: Option<usize>,
     pub ops_mode: bool,
     pub ops_idx: usize,
+
+    /// The author dropdown (`A`). `authors_idx` indexes the rows
+    /// `log_author_rows` builds, which is also what the renderer walks,
+    /// so the highlight and the identity Enter applies cannot drift.
+    pub authors_mode: bool,
+    pub authors_idx: usize,
 
     /// Commits picked with Space, as full OIDs, in the order they were
     /// picked. Empty means no selection and the ops menu keeps its
@@ -112,6 +130,8 @@ impl Default for LogState {
             last_files_idx: None,
             ops_mode: false,
             ops_idx: 0,
+            authors_mode: false,
+            authors_idx: 0,
             selected: vec![],
             selection_identity: None,
             graph_rows: vec![],
@@ -488,40 +508,86 @@ impl App {
         self.snap_to_first_match();
     }
 
-    /// `A` over a commit: narrow the log to that commit's identity, or
-    /// lift the filter when it is already the one showing. Returns the
-    /// line for the event log — a filter that drops most of the list
-    /// should say so rather than leave the shorter list to be noticed.
+    /// The rows of the author dropdown: every identity among the loaded
+    /// commits, most commits first, under an "all authors" row.
     ///
-    /// The count is of the commits *loaded*: the filter runs over
-    /// `self.commits`, which is one page deep until something asks for
-    /// more, so an author further back than that is not missing, just
-    /// not fetched yet.
-    pub fn log_filter_by_author(&mut self, idx: usize) -> Option<String> {
-        let identity = self.commit_identity(idx)?;
-        if self.log_author_filter_on(idx) {
-            self.log.search_query.clear();
-            self.log.filtered.clear();
-            return Some("author filter cleared".to_string());
+    /// Ordering is `git shortlog -sn`'s, and ties break alphabetically so
+    /// the list does not reshuffle under the cursor between two authors
+    /// with the same count. The counts are of *loaded* commits, which is
+    /// all the filter can see either — the heading says as much while
+    /// history remains.
+    pub fn log_author_rows(&self) -> Vec<AuthorRow> {
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for i in 0..self.commits.len() {
+            if let Some(id) = self.commit_identity(i) {
+                *counts.entry(id).or_insert(0) += 1;
+            }
         }
-        self.log.search_query = format!("{}{}", AUTHOR_PREFIX, identity);
-        self.log_update_filter();
-        Some(format!(
-            "{} — {} of {} loaded commits",
-            identity,
-            self.log.filtered.len(),
-            self.commits.len()
-        ))
+        let mut authors: Vec<AuthorRow> = counts
+            .into_iter()
+            .map(|(identity, count)| AuthorRow {
+                identity: Some(identity),
+                count,
+            })
+            .collect();
+        authors.sort_by(|a, b| {
+            b.count
+                .cmp(&a.count)
+                .then_with(|| a.identity.cmp(&b.identity))
+        });
+
+        let mut rows = vec![AuthorRow {
+            identity: None,
+            count: self.commits.len(),
+        }];
+        rows.extend(authors);
+        rows
     }
 
-    /// Whether the log is already narrowed to this commit's identity —
-    /// the state `A` toggles back off. The footer reads it to name the
-    /// key for what it will do, and the toggle reads it to decide, so
-    /// the label and the behaviour cannot drift apart.
-    pub fn log_author_filter_on(&self, idx: usize) -> bool {
-        match self.commit_identity(idx) {
-            Some(id) => self.log.search_query == format!("{}{}", AUTHOR_PREFIX, id),
-            None => false,
+    /// `A`: open the dropdown over the log, with the cursor already on
+    /// the author the view is about — whoever is filtered in, or failing
+    /// that whoever wrote the commit under the caret. That makes the
+    /// common ask (`A`, Enter) two keys and no reading.
+    ///
+    /// Returns false when there is nothing to choose from, so the key
+    /// stays quiet on an empty log instead of opening an empty box.
+    pub fn log_open_author_menu(&mut self) -> bool {
+        let rows = self.log_author_rows();
+        if rows.len() < 2 {
+            return false;
+        }
+        let wanted = author_query(&self.log.search_query)
+            .map(str::to_string)
+            .or_else(|| self.commit_identity(self.log.idx));
+        self.log.authors_idx = wanted
+            .and_then(|id| {
+                rows.iter()
+                    .position(|r| r.identity.as_deref() == Some(id.as_str()))
+            })
+            .unwrap_or(0);
+        self.log.authors_mode = true;
+        true
+    }
+
+    /// Apply the row the cursor is on. `None` is the "all authors" row,
+    /// which clears the query the same way an emptied search box does.
+    pub fn log_apply_author_row(&mut self, row: &AuthorRow) -> String {
+        match &row.identity {
+            None => {
+                self.log.search_query.clear();
+                self.log.filtered.clear();
+                "author filter cleared".to_string()
+            }
+            Some(identity) => {
+                self.log.search_query = format!("{}{}", AUTHOR_PREFIX, identity);
+                self.log_update_filter();
+                format!(
+                    "{} — {} of {} loaded commits",
+                    identity,
+                    self.log.filtered.len(),
+                    self.commits.len()
+                )
+            }
         }
     }
 

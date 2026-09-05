@@ -367,7 +367,16 @@ impl EventHandler {
                         View::Config => app.config_view.editing,
                         View::Settings => false,
                         View::Log => {
-                            if app.log.ops_mode {
+                            // Innermost first: the author dropdown sits
+                            // over the ops menu's slot and takes the key
+                            // before anything under it. Esc reaches this
+                            // chain and never `handle_log`, so an overlay
+                            // missing from here stays open while the
+                            // sidebar takes the focus back.
+                            if app.log.authors_mode {
+                                app.log.authors_mode = false;
+                                true
+                            } else if app.log.ops_mode {
                                 app.log.ops_mode = false;
                                 true
                             } else if app.log.search_mode {
