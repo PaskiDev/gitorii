@@ -76,12 +76,13 @@ pub(crate) enum AuthCommands {
     /// platform's web UI: you authorise torii in your browser, torii
     /// receives the token, done.
     ///
-    /// Supported (0.7.20): github, gitlab, codeberg. Bitbucket and
-    /// Azure DevOps use Authorization Code flow with a localhost
-    /// callback — wired in a future release; for now `torii auth set
-    /// bitbucket USERNAME:APP_PASSWORD` is still the path there.
+    /// Supported: github, gitlab, codeberg, forgejo (device flow);
+    /// bitbucket, gitea (authorization-code + PKCE). Self-hosted
+    /// Forgejo/Gitea take FORGEJO_URL / GITEA_URL and
+    /// TORII_FORGEJO_APP_ID / TORII_GITEA_APP_ID.
     Oauth {
-        /// Provider name. One of: github, gitlab, codeberg.
+        /// Provider name. One of: github, gitlab, codeberg, forgejo,
+        /// bitbucket, gitea.
         provider: String,
         /// Save in the per-repo store instead of the global one.
         #[arg(long)]
@@ -106,8 +107,8 @@ pub(crate) enum AuthCommands {
     /// old one atomically — no OAuth round-trip, no browser. Requires
     /// the current token to have the `api` scope.
     Rotate {
-        /// Provider name. OAuth path: github, gitlab, codeberg.
-        /// PAT path (`--pat`): gitlab.
+        /// Provider name. OAuth path: github, gitlab, codeberg,
+        /// forgejo, bitbucket, gitea. PAT path (`--pat`): gitlab.
         provider: String,
         /// Rotate the PAT in place via the platform's native rotate
         /// endpoint instead of running OAuth. GitLab only.
@@ -271,8 +272,8 @@ pub(crate) fn run_auth(action: &AuthCommands) -> Result<()> {
             } else {
                 anyhow::bail!(
                     "OAuth flow not configured for `{}`. \
-                     Device flow supports: github, gitlab, codeberg. \
-                     Auth-code flow supports: bitbucket. \
+                     Device flow supports: github, gitlab, codeberg, forgejo. \
+                     Auth-code flow supports: bitbucket, gitea. \
                      For other providers, create a PAT manually and run `torii auth set {} ...`.",
                     provider,
                     provider
@@ -335,8 +336,8 @@ pub(crate) fn run_auth(action: &AuthCommands) -> Result<()> {
                     crate::oauth::run_auth_code_flow(provider)?
                 } else {
                     anyhow::bail!(
-                        "No OAuth flow wired for `{}`. Supported: github, gitlab, codeberg \
-                         (device flow), bitbucket (auth-code+PKCE). For `{}` you'd need to \
+                        "No OAuth flow wired for `{}`. Supported: github, gitlab, codeberg, forgejo \
+                         (device flow), bitbucket, gitea (auth-code+PKCE). For `{}` you'd need to \
                          rotate manually in the platform's web UI.",
                         provider,
                         provider
@@ -364,8 +365,8 @@ pub(crate) fn run_auth(action: &AuthCommands) -> Result<()> {
                 match crate::oauth::revoke_token(provider, &old) {
                     Ok(true) => println!("✅ Old {} token revoked.", provider),
                     Ok(false) => {
-                        let hint = crate::oauth::revoke_hint_url(provider)
-                            .unwrap_or("the platform's settings page");
+                        let hint = crate::oauth::revoke_hint_url(provider);
+                        let hint = hint.as_deref().unwrap_or("the platform's settings page");
                         println!(
                             "⚠  No programmatic revoke for `{}` (or no client secret \
                                   available). Revoke the old token manually at:\n     {}",
@@ -373,8 +374,8 @@ pub(crate) fn run_auth(action: &AuthCommands) -> Result<()> {
                         );
                     }
                     Err(e) => {
-                        let hint = crate::oauth::revoke_hint_url(provider)
-                            .unwrap_or("the platform's settings page");
+                        let hint = crate::oauth::revoke_hint_url(provider);
+                        let hint = hint.as_deref().unwrap_or("the platform's settings page");
                         println!(
                             "⚠  Revoke failed: {}. Revoke manually at:\n     {}",
                             e, hint

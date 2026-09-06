@@ -467,8 +467,14 @@ enum Commands {
   torii clone https://github.com/user/repo.git    Clone from full URL
   torii clone https://github.com/user/repo.git -d /tmp/foo
   torii clone git@github.com:user/repo.git        Clone via SSH URL
+  torii clone sourcehut ~user/repo
+  torii clone azure org/project/repo
+  torii clone radicle rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5
+  torii clone rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5
 
-Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo
+Supported platforms: github, gitlab, codeberg, bitbucket, gitea, forgejo, sourcehut, azure, radicle
+Self-hosted Gitea / Forgejo: GITEA_URL / FORGEJO_URL set the host.
+Radicle is `rad clone` (binary on PATH); not libgit2.
 
 Protocol is auto-detected: SSH if keys are configured, HTTPS otherwise.
 Override with --protocol or set default: torii config set mirror.default_protocol https
@@ -672,6 +678,8 @@ Examples — platform tokens:
   torii auth get github              Just one, masked
   torii auth remove gitea            Drop it
   torii auth doctor                  Where does each token come from?
+  torii auth oauth github            Device flow (github, gitlab, codeberg, forgejo)
+  torii auth oauth gitea             Auth-code + PKCE (gitea, bitbucket); GITEA_URL / TORII_GITEA_APP_ID
 
 Resolution order: env vars (GITHUB_TOKEN, GITLAB_TOKEN, CARGO_REGISTRY_TOKEN, …)
                   > .torii/auth.toml (per-repo) > ~/.config/torii/auth.toml (global)")]

@@ -589,11 +589,12 @@ impl EventHandler {
                         }
 
                         // 0.16.0 — Clone: innermost first, the same way
-                        // the log's chain walks its overlays. A clone
-                        // still running swallows Esc rather than hiding
-                        // the only thing that reports it.
+                        // the log's chain walks its overlays. Over a
+                        // running clone Esc asks it to stop rather than
+                        // hiding the only thing reporting it; the modal
+                        // stays up until the worker answers.
                         View::Clone => {
-                            if app.clone_run_in_flight() {
+                            if app.clone_cancel() {
                                 true
                             } else if app.clone_view.run.is_some() {
                                 app.clone_view.run = None;

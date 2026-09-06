@@ -1000,7 +1000,8 @@ pub fn get_platform_client(platform: &str) -> Result<Box<dyn PlatformClient>> {
             Ok(Box::new(SourcehutClient::new(token)))
         }
         "azure" => {
-            Ok(Box::new(AzureClient::new()))
+            let token = crate::auth::resolve_token("azure", ".").value;
+            Ok(Box::new(AzureClient::new(token)))
         }
         "radicle" => {
             Ok(Box::new(RadicleClient::new()))
@@ -1045,25 +1046,24 @@ impl ForgejoClient {
 #[allow(dead_code)]
 pub struct CodebergClient {
     token: Option<String>,
+    base_url: String,
 }
 
 impl CodebergClient {
     pub fn new(token: Option<String>) -> Self {
-        Self { token }
+        Self {
+            token,
+            base_url: "https://codeberg.org".to_string(),
+        }
     }
 }
 
-// Placeholder implementations - will be completed with API calls
 // ──────────────────────────────────────────────────────────────────────────────
 // Gitea / Forgejo / Codeberg — all three share the Gitea API.
 //
 // We implement the shared bits as free functions and delegate from each
 // client. Only the base URL differs (gitea.com / codeberg.org / a
 // self-hosted Forgejo instance via FORGEJO_URL / GITEA_URL env vars).
-//
-// For 0.7.19 we wire `set_visibility` end-to-end; create / delete /
-// update / list still return clear "not implemented yet" errors —
-// follow-up work tracked in ROADMAP.
 
 fn gitea_token<'a>(label: &str, token: &'a Option<String>) -> Result<&'a String> {
     token.as_ref().ok_or_else(|| ToriiError::Auth {
@@ -1167,35 +1167,168 @@ fn gitea_set_visibility(
     crate::http::send_empty(req, &format!("{} set visibility", label))
 }
 
+fn gitea_repo_url(base_url: &str, owner: &str, repo: &str) -> String {
+    format!(
+        "{}/api/v1/repos/{}/{}",
+        base_url.trim_end_matches('/'),
+        owner,
+        repo
+    )
+}
+
+fn gitea_create_repo(
+    base_url: &str,
+    token: &Option<String>,
+    label: &str,
+    name: &str,
+    description: Option<&str>,
+    visibility: Visibility,
+    namespace: Option<&str>,
+) -> Result<RemoteRepo> {
+    let tok = gitea_token(label, token)?;
+    let base = base_url.trim_end_matches('/');
+    // Gitea has no Internal; collapse it the way set_visibility does.
+    let private = !matches!(visibility, Visibility::Public);
+    let mut body = serde_json::json!({
+        "name": name,
+        "private": private,
+        "auto_init": false,
+    });
+    if let Some(desc) = description {
+        body["description"] = serde_json::Value::String(desc.to_string());
+    }
+    let url = match namespace {
+        Some(org) => format!("{base}/api/v1/orgs/{org}/repos"),
+        None => format!("{base}/api/v1/user/repos"),
+    };
+    let req = crate::http::make_client()
+        .post(&url)
+        .header("Authorization", format!("token {tok}"))
+        .header("Accept", "application/json")
+        .json(&body);
+    let json = crate::http::send_json(req, &format!("{label} create repo"))?;
+    Ok(gitea_parse_repo(&json))
+}
+
+fn gitea_delete_repo(
+    base_url: &str,
+    token: &Option<String>,
+    owner: &str,
+    repo: &str,
+    label: &str,
+) -> Result<()> {
+    let tok = gitea_token(label, token)?;
+    let url = gitea_repo_url(base_url, owner, repo);
+    let req = crate::http::make_client()
+        .delete(&url)
+        .header("Authorization", format!("token {tok}"))
+        .header("Accept", "application/json");
+    crate::http::send_empty(req, &format!("{label} delete repo"))
+}
+
+fn gitea_get_repo(
+    base_url: &str,
+    token: &Option<String>,
+    owner: &str,
+    repo: &str,
+    label: &str,
+) -> Result<RemoteRepo> {
+    let tok = gitea_token(label, token)?;
+    let url = gitea_repo_url(base_url, owner, repo);
+    let req = crate::http::make_client()
+        .get(&url)
+        .header("Authorization", format!("token {tok}"))
+        .header("Accept", "application/json");
+    let json = crate::http::send_json(req, &format!("{label} get repo"))?;
+    Ok(gitea_parse_repo(&json))
+}
+
+fn gitea_update_repo(
+    base_url: &str,
+    token: &Option<String>,
+    owner: &str,
+    repo: &str,
+    settings: RepoSettings,
+    label: &str,
+) -> Result<RemoteRepo> {
+    let tok = gitea_token(label, token)?;
+    let url = gitea_repo_url(base_url, owner, repo);
+    let mut body = serde_json::json!({});
+    if let Some(desc) = settings.description {
+        body["description"] = serde_json::Value::String(desc);
+    }
+    if let Some(homepage) = settings.homepage {
+        body["website"] = serde_json::Value::String(homepage);
+    }
+    if let Some(vis) = settings.visibility {
+        body["private"] = serde_json::Value::Bool(!matches!(vis, Visibility::Public));
+    }
+    if let Some(branch) = settings.default_branch {
+        body["default_branch"] = serde_json::Value::String(branch);
+    }
+    let req = crate::http::make_client()
+        .patch(&url)
+        .header("Authorization", format!("token {tok}"))
+        .header("Accept", "application/json")
+        .json(&body);
+    let json = crate::http::send_json(req, &format!("{label} update repo"))?;
+    Ok(gitea_parse_repo(&json))
+}
+
+fn gitea_configure_features(
+    base_url: &str,
+    token: &Option<String>,
+    owner: &str,
+    repo: &str,
+    features: RepoFeatures,
+    label: &str,
+) -> Result<()> {
+    let tok = gitea_token(label, token)?;
+    let url = gitea_repo_url(base_url, owner, repo);
+    let mut body = serde_json::json!({});
+    if let Some(issues) = features.issues {
+        body["has_issues"] = serde_json::Value::Bool(issues);
+    }
+    if let Some(wiki) = features.wiki {
+        body["has_wiki"] = serde_json::Value::Bool(wiki);
+    }
+    if let Some(projects) = features.projects {
+        body["has_projects"] = serde_json::Value::Bool(projects);
+    }
+    let req = crate::http::make_client()
+        .patch(&url)
+        .header("Authorization", format!("token {tok}"))
+        .header("Accept", "application/json")
+        .json(&body);
+    crate::http::send_empty(req, &format!("{label} configure features"))
+}
+
 impl PlatformClient for GiteaClient {
     fn create_repo(
         &self,
-        _name: &str,
-        _description: Option<&str>,
-        _visibility: Visibility,
-        _namespace: Option<&str>,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
     ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Gitea create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
+        gitea_create_repo(
+            &self.base_url,
+            &self.token,
+            "Gitea",
+            name,
+            description,
+            visibility,
+            namespace,
+        )
     }
-    fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Gitea delete_repo not yet wired".to_string(),
-        ))
+    fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
+        gitea_delete_repo(&self.base_url, &self.token, owner, repo, "Gitea")
     }
-    fn update_repo(
-        &self,
-        _owner: &str,
-        _repo: &str,
-        _settings: RepoSettings,
-    ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Gitea update_repo not yet wired".to_string(),
-        ))
+    fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
+        gitea_update_repo(&self.base_url, &self.token, owner, repo, settings, "Gitea")
     }
-    fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Gitea get_repo not yet wired".to_string(),
-        ))
+    fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
+        gitea_get_repo(&self.base_url, &self.token, owner, repo, "Gitea")
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
         gitea_list_repos(&self.base_url, &self.token, "Gitea")
@@ -1210,42 +1343,44 @@ impl PlatformClient for GiteaClient {
             "Gitea",
         )
     }
-    fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Gitea configure_features not yet wired".to_string(),
-        ))
+    fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
+        gitea_configure_features(&self.base_url, &self.token, owner, repo, features, "Gitea")
     }
 }
 
 impl PlatformClient for ForgejoClient {
     fn create_repo(
         &self,
-        _name: &str,
-        _description: Option<&str>,
-        _visibility: Visibility,
-        _namespace: Option<&str>,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
     ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Forgejo create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
+        gitea_create_repo(
+            &self.base_url,
+            &self.token,
+            "Forgejo",
+            name,
+            description,
+            visibility,
+            namespace,
+        )
     }
-    fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Forgejo delete_repo not yet wired".to_string(),
-        ))
+    fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
+        gitea_delete_repo(&self.base_url, &self.token, owner, repo, "Forgejo")
     }
-    fn update_repo(
-        &self,
-        _owner: &str,
-        _repo: &str,
-        _settings: RepoSettings,
-    ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Forgejo update_repo not yet wired".to_string(),
-        ))
+    fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
+        gitea_update_repo(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            settings,
+            "Forgejo",
+        )
     }
-    fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Forgejo get_repo not yet wired".to_string(),
-        ))
+    fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
+        gitea_get_repo(&self.base_url, &self.token, owner, repo, "Forgejo")
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
         gitea_list_repos(&self.base_url, &self.token, "Forgejo")
@@ -1260,52 +1395,58 @@ impl PlatformClient for ForgejoClient {
             "Forgejo",
         )
     }
-    fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Forgejo configure_features not yet wired".to_string(),
-        ))
+    fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
+        gitea_configure_features(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            features,
+            "Forgejo",
+        )
     }
 }
 
 impl PlatformClient for CodebergClient {
     fn create_repo(
         &self,
-        _name: &str,
-        _description: Option<&str>,
-        _visibility: Visibility,
-        _namespace: Option<&str>,
+        name: &str,
+        description: Option<&str>,
+        visibility: Visibility,
+        namespace: Option<&str>,
     ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported("Codeberg create_repo not yet wired (use the web UI). `torii remote visibility` does work.".to_string()))
+        gitea_create_repo(
+            &self.base_url,
+            &self.token,
+            "Codeberg",
+            name,
+            description,
+            visibility,
+            namespace,
+        )
     }
-    fn delete_repo(&self, _owner: &str, _repo: &str) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Codeberg delete_repo not yet wired".to_string(),
-        ))
+    fn delete_repo(&self, owner: &str, repo: &str) -> Result<()> {
+        gitea_delete_repo(&self.base_url, &self.token, owner, repo, "Codeberg")
     }
-    fn update_repo(
-        &self,
-        _owner: &str,
-        _repo: &str,
-        _settings: RepoSettings,
-    ) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Codeberg update_repo not yet wired".to_string(),
-        ))
+    fn update_repo(&self, owner: &str, repo: &str, settings: RepoSettings) -> Result<RemoteRepo> {
+        gitea_update_repo(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            settings,
+            "Codeberg",
+        )
     }
-    fn get_repo(&self, _owner: &str, _repo: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Codeberg get_repo not yet wired".to_string(),
-        ))
+    fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
+        gitea_get_repo(&self.base_url, &self.token, owner, repo, "Codeberg")
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        // Codeberg is a Forgejo instance pinned to codeberg.org, the way
-        // `set_visibility` right below already treats it.
-        gitea_list_repos("https://codeberg.org", &self.token, "Codeberg")
+        gitea_list_repos(&self.base_url, &self.token, "Codeberg")
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
-        // Codeberg is just a Forgejo instance pinned to codeberg.org.
         gitea_set_visibility(
-            "https://codeberg.org",
+            &self.base_url,
             &self.token,
             owner,
             repo,
@@ -1313,10 +1454,15 @@ impl PlatformClient for CodebergClient {
             "Codeberg",
         )
     }
-    fn configure_features(&self, _owner: &str, _repo: &str, _features: RepoFeatures) -> Result<()> {
-        Err(ToriiError::Unsupported(
-            "Codeberg configure_features not yet wired".to_string(),
-        ))
+    fn configure_features(&self, owner: &str, repo: &str, features: RepoFeatures) -> Result<()> {
+        gitea_configure_features(
+            &self.base_url,
+            &self.token,
+            owner,
+            repo,
+            features,
+            "Codeberg",
+        )
     }
 }
 
@@ -1352,6 +1498,80 @@ impl BitbucketClient {
     }
 }
 
+fn bitbucket_clone_link(json: &serde_json::Value, kind: &str) -> String {
+    json["links"]["clone"]
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|l| l["name"].as_str() == Some(kind))
+                .and_then(|l| l["href"].as_str())
+        })
+        .unwrap_or("")
+        .to_string()
+}
+
+fn bitbucket_parse_repo(json: &serde_json::Value) -> RemoteRepo {
+    let private = json["is_private"].as_bool().unwrap_or(true);
+    RemoteRepo {
+        name: json["name"].as_str().unwrap_or("").to_string(),
+        description: json["description"].as_str().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }),
+        visibility: if private {
+            Visibility::Private
+        } else {
+            Visibility::Public
+        },
+        default_branch: json["mainbranch"]["name"]
+            .as_str()
+            .unwrap_or("main")
+            .to_string(),
+        url: json["links"]["html"]["href"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        ssh_url: bitbucket_clone_link(json, "ssh"),
+        clone_url: bitbucket_clone_link(json, "https"),
+    }
+}
+
+/// Repositories the token can see (`role=member`), following Bitbucket's
+/// `next` links. Same 20-page ceiling as the Gitea lister so a broken
+/// `next` cannot spin.
+fn bitbucket_list_repos(api_base: &str, auth: &str) -> Result<Vec<RemoteRepo>> {
+    let mut url = Some(format!(
+        "{}/repositories?role=member&pagelen=50",
+        api_base.trim_end_matches('/')
+    ));
+    let mut repos = Vec::new();
+    for _ in 0..20 {
+        let Some(page) = url.take() else {
+            break;
+        };
+        let req = crate::http::make_client()
+            .get(&page)
+            .header("Authorization", auth)
+            .header("Accept", "application/json");
+        let json = crate::http::send_json(req, "Bitbucket list repos")?;
+        let arr = json["values"]
+            .as_array()
+            .ok_or_else(|| ToriiError::MalformedResponse {
+                provider: "bitbucket".into(),
+                message: format!("Bitbucket returned no `values` array. Body: {json}"),
+            })?;
+        repos.extend(arr.iter().map(bitbucket_parse_repo));
+        url = json["next"].as_str().map(str::to_string);
+        if url.is_none() {
+            break;
+        }
+    }
+    Ok(repos)
+}
+
 impl PlatformClient for BitbucketClient {
     fn create_repo(
         &self,
@@ -1380,9 +1600,7 @@ impl PlatformClient for BitbucketClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Bitbucket list_repos not yet wired".to_string(),
-        ))
+        bitbucket_list_repos("https://api.bitbucket.org/2.0", &self.auth()?)
     }
     fn set_visibility(&self, owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // Bitbucket: PUT /2.0/repositories/{ws}/{repo} with `is_private`.
@@ -1419,6 +1637,119 @@ impl SourcehutClient {
     pub fn new(token: Option<String>) -> Self {
         Self { token }
     }
+
+    fn token(&self) -> Result<&str> {
+        self.token.as_deref().ok_or_else(|| ToriiError::Auth {
+            provider: "sourcehut".into(),
+            message: "Sourcehut token not found. Run: torii auth set sourcehut YOUR_TOKEN"
+                .to_string(),
+        })
+    }
+}
+
+fn sourcehut_parse_repo(json: &serde_json::Value, fallback_owner: &str) -> RemoteRepo {
+    let owner = json["owner"]["canonical_name"]
+        .as_str()
+        .or_else(|| json["owner"]["name"].as_str())
+        .unwrap_or(fallback_owner);
+    let owner = if owner.is_empty() {
+        fallback_owner
+    } else {
+        owner
+    };
+    let name = json["name"].as_str().unwrap_or("");
+    let vis = json["visibility"].as_str().unwrap_or("private");
+    let visibility = match vis {
+        "public" => Visibility::Public,
+        "unlisted" => Visibility::Internal,
+        _ => Visibility::Private,
+    };
+    let web = format!("https://git.sr.ht/{owner}/{name}");
+    RemoteRepo {
+        name: name.to_string(),
+        description: json["description"].as_str().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        }),
+        visibility,
+        default_branch: "main".to_string(),
+        url: web,
+        ssh_url: format!("git@git.sr.ht:{owner}/{name}"),
+        clone_url: format!("https://git.sr.ht/{owner}/{name}"),
+    }
+}
+
+/// Authenticated user's canonical name (`~user`) from meta.sr.ht, used
+/// when a list item does not carry its owner.
+fn sourcehut_whoami(meta_base: &str, token: &str) -> Result<String> {
+    let url = format!("{}/api/user", meta_base.trim_end_matches('/'));
+    let req = crate::http::make_client()
+        .get(&url)
+        .header("Authorization", format!("token {token}"));
+    let json = crate::http::send_json(req, "Sourcehut user")?;
+    if let Some(name) = json["canonical_name"].as_str() {
+        return Ok(name.to_string());
+    }
+    match json["name"].as_str() {
+        Some(n) if !n.is_empty() => Ok(format!("~{n}")),
+        _ => Err(ToriiError::MalformedResponse {
+            provider: "sourcehut".into(),
+            message: format!("meta.sr.ht user had no name. Body: {json}"),
+        }),
+    }
+}
+
+/// Repositories the token owns on git.sr.ht. The list is paged; `next`
+/// is either a URL, a start id, or null. Same 20-page ceiling as Gitea.
+fn sourcehut_list_repos(git_base: &str, meta_base: &str, token: &str) -> Result<Vec<RemoteRepo>> {
+    let owner = sourcehut_whoami(meta_base, token).unwrap_or_default();
+    let mut start: Option<String> = None;
+    let mut next_url: Option<String> = None;
+    let mut repos = Vec::new();
+    for _ in 0..20 {
+        let page = if let Some(u) = next_url.take() {
+            u
+        } else {
+            let mut url = format!("{}/api/repos", git_base.trim_end_matches('/'));
+            if let Some(s) = &start {
+                url.push_str(&format!("?start={s}"));
+            }
+            url
+        };
+        let req = crate::http::make_client()
+            .get(&page)
+            .header("Authorization", format!("token {token}"));
+        let json = crate::http::send_json(req, "Sourcehut list repos")?;
+        let arr = json["results"]
+            .as_array()
+            .ok_or_else(|| ToriiError::MalformedResponse {
+                provider: "sourcehut".into(),
+                message: format!("Sourcehut returned no `results` array. Body: {json}"),
+            })?;
+        let got = arr.len();
+        repos.extend(arr.iter().map(|v| sourcehut_parse_repo(v, &owner)));
+        match json.get("next") {
+            None | Some(serde_json::Value::Null) => break,
+            Some(serde_json::Value::String(s)) if s.starts_with("http") => {
+                next_url = Some(s.clone());
+                start = None;
+            }
+            Some(serde_json::Value::String(s)) if !s.is_empty() => {
+                start = Some(s.clone());
+            }
+            Some(serde_json::Value::Number(n)) => {
+                start = Some(n.to_string());
+            }
+            _ => break,
+        }
+        if got == 0 {
+            break;
+        }
+    }
+    Ok(repos)
 }
 
 impl PlatformClient for SourcehutClient {
@@ -1449,9 +1780,7 @@ impl PlatformClient for SourcehutClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Sourcehut list_repos not yet wired".to_string(),
-        ))
+        sourcehut_list_repos("https://git.sr.ht", "https://meta.sr.ht", self.token()?)
     }
     fn set_visibility(&self, _owner: &str, repo: &str, visibility: Visibility) -> Result<()> {
         // git.sr.ht exposes visibility via a GraphQL mutation. Three
@@ -1505,18 +1834,159 @@ impl PlatformClient for SourcehutClient {
 // Azure DevOps — visibility lives at the *project* level on Azure, not
 // per-repo. We surface that clearly so the user knows where to go.
 
-pub struct AzureClient;
+pub struct AzureClient {
+    token: Option<String>,
+}
 
 impl Default for AzureClient {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
 impl AzureClient {
-    pub fn new() -> Self {
-        Self
+    pub fn new(token: Option<String>) -> Self {
+        Self { token }
     }
+
+    fn token(&self) -> Result<&str> {
+        self.token.as_deref().ok_or_else(|| ToriiError::Auth {
+            provider: "azure".into(),
+            message: "Azure DevOps PAT not found. Create one at \
+                 https://dev.azure.com/{org}/_usersSettings/tokens and run: \
+                 torii auth set azure YOUR_PAT"
+                .to_string(),
+        })
+    }
+
+    fn auth_header(token: &str) -> String {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(format!(":{token}"));
+        format!("Basic {b64}")
+    }
+}
+
+fn azure_parse_repo(json: &serde_json::Value) -> RemoteRepo {
+    let name = json["name"].as_str().unwrap_or("").to_string();
+    let org_project = json["project"]["name"].as_str().unwrap_or("");
+    let web = json["webUrl"].as_str().unwrap_or("");
+    // Drop the `_git` segment so the clone view's slug is `org/project/repo`
+    // rather than `org/project/_git/repo`.
+    let url = web.replace("/_git/", "/");
+    let url = if url.is_empty() {
+        format!("https://dev.azure.com/{org_project}/{name}")
+    } else {
+        url
+    };
+    let default_branch = json["defaultBranch"]
+        .as_str()
+        .unwrap_or("refs/heads/main")
+        .trim_start_matches("refs/heads/")
+        .to_string();
+    let vis = json["project"]["visibility"].as_str().unwrap_or("private");
+    RemoteRepo {
+        name,
+        description: None,
+        visibility: if vis.eq_ignore_ascii_case("public") {
+            Visibility::Public
+        } else {
+            Visibility::Private
+        },
+        default_branch,
+        url,
+        ssh_url: json["sshUrl"].as_str().unwrap_or("").to_string(),
+        clone_url: json["remoteUrl"].as_str().unwrap_or("").to_string(),
+    }
+}
+
+fn azure_list_repos_in_org(dev_base: &str, org: &str, auth: &str) -> Result<Vec<RemoteRepo>> {
+    let url = format!(
+        "{}/{}/_apis/git/repositories?api-version=7.0",
+        dev_base.trim_end_matches('/'),
+        org
+    );
+    let req = crate::http::make_client()
+        .get(&url)
+        .header("Authorization", auth)
+        .header("Accept", "application/json");
+    let json = crate::http::send_json(req, "Azure list repos")?;
+    let arr = json["value"]
+        .as_array()
+        .ok_or_else(|| ToriiError::MalformedResponse {
+            provider: "azure".into(),
+            message: format!("Azure returned no `value` array. Body: {json}"),
+        })?;
+    Ok(arr.iter().map(azure_parse_repo).collect())
+}
+
+/// Organisations the PAT can see. `AZURE_DEVOPS_ORG` / `AZDO_ORG` skip
+/// the profile lookup when the user already knows which org to ask.
+fn azure_org_from_env() -> Option<String> {
+    std::env::var("AZURE_DEVOPS_ORG")
+        .or_else(|_| std::env::var("AZDO_ORG"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn azure_orgs_from_api(vssps_base: &str, auth: &str) -> Result<Vec<String>> {
+    let me_url = format!(
+        "{}/_apis/profile/profiles/me?api-version=7.0",
+        vssps_base.trim_end_matches('/')
+    );
+    let me_req = crate::http::make_client()
+        .get(&me_url)
+        .header("Authorization", auth)
+        .header("Accept", "application/json");
+    let me = crate::http::send_json(me_req, "Azure profile")?;
+    let id = me["id"]
+        .as_str()
+        .ok_or_else(|| ToriiError::MalformedResponse {
+            provider: "azure".into(),
+            message: format!("Azure profile had no id. Body: {me}"),
+        })?;
+    let acc_url = format!(
+        "{}/_apis/accounts?memberId={id}&api-version=7.0",
+        vssps_base.trim_end_matches('/')
+    );
+    let acc_req = crate::http::make_client()
+        .get(&acc_url)
+        .header("Authorization", auth)
+        .header("Accept", "application/json");
+    let acc = crate::http::send_json(acc_req, "Azure accounts")?;
+    let names: Vec<String> = acc["value"]
+        .as_array()
+        .ok_or_else(|| ToriiError::MalformedResponse {
+            provider: "azure".into(),
+            message: format!("Azure accounts had no `value` array. Body: {acc}"),
+        })?
+        .iter()
+        .filter_map(|v| v["accountName"].as_str().map(str::to_string))
+        .filter(|s| !s.is_empty())
+        .collect();
+    if names.is_empty() {
+        return Err(ToriiError::Auth {
+            provider: "azure".into(),
+            message: "Azure PAT is not a member of any organisation. Set \
+                 AZURE_DEVOPS_ORG (or AZDO_ORG) to the org name, or clone by URL."
+                .to_string(),
+        });
+    }
+    Ok(names)
+}
+
+fn azure_list_repos(dev_base: &str, vssps_base: &str, token: &str) -> Result<Vec<RemoteRepo>> {
+    let auth = AzureClient::auth_header(token);
+    let orgs = if let Some(org) = azure_org_from_env() {
+        vec![org]
+    } else {
+        azure_orgs_from_api(vssps_base, &auth)?
+    };
+    let mut repos = Vec::new();
+    for org in orgs.into_iter().take(10) {
+        repos.extend(azure_list_repos_in_org(dev_base, &org, &auth)?);
+    }
+    Ok(repos)
 }
 
 fn azure_visibility_unsupported() -> ToriiError {
@@ -1557,9 +2027,11 @@ impl PlatformClient for AzureClient {
         ))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Azure DevOps list_repos not yet wired".to_string(),
-        ))
+        azure_list_repos(
+            "https://dev.azure.com",
+            "https://app.vssps.visualstudio.com",
+            self.token()?,
+        )
     }
     fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> {
         Err(azure_visibility_unsupported())
@@ -1620,15 +2092,21 @@ impl PlatformClient for RadicleClient {
     fn update_repo(&self, _o: &str, _r: &str, _s: RepoSettings) -> Result<RemoteRepo> {
         Err(radicle_visibility_unsupported())
     }
-    fn get_repo(&self, _o: &str, _r: &str) -> Result<RemoteRepo> {
-        Err(ToriiError::Unsupported(
-            "Radicle get_repo not yet wired — use `rad inspect <RID>` directly.".to_string(),
-        ))
+    fn get_repo(&self, owner: &str, repo: &str) -> Result<RemoteRepo> {
+        // The URL parser stores the RID in `owner` and leaves `repo`
+        // empty. A caller that passed the RID as `repo` still works.
+        let raw = if repo.is_empty() { owner } else { repo };
+        let rid = crate::radicle::normalize_rid(raw)?;
+        let payload = crate::radicle::run_rad_json(&["inspect", &rid, "--payload"])?;
+        Ok(radicle_repo_from_payload(&rid, &payload))
     }
     fn list_repos(&self) -> Result<Vec<RemoteRepo>> {
-        Err(ToriiError::Unsupported(
-            "Radicle list_repos not yet wired — use `rad ls` directly.".to_string(),
-        ))
+        // `--all` is every replica in storage; without it `rad ls` is
+        // only repos this node has contributed to. Fall back if an
+        // older `rad` does not know `--all`.
+        let json = crate::radicle::run_rad_json(&["ls", "--all"])
+            .or_else(|_| crate::radicle::run_rad_json(&["ls"]))?;
+        radicle_repos_from_ls(&json)
     }
     fn set_visibility(&self, _o: &str, _r: &str, _v: Visibility) -> Result<()> {
         Err(radicle_visibility_unsupported())
@@ -1637,5 +2115,458 @@ impl PlatformClient for RadicleClient {
         Err(ToriiError::Unsupported(
             "Radicle has no per-repo features knob.".to_string(),
         ))
+    }
+}
+
+fn radicle_project<'a>(json: &'a serde_json::Value) -> &'a serde_json::Value {
+    json.pointer("/payload/xyz.radicle.project")
+        .or_else(|| json.pointer("/doc/payload/xyz.radicle.project"))
+        .or_else(|| json.pointer("/xyz.radicle.project"))
+        .unwrap_or(json)
+}
+
+fn radicle_rid_from(json: &serde_json::Value) -> String {
+    json["rid"]
+        .as_str()
+        .or_else(|| json["id"].as_str())
+        .or_else(|| json["urn"].as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn radicle_visibility_of(json: &serde_json::Value) -> Visibility {
+    let vis = json["visibility"]
+        .as_str()
+        .or_else(|| json["visibility"]["type"].as_str())
+        .or_else(|| json["doc"]["visibility"].as_str())
+        .or_else(|| json["doc"]["visibility"]["type"].as_str())
+        .unwrap_or("public");
+    if vis.eq_ignore_ascii_case("private") {
+        Visibility::Private
+    } else {
+        Visibility::Public
+    }
+}
+
+/// One repository as `rad ls --format json` (or inspect --payload) describes it.
+fn radicle_parse_repo(json: &serde_json::Value) -> RemoteRepo {
+    let rid_raw = radicle_rid_from(json);
+    let rid = crate::radicle::normalize_rid(&rid_raw).unwrap_or_else(|_| rid_raw.clone());
+    let project = radicle_project(json);
+    let name = project["name"]
+        .as_str()
+        .or_else(|| json["name"].as_str())
+        .unwrap_or_else(|| rid.trim_start_matches("rad:"))
+        .to_string();
+    let description = project["description"]
+        .as_str()
+        .or_else(|| json["description"].as_str())
+        .and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
+    let default_branch = project["defaultBranch"]
+        .as_str()
+        .or_else(|| json["defaultBranch"].as_str())
+        .unwrap_or("main")
+        .to_string();
+    RemoteRepo {
+        name,
+        description,
+        visibility: radicle_visibility_of(json),
+        default_branch,
+        url: rid.clone(),
+        ssh_url: rid.clone(),
+        clone_url: rid,
+    }
+}
+
+fn radicle_repo_from_payload(rid: &str, payload: &serde_json::Value) -> RemoteRepo {
+    let mut json = payload.clone();
+    if json.get("rid").is_none() {
+        json["rid"] = serde_json::Value::String(rid.to_string());
+    }
+    radicle_parse_repo(&json)
+}
+
+fn radicle_repos_from_ls(json: &serde_json::Value) -> Result<Vec<RemoteRepo>> {
+    let items: Vec<&serde_json::Value> = if let Some(arr) = json.as_array() {
+        arr.iter().collect()
+    } else if let Some(arr) = json["results"].as_array() {
+        arr.iter().collect()
+    } else if json.is_object() {
+        vec![json]
+    } else {
+        return Err(ToriiError::MalformedResponse {
+            provider: "radicle".into(),
+            message: format!("rad ls: expected array. Body: {json}"),
+        });
+    };
+    Ok(items
+        .into_iter()
+        .filter(|v| !radicle_rid_from(v).is_empty())
+        .map(radicle_parse_repo)
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+
+    fn gitea_repo_json() -> serde_json::Value {
+        serde_json::json!({
+            "name": "widget",
+            "description": "a thing",
+            "private": false,
+            "default_branch": "main",
+            "html_url": "https://gitea.example/acme/widget",
+            "ssh_url": "git@gitea.example:acme/widget.git",
+            "clone_url": "https://gitea.example/acme/widget.git",
+        })
+    }
+
+    #[test]
+    fn gitea_parse_repo_maps_urls_and_visibility() {
+        let repo = gitea_parse_repo(&gitea_repo_json());
+        assert_eq!(repo.name, "widget");
+        assert_eq!(repo.description.as_deref(), Some("a thing"));
+        assert!(matches!(repo.visibility, Visibility::Public));
+        assert_eq!(repo.ssh_url, "git@gitea.example:acme/widget.git");
+        assert_eq!(repo.clone_url, "https://gitea.example/acme/widget.git");
+    }
+
+    #[test]
+    fn gitea_create_posts_to_user_repos() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(POST)
+                .path("/api/v1/user/repos")
+                .header("Authorization", "token tok")
+                .json_body(serde_json::json!({
+                    "name": "widget",
+                    "private": true,
+                    "auto_init": false,
+                }));
+            then.status(201).json_body(gitea_repo_json());
+        });
+        let token = Some("tok".to_string());
+        let repo = gitea_create_repo(
+            &server.base_url(),
+            &token,
+            "Gitea",
+            "widget",
+            None,
+            Visibility::Private,
+            None,
+        )
+        .unwrap();
+        m.assert();
+        assert_eq!(repo.name, "widget");
+    }
+
+    #[test]
+    fn gitea_create_in_an_org_hits_orgs_repos() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(POST).path("/api/v1/orgs/acme/repos");
+            then.status(201).json_body(gitea_repo_json());
+        });
+        let token = Some("tok".to_string());
+        gitea_create_repo(
+            &server.base_url(),
+            &token,
+            "Gitea",
+            "widget",
+            None,
+            Visibility::Public,
+            Some("acme"),
+        )
+        .unwrap();
+        m.assert();
+    }
+
+    #[test]
+    fn gitea_delete_and_get_hit_the_repo_path() {
+        let server = MockServer::start();
+        let del = server.mock(|when, then| {
+            when.method(DELETE).path("/api/v1/repos/acme/widget");
+            then.status(204);
+        });
+        let get = server.mock(|when, then| {
+            when.method(GET).path("/api/v1/repos/acme/widget");
+            then.status(200).json_body(gitea_repo_json());
+        });
+        let token = Some("tok".to_string());
+        gitea_delete_repo(&server.base_url(), &token, "acme", "widget", "Gitea").unwrap();
+        let repo = gitea_get_repo(&server.base_url(), &token, "acme", "widget", "Gitea").unwrap();
+        del.assert();
+        get.assert();
+        assert_eq!(repo.name, "widget");
+    }
+
+    #[test]
+    fn gitea_configure_features_patches_has_issues() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(PATCH)
+                .path("/api/v1/repos/acme/widget")
+                .json_body(serde_json::json!({ "has_issues": false, "has_wiki": true }));
+            then.status(200).json_body(gitea_repo_json());
+        });
+        let token = Some("tok".to_string());
+        let mut features = RepoFeatures::default();
+        features.issues = Some(false);
+        features.wiki = Some(true);
+        gitea_configure_features(
+            &server.base_url(),
+            &token,
+            "acme",
+            "widget",
+            features,
+            "Gitea",
+        )
+        .unwrap();
+        m.assert();
+    }
+
+    #[test]
+    fn bitbucket_parse_repo_picks_ssh_and_https_clone_links() {
+        let json = serde_json::json!({
+            "name": "widget",
+            "description": "",
+            "is_private": true,
+            "mainbranch": { "name": "trunk" },
+            "links": {
+                "html": { "href": "https://bitbucket.org/acme/widget" },
+                "clone": [
+                    { "name": "https", "href": "https://bitbucket.org/acme/widget.git" },
+                    { "name": "ssh", "href": "git@bitbucket.org:acme/widget.git" },
+                ]
+            }
+        });
+        let repo = bitbucket_parse_repo(&json);
+        assert_eq!(repo.name, "widget");
+        assert!(repo.description.is_none());
+        assert!(matches!(repo.visibility, Visibility::Private));
+        assert_eq!(repo.default_branch, "trunk");
+        assert_eq!(repo.ssh_url, "git@bitbucket.org:acme/widget.git");
+        assert_eq!(repo.clone_url, "https://bitbucket.org/acme/widget.git");
+    }
+
+    #[test]
+    fn bitbucket_list_follows_next() {
+        let server = MockServer::start();
+        let page2 = format!("{}/repositories?page=2", server.base_url());
+        let p1 = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repositories")
+                .query_param("role", "member");
+            then.status(200).json_body(serde_json::json!({
+                "values": [{
+                    "name": "one",
+                    "is_private": false,
+                    "links": {
+                        "html": { "href": "https://bitbucket.org/acme/one" },
+                        "clone": []
+                    }
+                }],
+                "next": page2,
+            }));
+        });
+        let p2 = server.mock(|when, then| {
+            when.method(GET)
+                .path("/repositories")
+                .query_param("page", "2");
+            then.status(200).json_body(serde_json::json!({
+                "values": [{
+                    "name": "two",
+                    "is_private": false,
+                    "links": {
+                        "html": { "href": "https://bitbucket.org/acme/two" },
+                        "clone": []
+                    }
+                }],
+            }));
+        });
+        let repos = bitbucket_list_repos(&server.base_url(), "Bearer tok").unwrap();
+        p1.assert();
+        p2.assert();
+        assert_eq!(
+            repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+    }
+
+    #[test]
+    fn sourcehut_parse_repo_builds_clone_urls() {
+        let json = serde_json::json!({
+            "name": "widget",
+            "description": "notes",
+            "visibility": "unlisted",
+            "owner": { "canonical_name": "~acme" },
+        });
+        let repo = sourcehut_parse_repo(&json, "~fallback");
+        assert_eq!(repo.name, "widget");
+        assert!(matches!(repo.visibility, Visibility::Internal));
+        assert_eq!(repo.url, "https://git.sr.ht/~acme/widget");
+        assert_eq!(repo.ssh_url, "git@git.sr.ht:~acme/widget");
+        assert_eq!(repo.clone_url, "https://git.sr.ht/~acme/widget");
+    }
+
+    #[test]
+    fn sourcehut_list_uses_whoami_when_owner_is_missing() {
+        let git = MockServer::start();
+        let meta = MockServer::start();
+        let who = meta.mock(|when, then| {
+            when.method(GET).path("/api/user");
+            then.status(200)
+                .json_body(serde_json::json!({ "canonical_name": "~acme" }));
+        });
+        let list = git.mock(|when, then| {
+            when.method(GET).path("/api/repos");
+            then.status(200).json_body(serde_json::json!({
+                "results": [{ "name": "widget", "visibility": "public" }],
+                "next": null,
+            }));
+        });
+        let repos = sourcehut_list_repos(&git.base_url(), &meta.base_url(), "tok").unwrap();
+        who.assert();
+        list.assert();
+        assert_eq!(repos.len(), 1);
+        assert_eq!(repos[0].ssh_url, "git@git.sr.ht:~acme/widget");
+    }
+
+    #[test]
+    fn azure_parse_repo_strips_git_from_the_web_url() {
+        let json = serde_json::json!({
+            "name": "widget",
+            "webUrl": "https://dev.azure.com/org/proj/_git/widget",
+            "sshUrl": "git@ssh.dev.azure.com:v3/org/proj/widget",
+            "remoteUrl": "https://dev.azure.com/org/proj/_git/widget",
+            "defaultBranch": "refs/heads/develop",
+            "project": { "name": "proj", "visibility": "private" },
+        });
+        let repo = azure_parse_repo(&json);
+        assert_eq!(repo.name, "widget");
+        assert_eq!(repo.url, "https://dev.azure.com/org/proj/widget");
+        assert_eq!(repo.default_branch, "develop");
+        assert_eq!(repo.ssh_url, "git@ssh.dev.azure.com:v3/org/proj/widget");
+    }
+
+    #[test]
+    fn azure_list_in_org_reads_the_value_array() {
+        let server = MockServer::start();
+        let m = server.mock(|when, then| {
+            when.method(GET)
+                .path("/acme/_apis/git/repositories")
+                .query_param("api-version", "7.0");
+            then.status(200).json_body(serde_json::json!({
+                "value": [{
+                    "name": "widget",
+                    "webUrl": "https://dev.azure.com/acme/p/_git/widget",
+                    "sshUrl": "git@ssh.dev.azure.com:v3/acme/p/widget",
+                    "remoteUrl": "https://dev.azure.com/acme/p/_git/widget",
+                    "project": { "name": "p", "visibility": "public" },
+                }]
+            }));
+        });
+        let repos = azure_list_repos_in_org(&server.base_url(), "acme", "Basic x").unwrap();
+        m.assert();
+        assert_eq!(repos.len(), 1);
+        assert!(matches!(repos[0].visibility, Visibility::Public));
+        assert_eq!(repos[0].url, "https://dev.azure.com/acme/p/widget");
+    }
+
+    #[test]
+    fn azure_orgs_from_api_reads_account_names() {
+        let server = MockServer::start();
+        let me = server.mock(|when, then| {
+            when.method(GET).path("/_apis/profile/profiles/me");
+            then.status(200)
+                .json_body(serde_json::json!({ "id": "guid-1" }));
+        });
+        let acc = server.mock(|when, then| {
+            when.method(GET)
+                .path("/_apis/accounts")
+                .query_param("memberId", "guid-1");
+            then.status(200).json_body(serde_json::json!({
+                "value": [{ "accountName": "acme" }, { "accountName": "other" }]
+            }));
+        });
+        let orgs = azure_orgs_from_api(&server.base_url(), "Basic x").unwrap();
+        me.assert();
+        acc.assert();
+        assert_eq!(orgs, ["acme", "other"]);
+    }
+
+    #[test]
+    fn radicle_parse_repo_reads_the_project_payload() {
+        let json = serde_json::json!({
+            "rid": "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5",
+            "payload": {
+                "xyz.radicle.project": {
+                    "name": "heartwood",
+                    "description": "the stack",
+                    "defaultBranch": "master"
+                }
+            },
+            "visibility": "public"
+        });
+        let repo = radicle_parse_repo(&json);
+        assert_eq!(repo.name, "heartwood");
+        assert_eq!(repo.description.as_deref(), Some("the stack"));
+        assert_eq!(repo.default_branch, "master");
+        assert!(matches!(repo.visibility, Visibility::Public));
+        assert_eq!(repo.clone_url, "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5");
+        assert_eq!(repo.ssh_url, repo.clone_url);
+    }
+
+    #[test]
+    fn radicle_parse_repo_nested_doc_and_private() {
+        let json = serde_json::json!({
+            "id": "z42hL2jL4XNk6K8oHQaSWfMgCL7ji",
+            "doc": {
+                "payload": {
+                    "xyz.radicle.project": { "name": "heartwood" }
+                },
+                "visibility": { "type": "private" }
+            }
+        });
+        let repo = radicle_parse_repo(&json);
+        assert_eq!(repo.name, "heartwood");
+        assert_eq!(repo.clone_url, "rad:z42hL2jL4XNk6K8oHQaSWfMgCL7ji");
+        assert!(matches!(repo.visibility, Visibility::Private));
+    }
+
+    #[test]
+    fn radicle_ls_array_skips_rows_without_a_rid() {
+        let json = serde_json::json!([
+            { "rid": "rad:z111", "payload": { "xyz.radicle.project": { "name": "one" } } },
+            { "noise": true },
+            { "rid": "rad:z222", "name": "two" }
+        ]);
+        let repos = radicle_repos_from_ls(&json).unwrap();
+        assert_eq!(
+            repos.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            ["one", "two"]
+        );
+    }
+
+    #[test]
+    fn radicle_repo_from_inspect_payload() {
+        let payload = serde_json::json!({
+            "xyz.radicle.project": {
+                "name": "heartwood",
+                "description": "the stack",
+                "defaultBranch": "master"
+            }
+        });
+        let repo = radicle_repo_from_payload("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5", &payload);
+        assert_eq!(repo.name, "heartwood");
+        assert_eq!(repo.clone_url, "rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5");
     }
 }

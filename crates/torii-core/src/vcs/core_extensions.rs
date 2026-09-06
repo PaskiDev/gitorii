@@ -751,7 +751,7 @@ impl GitRepo {
         let mut last = Instant::now();
         let result = Self::clone_repo_with_progress(url, directory, &mut |p| {
             if !p.done() && last.elapsed().as_millis() < 100 {
-                return;
+                return true;
             }
             last = Instant::now();
             let mb = p.received_bytes as f64 / (1024.0 * 1024.0);
@@ -776,6 +776,9 @@ impl GitRepo {
                 );
             }
             let _ = std::io::stdout().flush();
+            // Nothing here can ask for a stop: on the terminal that is
+            // Ctrl-C's job, and it does not go through this callback.
+            true
         });
         println!();
         result
@@ -787,10 +790,23 @@ impl GitRepo {
     /// that owns the screen can take. Credentials, the shallow-clone
     /// env var and the empty-remote HEAD fixup are the same either way,
     /// because there is one implementation of them.
+    ///
+    /// **`on_progress` returns whether to carry on.** `false` stops the
+    /// clone, and it comes back as an `Err` — a stopped clone is not a
+    /// successful one, and the caller who asked for the stop is the one
+    /// that knows the difference. Two things are worth knowing before
+    /// relying on it:
+    ///
+    /// - The callback is the *transfer* callback, so a stop lands during
+    ///   the fetch. Once every object is down and libgit2 has moved on to
+    ///   writing the working tree, nothing asks again.
+    /// - Nothing is left behind. libgit2 removes the tree it created on
+    ///   any failed clone, and keeps the root directory only when that
+    ///   directory already existed before the clone began.
     pub fn clone_repo_with_progress(
         url: &str,
         directory: Option<&str>,
-        on_progress: &mut dyn FnMut(CloneProgress),
+        on_progress: &mut dyn FnMut(CloneProgress) -> bool,
     ) -> Result<()> {
         let target = Self::clone_target_dir(url, directory);
 
@@ -842,8 +858,7 @@ impl GitRepo {
                 indexed_deltas: stats.indexed_deltas(),
                 total_deltas: stats.total_deltas(),
                 received_bytes: stats.received_bytes(),
-            });
-            true
+            })
         });
 
         let mut fetch_opts = git2::FetchOptions::new();

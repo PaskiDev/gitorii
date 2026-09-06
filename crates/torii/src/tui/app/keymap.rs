@@ -321,6 +321,7 @@ impl App {
 /// one line in each.
 fn view_for_action(id: &str) -> Option<View> {
     Some(match id {
+        "goto:clone" => View::Clone,
         "goto:files" => View::Dashboard,
         "goto:save" => View::Commit,
         "goto:sync" => View::Sync,
@@ -334,15 +335,14 @@ fn view_for_action(id: &str) -> Option<View> {
         "goto:pr" => View::Pr,
         "goto:issue" => View::Issue,
         "goto:platform" => View::Platform,
-        "goto:clone" => View::Clone,
         "goto:remote" => View::Remote,
         "goto:workspace" => View::Workspace,
         "goto:worktree" => View::Worktree,
         "goto:submodule" => View::Submodule,
+        "goto:stats" => View::Stats,
         "goto:bisect" => View::Bisect,
         "goto:auth" => View::Auth,
         "goto:config" => View::Config,
-        "goto:stats" => View::Stats,
         _ => return None,
     })
 }

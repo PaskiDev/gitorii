@@ -9,10 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **A clone view in the TUI.** The sidebar's new `clone` entry lists the
-  repositories of whichever account you have a token for, filters them as you
-  type, and clones the one you pick — with a progress bar, because a clone is
-  the one operation in torii that can take a minute and say nothing.
+- **A clone view in the TUI.** The sidebar's new `clone` entry leads the
+  list: getting a repository is how you start, not a property of the one
+  already open. Opening the TUI still lands on `files`, because you launch
+  it inside a repository. It lists the repositories of whichever account
+  you have a token for, filters them as you type, and clones the one you
+  pick — with a progress bar, because a clone is the one operation in
+  torii that can take a minute and say nothing.
   - **The destination is on screen before the clone starts, and is editable.**
     It is `<clone.base_dir>/<repo>`, re-derived every time the caret moves or
     the URL box changes, and left alone the moment you edit it: a field that
@@ -34,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The listing is a background worker, like every other network call in the
     TUI; the view stays usable while it runs, and a host with no token is
     never asked, because the answer is already known.
+  - **`Esc` over a running clone stops it.** The progress sink returns
+    false, which is what libgit2 already asked for, and libgit2 removes
+    the half-fetched tree. A Radicle clone kills the `rad` process
+    instead; seed state in `~/.radicle` may remain.
 - **`clone.base_dir`** — where a clone lands when no destination is given.
   Default is `.`, which is what `git clone` does, so nothing moves for anyone
   who does not set it. `~` is expanded. `torii config set clone.base_dir
@@ -42,8 +49,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   API and all three returned "not yet wired", which left the new view with
   three empty hosts. One paged implementation now serves them, stopping on the
   first short page and at a ceiling, so a host that ignores `limit` cannot
-  spin. Bitbucket, sourcehut, Azure and Radicle still say they are not wired —
-  they are, at least, saying it in a view that has a URL box next to it.
+  spin.
+- **`list_repos` for Bitbucket, sourcehut and Azure.** The clone view can
+  now browse those three the way it already browses GitHub / GitLab /
+  Gitea. Bitbucket follows `next` with the same 20-page ceiling; sourcehut
+  pages `git.sr.ht/api/repos` and names the owner from meta.sr.ht when a
+  row does not carry one; Azure lists every git repo in the organisations
+  the PAT can see (`AZURE_DEVOPS_ORG` / `AZDO_ORG` pin it to one).
+- **Gitea / Forgejo / Codeberg `PlatformClient`.** `create` / `delete` /
+  `get` / `update` / `configure_features` share one helper, the way
+  `list_repos` and `set_visibility` already did. `torii remote create
+  codeberg …` no longer sends you to the web UI.
+- **`torii clone <plat> user/repo` covers sourcehut and Azure.** Sourcehut
+  is `~user/repo` (the tilde is added if you omit it). Azure is
+  `org/project/repo`, because that is how the URLs are shaped
+  (`git@ssh.dev.azure.com:v3/…` / `https://dev.azure.com/…/_git/…`).
+  Forgejo and Gitea shorthand now read `FORGEJO_URL` / `GITEA_URL` the
+  same way the API client does, instead of always pointing Forgejo at
+  `codeberg.org`.
+- **Radicle clone via `rad`, not libgit2.** `list_repos` is `rad ls --all`
+  (falls back to `rad ls`); `get_repo` is `rad inspect --payload`.
+  `torii clone radicle rad:z…` and a `rad:` / `rad://` URL both run
+  `rad clone`. The TUI lists Radicle without a token — the local node
+  is the auth — and Esc kills the `rad` process. A stop during fetch
+  can leave seed state in `~/.radicle`; the working copy is not
+  promised. `rad` still has to be on PATH.
+- **OAuth for self-hosted Forgejo and Gitea.** They share an API, not
+  an OAuth grant. Forgejo has RFC 8628 (Codeberg already did):
+  `torii auth oauth forgejo` talks to `FORGEJO_URL` (default
+  codeberg.org, and then the bundled Codeberg client_id is reused).
+  Any other host needs a public OAuth app and `TORII_FORGEJO_APP_ID`.
+  Gitea still only speaks authorization-code: `torii auth oauth gitea`
+  opens a PKCE loopback on `127.0.0.1:8888/callback`, host from
+  `GITEA_URL`, client_id from `TORII_GITEA_APP_ID`. The TUI runs
+  Forgejo's device flow in-place; Gitea (and Bitbucket) name the CLI
+  command instead of pretending device flow works.
 - **`GitRepo::clone_repo_with_progress`** — the clone, with libgit2's progress
   handed to a caller-supplied sink instead of to `stdout`. `clone_repo` is now
   that function plus the printing sink the CLI wants, so credentials,
@@ -111,6 +151,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     quietly eats the capitals and `<>` an identity is made of.
   - Refusals arrive verbatim, so the dirty-tree guard now reads as
     "working tree has uncommitted changes" instead of "reauthor failed".
+
+### Changed
+
+- **`stats` sits with the admin views.** It is a look at the repo from a
+  distance, not a daily action, and it was occupying the row under `files`.
+  It drops to just above `bisect`, so `save` and `sync` sit next to the
+  entry views.
 
 ### Fixed
 

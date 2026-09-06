@@ -64,7 +64,7 @@ pub enum CloneFocus {
 }
 
 /// What the clone worker is doing, as it does it. The modal stays open
-/// on `Done` and `Error` so the outcome is read rather than glimpsed.
+/// on every ending so the outcome is read rather than glimpsed.
 #[derive(Debug, Clone)]
 pub enum CloneStatus {
     /// Handed to libgit2; nothing measurable has come back yet.
@@ -72,6 +72,10 @@ pub enum CloneStatus {
     Working(crate::core_extensions::CloneProgress),
     /// Cloned into `path`.
     Done(String),
+    /// Stopped on request. Nothing is left on disk: libgit2 removes the
+    /// tree it made, and the clone never starts onto a path that was
+    /// already there.
+    Cancelled,
     Error(String),
 }
 
@@ -81,6 +85,17 @@ pub struct CloneRun {
     pub url: String,
     pub dest: String,
     pub status: CloneStatus,
+    /// Raised when the user asks the clone to stop. The worker's
+    /// progress sink reads it on its next report and tells libgit2 to
+    /// give up, so a stop lands within one report rather than at once —
+    /// which is why the modal says it is stopping instead of vanishing.
+    pub cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CloneRun {
+    pub fn cancel_asked(&self) -> bool {
+        self.cancel.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 pub struct CloneState {
@@ -177,6 +192,7 @@ pub const CLONE_PLATFORMS: &[&str] = &[
     "bitbucket",
     "sourcehut",
     "azure",
+    "radicle",
 ];
 
 impl App {
@@ -186,7 +202,7 @@ impl App {
         // opened; one still running is, so it stays.
         if matches!(
             self.clone_view.run.as_ref().map(|r| &r.status),
-            Some(CloneStatus::Done(_)) | Some(CloneStatus::Error(_))
+            Some(CloneStatus::Done(_)) | Some(CloneStatus::Error(_)) | Some(CloneStatus::Cancelled)
         ) {
             self.clone_view.run = None;
         }
@@ -229,6 +245,11 @@ impl App {
     }
 
     pub fn clone_platform_has_token(&self, platform: &str) -> bool {
+        // The local node is the auth. Asking for a token would skip
+        // the listing that `rad ls` already has.
+        if platform == "radicle" {
+            return true;
+        }
         crate::auth::resolve_token(platform, &self.repo_path)
             .value
             .is_some()
@@ -420,11 +441,13 @@ impl App {
             return;
         }
 
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.clone_view.error = None;
         self.clone_view.run = Some(CloneRun {
             url: url.clone(),
             dest: dest.clone(),
             status: CloneStatus::Starting,
+            cancel: std::sync::Arc::clone(&cancel),
         });
         self.log_event(format!("clone {} → {}", url, dest), EventKind::Info);
 
@@ -432,28 +455,84 @@ impl App {
         self.clone_run_rx = Some(rx);
 
         std::thread::spawn(move || {
-            // libgit2 reports far faster than a terminal can be redrawn.
-            // The floor is the same 100 ms the CLI's printing sink uses,
-            // and the last report of each phase is let through whatever
-            // the clock says, so the bar always reaches its end.
-            let mut last = std::time::Instant::now();
-            let sink_tx = tx.clone();
-            let result = crate::core::GitRepo::clone_repo_with_progress(
-                &url,
-                Some(dest.as_str()),
-                &mut |p| {
-                    if !p.done() && last.elapsed().as_millis() < 100 {
-                        return;
-                    }
-                    last = std::time::Instant::now();
-                    let _ = sink_tx.send(CloneStatus::Working(p));
-                },
-            );
+            use std::sync::atomic::Ordering;
+
+            let result = if crate::radicle::is_radicle_url(&url) {
+                crate::radicle::rad_clone_cancelable(
+                    &url,
+                    Some(dest.as_str()),
+                    Some(cancel.as_ref()),
+                )
+            } else {
+                // libgit2 reports far faster than a terminal can be redrawn.
+                // The floor is the same 100 ms the CLI's printing sink uses,
+                // and the last report of each phase is let through whatever
+                // the clock says, so the bar always reaches its end.
+                let mut last = std::time::Instant::now();
+                let sink_tx = tx.clone();
+                let sink_cancel = std::sync::Arc::clone(&cancel);
+                crate::core::GitRepo::clone_repo_with_progress(
+                    &url,
+                    Some(dest.as_str()),
+                    &mut |p| {
+                        // The stop is read every time, throttle or no
+                        // throttle: a request to stop should not have to
+                        // wait for the next report the user can see.
+                        if sink_cancel.load(Ordering::Relaxed) {
+                            return false;
+                        }
+                        if !p.done() && last.elapsed().as_millis() < 100 {
+                            return true;
+                        }
+                        last = std::time::Instant::now();
+                        let _ = sink_tx.send(CloneStatus::Working(p));
+                        true
+                    },
+                )
+            };
+            // A clone that finished is finished, even if the stop was
+            // asked for while the last objects were landing: the
+            // repository is on disk either way, and calling that
+            // "stopped" would send the user looking for something that
+            // is already there.
             let _ = tx.send(match result {
                 Ok(()) => CloneStatus::Done(dest),
+                Err(_) if cancel.load(Ordering::Relaxed) => CloneStatus::Cancelled,
                 Err(e) => CloneStatus::Error(e.to_string()),
             });
         });
+    }
+
+    /// Ask a running clone to stop. Returns whether there was one.
+    ///
+    /// The worker sees this on its next progress report, so the modal
+    /// stays up saying so rather than closing on a clone that is still
+    /// pulling objects.
+    pub fn clone_cancel(&mut self) -> bool {
+        if !self.clone_run_in_flight() {
+            return false;
+        }
+        // The flag comes out of the borrow before anything else on
+        // `self` is touched: the status line and the event log below
+        // both want it mutably, and the run is only being read for this.
+        let Some(cancel) = self
+            .clone_view
+            .run
+            .as_ref()
+            .map(|r| std::sync::Arc::clone(&r.cancel))
+        else {
+            return false;
+        };
+        // `swap` is the whole handshake: it raises the flag and says
+        // whether it was already up, so a second Esc gets an answer
+        // rather than looking like a key that did nothing.
+        if cancel.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            self.set_status("stopping — waiting for the transfer to answer");
+            return true;
+        }
+        self.log_event("clone: stop asked", EventKind::Info);
+        self.set_status("stopping the clone…");
+        true
     }
 
     pub fn clone_run_in_flight(&self) -> bool {
@@ -486,10 +565,12 @@ pub fn clone_dir_from_url(url: &str) -> &str {
 /// `owner/repo` from a repository's web URL, falling back to the API's
 /// own name when the URL is missing or shaped unexpectedly.
 fn clone_slug(url: &str, name: &str) -> String {
+    // Everything after the scheme, or the whole string when there is
+    // none — an scp-like `git@host:owner/repo` has no `://` to cut at.
     let path = url
-        .split("://")
-        .next_back()
-        .unwrap_or("")
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
         .trim_end_matches('/');
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
     // [host, owner, …, repo] — everything after the host, so a GitLab
@@ -590,6 +671,33 @@ mod tests {
         assert!(app.clone_view.selected().is_none());
     }
 
+    /// Esc over a running clone raises the flag its worker reads; over
+    /// anything else it is not a stop at all, and says so, so the Esc
+    /// chain can go on to the next thing it means.
+    #[test]
+    fn a_stop_is_only_asked_of_a_clone_that_is_running() {
+        let mut app = App::test_blank();
+        assert!(!app.clone_cancel(), "there was nothing to stop");
+
+        app.clone_view.run = Some(CloneRun {
+            url: "https://host/o/r.git".into(),
+            dest: "./r".into(),
+            status: CloneStatus::Starting,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+        assert!(app.clone_cancel());
+        assert!(app.clone_view.run.as_ref().unwrap().cancel_asked());
+
+        // Asking twice is not an error, and must not unset it.
+        assert!(app.clone_cancel());
+        assert!(app.clone_view.run.as_ref().unwrap().cancel_asked());
+
+        // A run that has already ended is not one to stop, whatever the
+        // flag on it still says.
+        app.clone_view.run.as_mut().unwrap().status = CloneStatus::Cancelled;
+        assert!(!app.clone_cancel());
+    }
+
     /// A destination that exists is refused before the worker starts,
     /// not by libgit2 once it is halfway in.
     #[test]
@@ -632,6 +740,25 @@ mod tests {
         assert_eq!(clone_dir_from_url("git@github.com:u/repo.git"), "repo");
         assert_eq!(clone_dir_from_url("/tmp/source.git"), "source");
         assert_eq!(clone_dir_from_url("https://github.com/u/repo/"), "repo");
+        assert_eq!(
+            clone_dir_from_url("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5"),
+            "z3gqcJUoA1n9HaHKufZs5FCSGazv5"
+        );
+    }
+
+    #[test]
+    fn a_radicle_slug_is_the_project_name() {
+        assert_eq!(
+            clone_slug("rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5", "heartwood"),
+            "heartwood"
+        );
+    }
+
+    #[test]
+    fn radicle_needs_no_token_and_is_on_the_menu() {
+        assert!(CLONE_PLATFORMS.contains(&"radicle"));
+        let app = App::test_blank();
+        assert!(app.clone_platform_has_token("radicle"));
     }
 
     #[test]

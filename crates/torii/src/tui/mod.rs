@@ -419,6 +419,13 @@ fn run_loop(
                     app.refresh().ok();
                     app.go_to(View::Dashboard);
                 }
+                CloneStatus::Cancelled => {
+                    app.clone_run_rx = None;
+                    // Not an error: the user asked for it, and libgit2
+                    // took the half-cloned tree with it.
+                    app.log_event("clone stopped", EventKind::Info);
+                    app.set_status("clone stopped");
+                }
                 CloneStatus::Error(msg) => {
                     app.clone_run_rx = None;
                     app.log_event(format!("clone failed: {}", msg), EventKind::Error);

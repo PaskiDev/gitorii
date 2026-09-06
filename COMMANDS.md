@@ -160,9 +160,15 @@ torii clone git@github.com:<user>/<repo>.git              # SSH URL
 torii clone github torvalds/linux
 torii clone gitlab paskidev/gitorii-api --protocol https
 torii clone github torvalds/linux -d my-linux
+torii clone sourcehut ~user/repo
+torii clone azure org/project/repo
+torii clone radicle rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5
+torii clone rad:z3gqcJUoA1n9HaHKufZs5FCSGazv5
 ```
 
-**Platforms:** `github`, `gitlab`, `codeberg`, `bitbucket`, `gitea`, `forgejo`
+**Platforms:** `github`, `gitlab`, `codeberg`, `bitbucket`, `gitea`, `forgejo`, `sourcehut`, `azure`, `radicle`
+
+Self-hosted Gitea / Forgejo: `GITEA_URL` / `FORGEJO_URL` set the clone host (same vars the API client already honours). Without them, Gitea is `gitea.com` and Forgejo is `codeberg.org`. Azure takes `org/project/repo`. Sourcehut accepts `user/repo` or `~user/repo`. Radicle is `rad clone` (the `rad` binary on PATH, talking to the local node) — not libgit2.
 
 Protocol auto-detected: SSH if keys present, HTTPS otherwise.  
 Override: `torii config set mirror.default_protocol https`
@@ -176,16 +182,21 @@ torii config set clone.base_dir .           # default: the working directory
 torii config set clone.base_dir ~/repos     # everything under one roof
 ```
 
-**In the TUI.** The `clone` entry in the sidebar lists the repositories of the
-account you have a token for, filters them, and clones the one you pick into
-`<clone.base_dir>/<repo>` — which it shows, and lets you edit, before it starts.
+**In the TUI.** The `clone` entry leads the sidebar, above `files`. It lists
+the repositories of the account you have a token for, filters them, and clones
+the one you pick into `<clone.base_dir>/<repo>` — which it shows, and lets you
+edit, before it starts.
 `[u]` takes a URL or a local path instead, for anything the listing cannot name.
 The repository is opened when the clone finishes, and registered in the active
-workspace if there is one.
+workspace if there is one. `Esc` over a running clone stops it — libgit2 removes
+the half-fetched tree itself, so a stopped clone leaves nothing behind.
 
 Listing an account's repositories needs a token (`torii auth set <platform>
-<token>`), and is wired for `github`, `gitlab`, `gitea`, `forgejo` and
-`codeberg`. The other hosts say so and leave you the URL box.
+<token>`), and is wired for `github`, `gitlab`, `gitea`, `forgejo`,
+`codeberg`, `bitbucket`, `sourcehut` and `azure`. Radicle needs `rad` on
+PATH instead of a token: the clone view lists what `rad ls --all` knows,
+and clones with `rad clone`. `[u]` still takes a `rad:z…` RID the node
+has not seen yet.
 
 ---
 
@@ -492,9 +503,25 @@ torii auth get github                      # one provider, masked
 torii auth get github --unsafe-show        # raw value (rarely what you want)
 torii auth remove gitea                    # drop a stored token
 torii auth doctor                          # diagnose where each token comes from
+torii auth oauth github                    # device flow (github, gitlab, codeberg, forgejo)
+torii auth oauth gitea                     # auth-code + PKCE (gitea, bitbucket)
 ```
 
 Supported providers: `github`, `gitlab`, `gitea`, `forgejo`, `codeberg`, `bitbucket`, `sourcehut`, `cargo`.
+
+**OAuth.** Device flow: `github`, `gitlab`, `codeberg`, `forgejo`. Authorization-code + PKCE: `bitbucket`, `gitea` (Gitea has no device flow). Self-hosted:
+
+```bash
+export FORGEJO_URL=https://git.example.com
+export TORII_FORGEJO_APP_ID=<public-client-id>   # Settings → Applications, Confidential: no
+torii auth oauth forgejo
+
+export GITEA_URL=https://gitea.example.com
+export TORII_GITEA_APP_ID=<public-client-id>     # redirect http://127.0.0.1:8888/callback
+torii auth oauth gitea
+```
+
+Without `FORGEJO_URL`, `forgejo` is Codeberg and reuses the bundled client_id. Without `GITEA_URL`, `gitea` is `gitea.com` and still needs `TORII_GITEA_APP_ID`.
 
 ### Resolution order
 

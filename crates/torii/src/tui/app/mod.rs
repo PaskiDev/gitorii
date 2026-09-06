@@ -204,7 +204,7 @@ pub struct App {
     /// 0.16.0 — the clone view's two workers. `clone_repos_rx` carries
     /// one answer (the account's repositories, or why not); the clone
     /// itself reports repeatedly over `clone_run_rx` until it ends in
-    /// `Done` or `Error`.
+    /// `Done`, `Cancelled` or `Error`.
     pub clone_repos_rx: Option<
         std::sync::mpsc::Receiver<std::result::Result<Vec<crate::remote::RemoteRepo>, String>>,
     >,
@@ -230,7 +230,9 @@ impl App {
         let mut app = Self {
             should_quit: false,
             view: View::Dashboard,
-            sidebar_idx: 0,
+            // files, not clone: clone leads the sidebar, but the TUI
+            // opens inside a repository and lands on its working tree.
+            sidebar_idx: 1,
             sidebar_focused: true,
             prev_view: None,
             status_msg: None,
@@ -307,7 +309,7 @@ impl App {
         Self {
             should_quit: false,
             view: View::Dashboard,
-            sidebar_idx: 0,
+            sidebar_idx: 1,
             sidebar_focused: true,
             prev_view: None,
             status_msg: None,
@@ -386,19 +388,19 @@ impl App {
     }
 
     /// Sidebar order. Reorganised in 0.7.26 by user flow:
-    ///   - entry:          files
+    ///   - entry:          clone, files
     ///   - local action:   save, sync, snapshot
-    ///   - navigation:     log, branch, tags
+    ///   - navigation:     safety, log, branch, tags
     ///   - broadcast:      pr/mr, issues, platform
-    ///   - multi-platform: clone, remote, workspace, worktrees, submodules
-    ///   - admin:          bisect, auth, config
+    ///   - multi-platform: remote, workspace, worktrees, submodules
+    ///   - admin:          stats, bisect, auth, config
     ///
     /// Must stay in sync with TABS in src/tui/ui.rs and the sidebar_idx
     /// assignments in `go_to` / `go_back`.
     fn view_for_idx(idx: usize) -> View {
         match idx {
-            0 => View::Dashboard,
-            1 => View::Stats,
+            0 => View::Clone,
+            1 => View::Dashboard,
             2 => View::Commit,
             3 => View::Sync,
             4 => View::Snapshot,
@@ -409,11 +411,11 @@ impl App {
             9 => View::Pr,
             10 => View::Issue,
             11 => View::Platform,
-            12 => View::Clone,
-            13 => View::Remote,
-            14 => View::Workspace,
-            15 => View::Worktree,
-            16 => View::Submodule,
+            12 => View::Remote,
+            13 => View::Workspace,
+            14 => View::Worktree,
+            15 => View::Submodule,
+            16 => View::Stats,
             17 => View::Bisect,
             18 => View::Auth,
             19 => View::Config,
@@ -486,13 +488,12 @@ impl App {
             View::Clone => self.load_clone_enter(),
             _ => {}
         }
-        // Sidebar order in 0.7.2 (16 entries, see TABS in ui.rs).
         // History / Mirror / Settings have no sidebar entry; we map them
         // to their fused destination so `go_to` from old call sites still
         // highlights something sensible.
         self.sidebar_idx = match &view {
-            View::Dashboard => 0,
-            View::Stats => 1,
+            View::Clone => 0,
+            View::Dashboard => 1,
             View::Commit => 2,
             View::Sync => 3,
             View::Snapshot => 4,
@@ -504,12 +505,12 @@ impl App {
             View::Pr => 9,
             View::Issue => 10,
             View::Platform => 11,
-            View::Clone => 12,
-            View::Remote => 13,
-            View::Mirror => 13, // fused into Remote
-            View::Workspace => 14,
-            View::Worktree => 15,
-            View::Submodule => 16,
+            View::Remote => 12,
+            View::Mirror => 12, // fused into Remote
+            View::Workspace => 13,
+            View::Worktree => 14,
+            View::Submodule => 15,
+            View::Stats => 16,
             View::Bisect => 17,
             View::Auth => 18,
             View::Config => 19,
@@ -525,8 +526,8 @@ impl App {
             // Mapping must mirror `view_for_idx` + `go_to`'s sidebar_idx
             // assignments. Keep them aligned when re-ordering the sidebar.
             let idx = match &prev {
-                View::Dashboard => 0,
-                View::Stats => 1,
+                View::Clone => 0,
+                View::Dashboard => 1,
                 View::Commit => 2,
                 View::Sync => 3,
                 View::Snapshot => 4,
@@ -538,17 +539,17 @@ impl App {
                 View::Pr => 9,
                 View::Issue => 10,
                 View::Platform => 11,
-                View::Clone => 12,
-                View::Remote => 13,
-                View::Mirror => 13, // fused into Remote
-                View::Workspace => 14,
-                View::Worktree => 15,
-                View::Submodule => 16,
+                View::Remote => 12,
+                View::Mirror => 12, // fused into Remote
+                View::Workspace => 13,
+                View::Worktree => 14,
+                View::Submodule => 15,
+                View::Stats => 16,
                 View::Bisect => 17,
                 View::Auth => 18,
                 View::Config => 19,
                 View::Settings => 19, // fused into Config
-                _ => 0,
+                _ => 1,
             };
             // If returning to a view with its own content, keep focus in the view
             self.sidebar_focused = matches!(prev, View::Dashboard);
@@ -556,7 +557,7 @@ impl App {
             self.sidebar_idx = idx;
         } else {
             self.view = View::Dashboard;
-            self.sidebar_idx = 0;
+            self.sidebar_idx = 1;
             self.sidebar_focused = true;
         }
         self.status_msg = None;
@@ -1920,6 +1921,7 @@ target/
                     url: "https://example.invalid/o/r.git".into(),
                     dest: "/tmp/r".into(),
                     status: CloneStatus::Starting,
+                    cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 });
 
                 let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();

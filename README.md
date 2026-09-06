@@ -25,8 +25,9 @@ and a self-hosted platform registry — all from one binary called `torii`.
   declares your self-hosted GitLab / Gitea / Forgejo / GitHub Enterprise /
   Bitbucket Data Center. Detection routes the right client transparently.
 - **OAuth + refresh tokens** (0.7.30+): device flow for GitHub / GitLab /
-  Codeberg, auth-code+PKCE for Bitbucket. Automatic refresh — no more
-  re-authing every two hours.
+  Codeberg / Forgejo, auth-code+PKCE for Bitbucket and Gitea.
+  Self-hosted hosts take `FORGEJO_URL` / `GITEA_URL`. Automatic refresh
+  — no more re-authing every two hours.
 - **GPG signing done right** (0.7.35+): `commit.gpgsign` honoured at
   commit time, `torii sign` to re-sign existing history, `torii log
   --signatures` for a verdict column, armor viewer in the TUI Log view.
@@ -534,6 +535,8 @@ per-invocation override.
 
 ```bash
 torii clone github <user>/<repo>        # clone with platform shorthand
+torii clone sourcehut ~user/repo        # sourcehut; azure is org/project/repo
+torii clone radicle rad:z…              # rad clone; rad must be on PATH
 torii clone https://...                 # clone with full URL
 torii clone github <user>/<repo> -d dir # clone into specific directory
 torii config check-ssh                  # verify SSH key setup
@@ -562,6 +565,7 @@ Full-screen interface with sidebar navigation. All views accessible from keyboar
 
 | View | Description |
 |------|-------------|
+| clone | Browse an account's repositories and clone one. Destination is editable before it starts |
 | files | Staged / unstaged / untracked files. `Space` to stage/unstage, `d` for diff |
 | save | Commit staged files. Optional conventional commit type selector |
 | sync | Pull, push, fetch, force-push. Animated progress, non-blocking |

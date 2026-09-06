@@ -136,6 +136,18 @@ impl App {
         std::thread::spawn(move || {
             use crate::tui::app::OauthStatus;
 
+            // Auth-code (Gitea, Bitbucket) needs a browser callback on
+            // localhost. The TUI is on the alt screen and cannot own
+            // that loop; the CLI can. Don't pretend device flow works.
+            if !crate::oauth::device_flow_supported(&provider)
+                && crate::oauth::auth_code_flow_supported(&provider)
+            {
+                let _ = tx.send(OauthStatus::Error(format!(
+                    "{provider} OAuth uses a browser callback — run: torii auth oauth {provider}"
+                )));
+                return;
+            }
+
             // 1. Init.
             let mut session = match crate::oauth::start_device_flow(&provider) {
                 Ok(s) => s,

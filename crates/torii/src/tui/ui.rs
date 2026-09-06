@@ -45,21 +45,23 @@ struct Tab {
 
 // Sidebar reorganised in 0.7.26 by user flow:
 //   entry → local action → navigation → broadcast → multi-platform → admin.
-// Keep this aligned with `view_for_idx` + the sidebar_idx maps in
-// `go_to` / `go_back` (src/tui/app.rs).
+// Clone leads: getting a repository is how you start. Files is still
+// what the TUI opens on, because you launch it inside one. Keep this
+// aligned with `view_for_idx` + the sidebar_idx maps in `go_to` /
+// `go_back` (src/tui/app.rs).
 const TABS: &[Tab] = &[
     // entry
+    Tab {
+        key: "o",
+        label: "clone",
+        view: View::Clone,
+    },
     Tab {
         key: "f",
         label: "files",
         view: View::Dashboard,
     },
     // local action
-    Tab {
-        key: "z",
-        label: "stats",
-        view: View::Stats,
-    },
     Tab {
         key: "c",
         label: "save",
@@ -114,11 +116,6 @@ const TABS: &[Tab] = &[
     },
     // multi-platform / repo layout
     Tab {
-        key: "o",
-        label: "clone",
-        view: View::Clone,
-    },
-    Tab {
         key: "r",
         label: "remote",
         view: View::Remote,
@@ -138,7 +135,12 @@ const TABS: &[Tab] = &[
         label: "submodules",
         view: View::Submodule,
     },
-    // admin / advanced
+    // admin / look at the repo from a distance
+    Tab {
+        key: "z",
+        label: "stats",
+        view: View::Stats,
+    },
     Tab {
         key: "v",
         label: "bisect",
@@ -688,6 +690,127 @@ fn identity_hint<'a>(app: &'a App, hint: &'a str) -> Span<'a> {
     }
 }
 
+/// The key strip for the clone view.
+///
+/// Lifted out of `render_hint` rather than written inside it: that
+/// function is one `match` of nested `Line::from(vec![…])` arms over a
+/// thousand lines long, and every arm added to it is another storey on
+/// an expression tree the compiler has to walk in one go. This one has
+/// states of its own on top of the view's, so it stands apart — and the
+/// in-flight run is a third function again, so a stop asked mid-clone
+/// does not land back on that tree.
+fn clone_hint(app: &App, bc: Color) -> Line<'static> {
+    match app.clone_view.run.as_ref() {
+        Some(run) => clone_run_hint(run, bc),
+        None => clone_idle_hint(app, bc),
+    }
+}
+
+fn clone_run_hint(run: &crate::tui::app::CloneRun, bc: Color) -> Line<'static> {
+    use crate::tui::app::CloneStatus;
+    if matches!(&run.status, CloneStatus::Starting | CloneStatus::Working(_)) && run.cancel_asked()
+    {
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                "stopping — waiting for the transfer to answer",
+                Style::default().fg(theme::WARN),
+            ),
+        ]);
+    }
+    match &run.status {
+        CloneStatus::Starting => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("connecting…  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" stop", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        CloneStatus::Working(p) => Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                if p.resolving_deltas() {
+                    "resolving deltas "
+                } else {
+                    "receiving objects "
+                },
+                Style::default().fg(theme::INK_FAINT),
+            ),
+            Span::styled(
+                format!("{}%", p.percent()),
+                Style::default().fg(bc).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" stop", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        CloneStatus::Done(_) | CloneStatus::Cancelled | CloneStatus::Error(_) => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" dismiss", Style::default().fg(theme::INK_FAINT)),
+        ]),
+    }
+}
+
+fn clone_idle_hint(app: &App, bc: Color) -> Line<'static> {
+    use crate::tui::app::CloneFocus;
+    match app.clone_view.focus {
+        CloneFocus::Platforms => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+            Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[Enter]", Style::default().fg(bc)),
+            Span::styled(" switch  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        CloneFocus::Filter => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("filter: ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                app.clone_view.filter.clone(),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(bc)),
+        ]),
+        CloneFocus::Url => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("url: ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                app.clone_view.url_input.clone(),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(bc)),
+        ]),
+        CloneFocus::Dest => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("into: ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled(
+                app.clone_view.dest_input.clone(),
+                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("█", Style::default().fg(bc)),
+        ]),
+        CloneFocus::List => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[Enter]", Style::default().fg(bc)),
+            Span::styled(" clone  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[p]", Style::default().fg(bc)),
+            Span::styled(" platform  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[/]", Style::default().fg(bc)),
+            Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[u]", Style::default().fg(bc)),
+            Span::styled(" url  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[d]", Style::default().fg(bc)),
+            Span::styled(" into  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(
+                if app.clone_view.ssh { " ssh" } else { " https" },
+                Style::default().fg(theme::INK_FAINT),
+            ),
+        ]),
+    }
+}
+
 fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
     let bc = app.brand_color();
     // The sidebar's own keys, and then every view's, land in the same strip:
@@ -1197,96 +1320,7 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                     }
                 }
             }
-            View::Clone => {
-                use crate::tui::app::{CloneFocus, CloneStatus};
-                // A clone in flight owns the strip: while it runs there
-                // is one thing to know, and when it ends there is one
-                // key to press.
-                match app.clone_view.run.as_ref().map(|r| &r.status) {
-                    Some(CloneStatus::Starting) => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("connecting…", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                    Some(CloneStatus::Working(p)) => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled(
-                            if p.resolving_deltas() {
-                                "resolving deltas "
-                            } else {
-                                "receiving objects "
-                            },
-                            Style::default().fg(theme::INK_FAINT),
-                        ),
-                        Span::styled(
-                            format!("{}%", p.percent()),
-                            Style::default().fg(bc).add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Some(CloneStatus::Done(_)) | Some(CloneStatus::Error(_)) => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("[Enter]", Style::default().fg(bc)),
-                        Span::styled(" open  ", Style::default().fg(theme::INK_FAINT)),
-                        Span::styled("[Esc]", Style::default().fg(bc)),
-                        Span::styled(" dismiss", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                    None => match app.clone_view.focus {
-                        CloneFocus::Platforms => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
-                            Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" switch  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[Esc]", Style::default().fg(bc)),
-                            Span::styled(" close", Style::default().fg(theme::INK_FAINT)),
-                        ]),
-                        CloneFocus::Filter => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled("filter: ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled(
-                                app.clone_view.filter.clone(),
-                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled("█", Style::default().fg(bc)),
-                        ]),
-                        CloneFocus::Url => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled("url: ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled(
-                                app.clone_view.url_input.clone(),
-                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled("█", Style::default().fg(bc)),
-                        ]),
-                        CloneFocus::Dest => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled("into: ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled(
-                                app.clone_view.dest_input.clone(),
-                                Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled("█", Style::default().fg(bc)),
-                        ]),
-                        CloneFocus::List => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled("[Enter]", Style::default().fg(bc)),
-                            Span::styled(" clone  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[p]", Style::default().fg(bc)),
-                            Span::styled(" platform  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[/]", Style::default().fg(bc)),
-                            Span::styled(" filter  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[u]", Style::default().fg(bc)),
-                            Span::styled(" url  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[d]", Style::default().fg(bc)),
-                            Span::styled(" into  ", Style::default().fg(theme::INK_FAINT)),
-                            Span::styled("[t]", Style::default().fg(bc)),
-                            Span::styled(
-                                if app.clone_view.ssh { " ssh" } else { " https" },
-                                Style::default().fg(theme::INK_FAINT),
-                            ),
-                        ]),
-                    },
-                }
-            }
+            View::Clone => clone_hint(app, bc),
             View::Remote => {
                 use crate::tui::app::RemoteConfirm;
                 if app.remote_view.ops_mode {
@@ -2378,6 +2412,14 @@ mod tests {
     #[test]
     fn the_sidebar_order_agrees_with_itself() {
         let mut app = App::new().expect("a repository to look at");
+
+        // Clone leads the list; the TUI still opens on files.
+        assert_eq!(app.view, View::Dashboard);
+        assert_eq!(
+            app.sidebar_idx,
+            TABS.iter().position(|t| t.view == View::Dashboard).unwrap()
+        );
+        assert_eq!(TABS[0].view, View::Clone);
 
         for (i, tab) in TABS.iter().enumerate() {
             // Walking the sidebar to row `i` must open the view TABS shows there.

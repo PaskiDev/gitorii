@@ -439,6 +439,7 @@ pub struct ActionDef {
 /// unbinds whatever a user had put on it, so they are added to, not edited.
 pub const ACTIONS: &[ActionDef] = &[
     // Where to go.
+    def("goto:clone", "Clone a repository", "go"),
     def("goto:files", "Files", "go"),
     def("goto:save", "Save", "go"),
     def("goto:sync", "Sync", "go"),
@@ -450,15 +451,14 @@ pub const ACTIONS: &[ActionDef] = &[
     def("goto:pr", "Pull requests", "go"),
     def("goto:issue", "Issues", "go"),
     def("goto:platform", "Platform", "go"),
-    def("goto:clone", "Clone a repository", "go"),
     def("goto:remote", "Remotes", "go"),
     def("goto:workspace", "Workspace", "go"),
     def("goto:worktree", "Worktrees", "go"),
     def("goto:submodule", "Submodules", "go"),
+    def("goto:stats", "Stats", "go"),
     def("goto:bisect", "Bisect", "go"),
     def("goto:auth", "Auth", "go"),
     def("goto:config", "Config", "go"),
-    def("goto:stats", "Stats", "go"),
     // The window itself.
     def("app:events", "Toggle the event log", "app"),
     def("app:help", "Help", "app"),

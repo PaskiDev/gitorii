@@ -9,15 +9,16 @@
 //!      the server returns `access_token` (success) or `expired_token` /
 //!      `access_denied` (fail).
 //!
-//! The same shape works on GitHub, GitLab, Codeberg/Gitea/Forgejo. Each
-//! one needs a registered OAuth App so torii has a `client_id` to send
-//! — those are listed in [`device_flow_provider`].
+//! Device flow (RFC 8628) is wired for GitHub, GitLab, Codeberg and
+//! self-hosted Forgejo. Each needs a registered OAuth App so torii has
+//! a `client_id` — listed in [`device_flow_provider`].
 //!
-//! Bitbucket Cloud does **not** implement RFC 8628 — it only supports
-//! Authorization Code Grant, which needs a `localhost:PORT` callback.
-//! That flow is tracked separately and lives next to this module when
-//! implemented; for now Bitbucket continues to ask for an app password
-//! via `torii auth set bitbucket USERNAME:APP_PASSWORD`.
+//! Gitea (including self-hosted) does **not** implement RFC 8628; it
+//! only speaks Authorization Code Grant. Same as Bitbucket Cloud: a
+//! loopback callback (`127.0.0.1:8888/callback`) plus PKCE. That lives
+//! in [`auth_code_provider`]. Forgejo forked the Gitea API but added
+//! device flow; Codeberg is a Forgejo host, which is why `codeberg`
+//! was wired first.
 
 use std::time::{Duration, Instant};
 
@@ -25,24 +26,77 @@ use serde::Deserialize;
 
 use crate::error::{Result, ToriiError};
 
+const CODEBERG_CLIENT_ID: &str = "d114c8aa-227d-453e-8f25-cdd727f49d42";
+
+/// Origin of a Gitea-family instance (`https://git.example.com`).
+/// `GITEA_URL` / `FORGEJO_URL` already mean this for the API client.
+fn oauth_instance_base(env_var: &str, default: &str) -> String {
+    match std::env::var(env_var) {
+        Ok(raw) if !raw.trim().is_empty() => normalize_oauth_base(&raw),
+        _ => normalize_oauth_base(default),
+    }
+}
+
+fn normalize_oauth_base(raw: &str) -> String {
+    let s = raw.trim().trim_end_matches('/');
+    if s.is_empty() {
+        return String::new();
+    }
+    if s.contains("://") {
+        s.to_string()
+    } else {
+        format!("https://{s}")
+    }
+}
+
+fn host_of(base: &str) -> &str {
+    let rest = base.split_once("://").map(|(_, r)| r).unwrap_or(base);
+    let hostport = rest.split('/').next().unwrap_or(rest);
+    match hostport.rsplit_once(':') {
+        Some((h, p)) if p.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => hostport,
+    }
+}
+
+/// Forgejo (and Codeberg) device-flow endpoints on an instance.
+fn forgejo_oauth_endpoints(base: &str) -> (String, String) {
+    let base = normalize_oauth_base(base);
+    (
+        format!("{base}/login/oauth/device/code"),
+        format!("{base}/login/oauth/access_token"),
+    )
+}
+
+/// Gitea authorization-code endpoints on an instance.
+fn gitea_oauth_endpoints(base: &str) -> (String, String) {
+    let base = normalize_oauth_base(base);
+    (
+        format!("{base}/login/oauth/authorize"),
+        format!("{base}/login/oauth/access_token"),
+    )
+}
+
 /// Per-provider URLs + scopes for the device-flow request. Add new
 /// entries here; nothing else needs to change to wire a new provider
 /// (assuming it implements RFC 8628).
 struct DeviceFlowProvider {
     /// Where to POST the initial device-code request.
-    device_authz_url: &'static str,
+    device_authz_url: String,
     /// Where to POST the token poll.
-    token_url: &'static str,
+    token_url: String,
     /// Default OAuth scopes string sent with the device-code request.
     scopes: &'static str,
     /// Env var the user can set to override the bundled client_id at
-    /// runtime — useful for self-hosted Gitea/Forgejo where the user
+    /// runtime — required for self-hosted Forgejo, where the user
     /// registers their own OAuth app.
     client_id_env: &'static str,
     /// Bundled (public) client_id. **Has to be filled in once an OAuth
     /// app is registered on each platform**; until then we fall back
     /// to the env var and bail with a helpful error if it's missing.
     bundled_client_id: Option<&'static str>,
+    /// Instance origin, when the missing-client_id error should point
+    /// at that host's Applications page (self-hosted Forgejo).
+    instance_base: Option<String>,
 }
 
 fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
@@ -51,35 +105,76 @@ fn device_flow_provider(provider: &str) -> Option<DeviceFlowProvider> {
     // app to the auth server — they are NOT secrets and live in the
     // open-source binary intentionally (same as `gh`, `glab`, etc.).
     // The env var override lets users point at their own registered
-    // app (useful for self-hosted Gitea/Forgejo).
+    // app (self-hosted Forgejo).
     match provider {
         "github" => Some(DeviceFlowProvider {
-            device_authz_url: "https://github.com/login/device/code",
-            token_url: "https://github.com/login/oauth/access_token",
+            device_authz_url: "https://github.com/login/device/code".into(),
+            token_url: "https://github.com/login/oauth/access_token".into(),
             scopes: "repo read:org workflow",
             client_id_env: "TORII_GITHUB_APP_ID",
             bundled_client_id: Some("Ov23liDcA2Njn7eRWnYV"),
+            instance_base: None,
         }),
         "gitlab" => Some(DeviceFlowProvider {
-            device_authz_url: "https://gitlab.com/oauth/authorize_device",
-            token_url: "https://gitlab.com/oauth/token",
+            device_authz_url: "https://gitlab.com/oauth/authorize_device".into(),
+            token_url: "https://gitlab.com/oauth/token".into(),
             scopes: "api",
             client_id_env: "TORII_GITLAB_APP_ID",
             bundled_client_id: Some(
                 "b72a85262c309587f67591da8fed4f8e8f4ee7349e9ed06f6a2a99ee7caec4fe",
             ),
+            instance_base: None,
         }),
-        // Codeberg / Gitea / Forgejo share the Gitea OAuth surface; the
-        // device-flow endpoints are at the platform host.
         "codeberg" => Some(DeviceFlowProvider {
-            device_authz_url: "https://codeberg.org/login/oauth/device/code",
-            token_url: "https://codeberg.org/login/oauth/access_token",
+            device_authz_url: "https://codeberg.org/login/oauth/device/code".into(),
+            token_url: "https://codeberg.org/login/oauth/access_token".into(),
             scopes: "",
             client_id_env: "TORII_CODEBERG_APP_ID",
-            bundled_client_id: Some("d114c8aa-227d-453e-8f25-cdd727f49d42"),
+            bundled_client_id: Some(CODEBERG_CLIENT_ID),
+            instance_base: None,
         }),
+        // Forgejo added RFC 8628; Gitea did not. Self-hosted URL from
+        // FORGEJO_URL (same var the API client already honours).
+        "forgejo" => {
+            let base = oauth_instance_base("FORGEJO_URL", "https://codeberg.org");
+            let (device_authz_url, token_url) = forgejo_oauth_endpoints(&base);
+            let bundled = if host_of(&base).eq_ignore_ascii_case("codeberg.org") {
+                Some(CODEBERG_CLIENT_ID)
+            } else {
+                None
+            };
+            Some(DeviceFlowProvider {
+                device_authz_url,
+                token_url,
+                scopes: "",
+                client_id_env: "TORII_FORGEJO_APP_ID",
+                bundled_client_id: bundled,
+                instance_base: Some(base),
+            })
+        }
         _ => None,
     }
+}
+
+fn missing_device_client_id(cfg: &DeviceFlowProvider, provider: &str) -> ToriiError {
+    let extra = cfg
+        .instance_base
+        .as_deref()
+        .map(|b| {
+            format!(
+                " Register a public OAuth application at {b}/user/settings/applications \
+             (Confidential: no — device flow has no redirect) and export {}=<client_id>. \
+             FORGEJO_URL is currently {b}.",
+                cfg.client_id_env
+            )
+        })
+        .unwrap_or_default();
+    ToriiError::InvalidConfig(format!(
+        "No OAuth client_id available for `{provider}`. Set {}{extra} \
+         As a workaround, create a Personal Access Token and run: \
+         torii auth set {provider} YOUR_TOKEN",
+        cfg.client_id_env
+    ))
 }
 
 #[derive(Debug, Deserialize)]
@@ -129,8 +224,8 @@ enum TokenResponse {
 pub fn run_device_flow(provider: &str) -> Result<String> {
     let cfg = device_flow_provider(provider).ok_or_else(|| {
         ToriiError::InvalidConfig(format!(
-            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg. \
-         Bitbucket needs the (separate) Authorization Code flow.",
+            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg, forgejo. \
+         Gitea and Bitbucket use the authorization-code flow.",
             provider
         ))
     })?;
@@ -138,21 +233,13 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
     let client_id = std::env::var(cfg.client_id_env)
         .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| {
-            ToriiError::InvalidConfig(format!(
-                "No OAuth client_id available for `{}`. Set the {} env var, or wait until the \
-             bundled client_id ships in a future torii release. As a workaround, create a \
-             Personal Access Token in the platform's web UI and run: \
-             torii auth set {} YOUR_TOKEN",
-                provider, cfg.client_id_env, provider
-            ))
-        })?;
+        .ok_or_else(|| missing_device_client_id(&cfg, provider))?;
 
     let client = crate::http::make_client();
 
     // Step 1: request device + user codes.
     let init_req = client
-        .post(cfg.device_authz_url)
+        .post(&cfg.device_authz_url)
         .header("Accept", "application/json")
         .form(&[("client_id", client_id.as_str()), ("scope", cfg.scopes)]);
     let init: DeviceCodeResponse =
@@ -195,7 +282,7 @@ pub fn run_device_flow(provider: &str) -> Result<String> {
         }
 
         let poll_req = client
-            .post(cfg.token_url)
+            .post(&cfg.token_url)
             .header("Accept", "application/json")
             .form(&[
                 ("client_id", client_id.as_str()),
@@ -312,25 +399,18 @@ pub enum DeviceFlowStep {
 pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
     let cfg = device_flow_provider(provider).ok_or_else(|| {
         ToriiError::InvalidConfig(format!(
-            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg.",
+            "OAuth device flow not configured for `{}`. Supported: github, gitlab, codeberg, forgejo.",
             provider
         ))
     })?;
     let client_id = std::env::var(cfg.client_id_env)
         .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| {
-            ToriiError::InvalidConfig(format!(
-                "No OAuth client_id available for `{}`. Set the {} env var, or wait until \
-             the bundled client_id ships. As a workaround, create a Personal Access \
-             Token in the platform's web UI and run: torii auth set {} YOUR_TOKEN",
-                provider, cfg.client_id_env, provider
-            ))
-        })?;
+        .ok_or_else(|| missing_device_client_id(&cfg, provider))?;
 
     let client = crate::http::make_client();
     let init_req = client
-        .post(cfg.device_authz_url)
+        .post(&cfg.device_authz_url)
         .header("Accept", "application/json")
         .form(&[("client_id", client_id.as_str()), ("scope", cfg.scopes)]);
     let init: DeviceCodeResponse =
@@ -356,7 +436,7 @@ pub fn start_device_flow(provider: &str) -> Result<DeviceFlowSession> {
         display_uri,
         device_code: init.device_code,
         client_id,
-        token_url: cfg.token_url.to_string(),
+        token_url: cfg.token_url,
         interval,
         deadline,
     })
@@ -450,13 +530,11 @@ pub fn refresh_access_token(
     let client_id = std::env::var(cfg.client_id_env)
         .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| {
-            ToriiError::InvalidConfig(format!("No OAuth client_id for `{}` refresh.", provider))
-        })?;
+        .ok_or_else(|| missing_device_client_id(&cfg, provider))?;
 
     let client = crate::http::make_client();
     let req = client
-        .post(cfg.token_url)
+        .post(&cfg.token_url)
         .header("Accept", "application/json")
         .form(&[
             ("client_id", client_id.as_str()),
@@ -591,12 +669,20 @@ fn revoke_github(token: &str) -> Result<bool> {
 /// Where the user should go to revoke an OAuth token manually when
 /// `revoke_token` returns Ok(false) (no programmatic endpoint). Used
 /// in `torii auth rotate` to print a helpful hint.
-pub fn revoke_hint_url(provider: &str) -> Option<&'static str> {
+pub fn revoke_hint_url(provider: &str) -> Option<String> {
     match provider {
-        "github" => Some("https://github.com/settings/applications"),
-        "gitlab" => Some("https://gitlab.com/-/profile/applications"),
-        "codeberg" => Some("https://codeberg.org/user/settings/applications"),
-        "bitbucket" => Some("https://bitbucket.org/account/settings/app-authorizations/"),
+        "github" => Some("https://github.com/settings/applications".into()),
+        "gitlab" => Some("https://gitlab.com/-/profile/applications".into()),
+        "codeberg" => Some("https://codeberg.org/user/settings/applications".into()),
+        "bitbucket" => Some("https://bitbucket.org/account/settings/app-authorizations/".into()),
+        "gitea" => {
+            let base = oauth_instance_base("GITEA_URL", "https://gitea.com");
+            Some(format!("{base}/user/settings/applications"))
+        }
+        "forgejo" => {
+            let base = oauth_instance_base("FORGEJO_URL", "https://codeberg.org");
+            Some(format!("{base}/user/settings/applications"))
+        }
         _ => None,
     }
 }
@@ -656,8 +742,8 @@ use std::io::{Read, Write as IoWrite};
 use std::net::TcpListener;
 
 struct AuthCodeProvider {
-    authorize_url: &'static str,
-    token_url: &'static str,
+    authorize_url: String,
+    token_url: String,
     scopes: &'static str,
     client_id_env: &'static str,
     bundled_client_id: Option<&'static str>,
@@ -667,20 +753,65 @@ struct AuthCodeProvider {
     /// secret is **not** bundled in the binary — has to come from the
     /// user's env / .env file.
     client_secret_env: Option<&'static str>,
+    /// Host used in the loopback redirect. Gitea follows RFC 8252
+    /// (`127.0.0.1`); Bitbucket's consumer is registered on `localhost`.
+    loopback_host: &'static str,
+    /// Instance origin, when the missing-client_id error should point
+    /// at that host's Applications page (self-hosted Gitea).
+    instance_base: Option<String>,
 }
 
 fn auth_code_provider(provider: &str) -> Option<AuthCodeProvider> {
     match provider {
         "bitbucket" => Some(AuthCodeProvider {
-            authorize_url:     "https://bitbucket.org/site/oauth2/authorize",
-            token_url:         "https://bitbucket.org/site/oauth2/access_token",
-            scopes:            "repository repository:write account pullrequest pullrequest:write issue:write pipeline",
-            client_id_env:     "TORII_BITBUCKET_APP_ID",
+            authorize_url: "https://bitbucket.org/site/oauth2/authorize".into(),
+            token_url: "https://bitbucket.org/site/oauth2/access_token".into(),
+            scopes: "repository repository:write account pullrequest pullrequest:write issue:write pipeline",
+            client_id_env: "TORII_BITBUCKET_APP_ID",
             bundled_client_id: Some("xQAkJEqx3LK4WtJ3KD"),
             client_secret_env: Some("TORII_BITBUCKET_APP_SECRET"),
+            loopback_host: "localhost",
+            instance_base: None,
         }),
+        // Gitea has no device flow (docs still say authorization-code
+        // only). Public client + PKCE + 127.0.0.1 loopback. Host from
+        // GITEA_URL, same var the API client already honours.
+        "gitea" => {
+            let base = oauth_instance_base("GITEA_URL", "https://gitea.com");
+            let (authorize_url, token_url) = gitea_oauth_endpoints(&base);
+            Some(AuthCodeProvider {
+                authorize_url,
+                token_url,
+                scopes: "",
+                client_id_env: "TORII_GITEA_APP_ID",
+                bundled_client_id: None,
+                client_secret_env: None,
+                loopback_host: "127.0.0.1",
+                instance_base: Some(base),
+            })
+        }
         _ => None,
     }
+}
+
+fn missing_auth_code_client_id(cfg: &AuthCodeProvider, provider: &str) -> ToriiError {
+    let extra = cfg
+        .instance_base
+        .as_deref()
+        .map(|b| {
+            format!(
+                " Register a public OAuth application at {b}/user/settings/applications \
+             with redirect http://127.0.0.1:{LOOPBACK_PORT}{LOOPBACK_PATH} \
+             (Confidential: no) and export {}=<client_id>. GITEA_URL is currently {b}.",
+                cfg.client_id_env
+            )
+        })
+        .unwrap_or_default();
+    ToriiError::InvalidConfig(format!(
+        "No OAuth client_id for `{provider}`. Set {}{extra} \
+         Or create a PAT and run `torii auth set {provider} ...`.",
+        cfg.client_id_env
+    ))
 }
 
 const LOOPBACK_PORT: u16 = 8888;
@@ -699,13 +830,7 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     let client_id = std::env::var(cfg.client_id_env)
         .ok()
         .or_else(|| cfg.bundled_client_id.map(String::from))
-        .ok_or_else(|| {
-            ToriiError::InvalidConfig(format!(
-                "No OAuth client_id for `{}`. Set {} or create a PAT manually and run \
-             `torii auth set {} ...`.",
-                provider, cfg.client_id_env, provider
-            ))
-        })?;
+        .ok_or_else(|| missing_auth_code_client_id(&cfg, provider))?;
 
     let client_secret = cfg
         .client_secret_env
@@ -718,7 +843,10 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     let code_challenge = sha256_base64url(&code_verifier);
 
     // Build the authorize URL.
-    let redirect_uri = format!("http://localhost:{}{}", LOOPBACK_PORT, LOOPBACK_PATH);
+    let redirect_uri = format!(
+        "http://{}:{}{}",
+        cfg.loopback_host, LOOPBACK_PORT, LOOPBACK_PATH
+    );
     let state = random_verifier(); // CSRF token
     let authz_url = format!(
         "{}?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
@@ -748,8 +876,8 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
     println!("   {}", authz_url);
     println!();
     println!(
-        "Waiting for the redirect on localhost:{}{}…",
-        LOOPBACK_PORT, LOOPBACK_PATH
+        "Waiting for the redirect on {}:{}{}…",
+        cfg.loopback_host, LOOPBACK_PORT, LOOPBACK_PATH
     );
 
     // Accept a single connection.
@@ -805,7 +933,7 @@ pub fn run_auth_code_flow(provider: &str) -> Result<String> {
         ("code_verifier", code_verifier),
     ];
     let mut req = client
-        .post(cfg.token_url)
+        .post(&cfg.token_url)
         .header("Accept", "application/json");
     if let Some(secret) = &client_secret {
         // Bitbucket prefers Basic auth for confidential consumers.
@@ -955,4 +1083,94 @@ fn urldecode(s: &str) -> String {
 /// Whether the given provider has an authorization-code flow wired.
 pub fn auth_code_flow_supported(provider: &str) -> bool {
     auth_code_provider(provider).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_oauth_base_adds_https_and_strips_slash() {
+        assert_eq!(
+            normalize_oauth_base("https://git.example.com/"),
+            "https://git.example.com"
+        );
+        assert_eq!(
+            normalize_oauth_base("git.example.com"),
+            "https://git.example.com"
+        );
+        assert_eq!(
+            normalize_oauth_base("http://git.example.com:3000"),
+            "http://git.example.com:3000"
+        );
+    }
+
+    #[test]
+    fn forgejo_endpoints_sit_on_the_instance() {
+        let (d, t) = forgejo_oauth_endpoints("https://git.example.com/");
+        assert_eq!(d, "https://git.example.com/login/oauth/device/code");
+        assert_eq!(t, "https://git.example.com/login/oauth/access_token");
+    }
+
+    #[test]
+    fn gitea_endpoints_sit_on_the_instance() {
+        let (a, t) = gitea_oauth_endpoints("git.example.com");
+        assert_eq!(a, "https://git.example.com/login/oauth/authorize");
+        assert_eq!(t, "https://git.example.com/login/oauth/access_token");
+    }
+
+    #[test]
+    fn host_of_drops_scheme_path_and_port() {
+        assert_eq!(host_of("https://codeberg.org"), "codeberg.org");
+        assert_eq!(
+            host_of("https://git.example.com:3000/api"),
+            "git.example.com"
+        );
+        assert_eq!(host_of("http://localhost:3000"), "localhost");
+    }
+
+    #[test]
+    fn forgejo_is_device_flow_gitea_is_auth_code() {
+        assert!(device_flow_supported("forgejo"));
+        assert!(device_flow_supported("codeberg"));
+        assert!(!device_flow_supported("gitea"));
+        assert!(auth_code_flow_supported("gitea"));
+        assert!(auth_code_flow_supported("bitbucket"));
+        assert!(!auth_code_flow_supported("forgejo"));
+    }
+
+    #[test]
+    fn forgejo_default_instance_is_codeberg() {
+        // FORGEJO_URL unset → same host as `torii clone forgejo`.
+        let cfg = device_flow_provider("forgejo").expect("forgejo is wired");
+        assert!(
+            cfg.device_authz_url.contains("codeberg.org") || std::env::var("FORGEJO_URL").is_ok(),
+            "default forgejo device URL should be on codeberg.org unless FORGEJO_URL is set: {}",
+            cfg.device_authz_url
+        );
+        if std::env::var("FORGEJO_URL").is_err() {
+            assert_eq!(cfg.bundled_client_id, Some(CODEBERG_CLIENT_ID));
+        }
+    }
+
+    #[test]
+    fn gitea_default_instance_is_gitea_com() {
+        let cfg = auth_code_provider("gitea").expect("gitea is wired");
+        assert_eq!(cfg.loopback_host, "127.0.0.1");
+        assert!(cfg.bundled_client_id.is_none());
+        if std::env::var("GITEA_URL").is_err() {
+            assert!(cfg.authorize_url.starts_with("https://gitea.com/"));
+        }
+    }
+
+    #[test]
+    fn revoke_hint_for_gitea_family_points_at_applications() {
+        let gitea = revoke_hint_url("gitea").unwrap();
+        assert!(gitea.ends_with("/user/settings/applications"), "{gitea}");
+        let forgejo = revoke_hint_url("forgejo").unwrap();
+        assert!(
+            forgejo.ends_with("/user/settings/applications"),
+            "{forgejo}"
+        );
+    }
 }

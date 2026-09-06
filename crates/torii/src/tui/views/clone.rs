@@ -310,6 +310,16 @@ fn render_run(f: &mut Frame, app: &App, area: Rect) {
     ];
 
     match &run.status {
+        // Before anything else: a stop that has been asked for and not
+        // yet answered. The bar is dropped on purpose — it would keep
+        // climbing for another report or two, which reads as the key
+        // having done nothing.
+        CloneStatus::Starting | CloneStatus::Working(_) if run.cancel_asked() => {
+            body.push(Line::from(Span::styled(
+                " stopping…",
+                Style::default().fg(theme::WARN),
+            )));
+        }
         CloneStatus::Starting => body.push(Line::from(Span::styled(
             " connecting…",
             Style::default().fg(theme::INK),
@@ -355,6 +365,19 @@ fn render_run(f: &mut Frame, app: &App, area: Rect) {
                 Style::default().fg(theme::INK_FAINT),
             )));
         }
+        CloneStatus::Cancelled => {
+            body.push(Line::from(vec![
+                Span::styled(" — ", Style::default().fg(theme::WARN)),
+                Span::styled(
+                    "stopped",
+                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                ),
+            ]));
+            body.push(Line::from(Span::styled(
+                "   nothing was left on disk",
+                Style::default().fg(theme::INK_FAINT),
+            )));
+        }
         CloneStatus::Error(msg) => {
             body.push(Line::from(vec![
                 Span::styled(" ✗ ", Style::default().fg(theme::BAD)),
@@ -364,9 +387,11 @@ fn render_run(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let title = match &run.status {
-        CloneStatus::Done(_) => " cloned — Enter open · Esc dismiss ",
+        CloneStatus::Done(_) => " cloned — Esc dismiss ",
+        CloneStatus::Cancelled => " stopped — Esc dismiss ",
         CloneStatus::Error(_) => " failed — Esc dismiss ",
-        _ => " cloning ",
+        _ if run.cancel_asked() => " stopping ",
+        _ => " cloning — Esc stops it ",
     };
     f.render_widget(
         Paragraph::new(body).block(

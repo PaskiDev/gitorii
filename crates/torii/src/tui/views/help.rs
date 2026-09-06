@@ -102,6 +102,7 @@ pub fn render(f: &mut Frame, app: &crate::tui::app::App) {
                 ("t", "ssh / https"),
                 ("r", "ask the host again"),
                 ("Enter", "clone it, then open it"),
+                ("Esc", "stop a clone that is running"),
             ],
         ),
         (
