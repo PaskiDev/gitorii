@@ -91,6 +91,26 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
             }
             return None;
         }
+        IssueConfirm::SwitchPlatform => {
+            match (key.modifiers, key.code) {
+                (_, KeyCode::Esc) => {
+                    app.issue_view.confirm = IssueConfirm::None;
+                }
+                (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.issue_view.platform_idx > 0 => {
+                    app.issue_view.platform_idx -= 1;
+                }
+                (_, KeyCode::Down) | (_, KeyCode::Char('j'))
+                    if app.issue_view.platform_idx + 1
+                        < app.issue_view.available_platforms.len() =>
+                {
+                    app.issue_view.platform_idx += 1;
+                }
+                (_, KeyCode::Enter) => return Some(Action::IssueSwitchPlatform),
+                (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+                _ => {}
+            }
+            return None;
+        }
         IssueConfirm::None => {}
     }
 
@@ -148,6 +168,10 @@ pub(super) fn handle_issue(key: event::KeyEvent, app: &mut App) -> Option<Action
         (_, KeyCode::Char('o')) => {
             app.issue_view.ops_mode = true;
             app.issue_view.ops_idx = 0;
+        }
+        (_, KeyCode::Char('p')) => {
+            app.load_issue_platforms();
+            app.issue_view.confirm = IssueConfirm::SwitchPlatform;
         }
         _ => {}
     }

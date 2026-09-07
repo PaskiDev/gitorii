@@ -46,6 +46,18 @@ pub const WARN: Color = Color::Rgb(217, 164, 65);
 /// red-as-identity must not be the same red, or neither reads.
 pub const BAD: Color = Color::Rgb(224, 76, 76);
 
+/// Colour for a forge name (github / gitlab / …) so the issues and
+/// remotes views agree on which host is which.
+pub fn platform_color(platform: &str) -> Color {
+    match platform.to_lowercase().as_str() {
+        "github" => INK,
+        "gitlab" => WARN,
+        "gitea" | "codeberg" | "forgejo" => OK,
+        "bitbucket" => INK_DIM,
+        _ => INK_FAINT,
+    }
+}
+
 /// The accent, for the caret and the badge. Comes from settings so a user who
 /// picked their own brand colour keeps it.
 pub fn accent(app: &App) -> Color {

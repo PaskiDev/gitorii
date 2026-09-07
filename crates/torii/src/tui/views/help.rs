@@ -58,6 +58,12 @@ pub fn render(f: &mut Frame, app: &crate::tui::app::App) {
                 ("k / ↑", "move up"),
                 ("space", "stage / unstage file"),
                 ("d", "open diff for file"),
+                ("t", "tree of HEAD — same key, or Esc, comes back"),
+                (
+                    "Enter / space / h l / - +",
+                    "open or fold a folder in the tree",
+                ),
+                ("click", "select a row — second click opens a folder"),
                 ("r", "refresh"),
             ],
         ),
@@ -112,6 +118,15 @@ pub fn render(f: &mut Frame, app: &crate::tui::app::App) {
                 ("k / ↑", "select operation"),
                 ("Enter", "run selected operation"),
                 ("Esc", "cancel"),
+            ],
+        ),
+        (
+            "issues view",
+            &[
+                ("j / ↓ k / ↑", "move through the issues"),
+                ("p", "switch which forge the list is from"),
+                ("o", "ops — create, comment, browser, close"),
+                ("^r", "reload"),
             ],
         ),
     ];

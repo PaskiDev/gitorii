@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.16.1] - 2026-09-07
+
+### Added
+
+- **Diff a snapshot against now.** In the snapshot view, `d` (or
+  ops → diff) opens a tree of the folders and files that changed
+  versus the current worktree. Enter a file to see its patch; Esc
+  returns to the tree. Folders start folded. `torii snapshot diff
+  <id>` lists the files first, then the patches.
+- **Custom auto-snapshot intervals in the TUI.** The snapshot view's
+  picker still has off / 5 / 15 / 30 min / 1 hour, plus a `custom…`
+  row. Type `30m`, `2h`, `45`, the same durations `torii snapshot
+  config --interval` already takes. The value is stored as minutes in
+  `.torii/config.toml`, so a CLI `2h` no longer snaps to 1 hour when
+  the TUI loads it.
+- **The issues view names the forge.** Heading, each row and the
+  detail pane show `gitlab` / `github` / … and the `owner/repo` the
+  list came from. `p` switches between remotes, the way the PR view
+  already does. `torii issue list` prints the same host line.
+- **Built-in keys are claimed per view.** A letter may live in many
+  views; it may not live twice in one, or collide with a global (`e`,
+  Tab, `W`). The files tree is dispatched from that table, so adding
+  the event-log key there fails before the handler can hide it.
+- **`t` in the files view shows the tree of HEAD.** Status columns hide
+  for a nested tree of folders and files in the current commit, with
+  icons and the usual connectors. Folders lead, then files. `t` or `Esc`
+  brings the status layout back. Folders start folded. Enter, space,
+  `h`/`l`, arrows or `-/+` open and fold; a click selects a row, a
+  second click opens or folds it. An unborn
+  HEAD is an empty tree, not an error. (`e` stays the event log, which
+  is global.)
+
+### Fixed
+
+- **`torii sync <branch> --merge` no longer destroys uncommitted work
+  on a fast-forward.** The checkout is safe: a dirty file the incoming
+  tree does not touch stays, and a dirty file it would overwrite
+  refuses the merge instead of being clobbered. `torii sync --pull`
+  uses the same path. (#1)
+- **`torii snapshot config` writes the same store `torii config`
+  reads.** It used to dump a per-repo JSON with different key names
+  that nothing else looked at, so `torii config get snapshot.auto_enabled`
+  stayed `false` after a successful `--enable`. `--interval` now
+  parses the documented `30m` / `1h` forms (and bare minutes) and
+  errors on garbage instead of silently becoming 30. (#3)
+- **Auto-snapshot actually fires.** With `snapshot.auto_enabled`, a
+  dirty fast-forward takes a snapshot first. The TUI interval picker
+  reads and writes the same toml. (#2)
+- **`torii snapshot restore` no longer deletes the repository.**
+  Snapshots live under `.git/torii/snapshots/`, and restore used to
+  `remove_dir_all(.git)` — which erased the snapshot it was reading
+  and left an empty `.git`. It now rewrites `.git` while keeping
+  `torii/`, and a snapshot also stores dirty / untracked files so
+  uncommitted work comes back. The TUI snapshot view talks to the
+  same store instead of writing empty `.meta` files.
+
 ## [0.16.0] - 2026-09-05
 
 ### Added

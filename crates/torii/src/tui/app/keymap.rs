@@ -54,7 +54,11 @@ impl App {
             View::Commit => self.commit_view.focus == CommitFocus::Input,
             View::Log | View::History => self.log.search_mode,
             View::Snapshot => {
-                self.snapshot_view.search_mode || self.snapshot_view.focus == SnapshotFocus::Create
+                self.snapshot_view.search_mode
+                    || matches!(
+                        self.snapshot_view.focus,
+                        SnapshotFocus::Create | SnapshotFocus::AutoCustom
+                    )
             }
             View::Safety => self.ignore_view.focus == IgnoreFocus::Input,
             View::Config | View::Settings => self.config_view.editing,
@@ -449,6 +453,8 @@ impl App {
             "safety.scanner" => self.ignore_view.scanner_idx,
             "stats.people" => self.stats_view.people_idx,
             "palette" => self.palette.idx,
+            "files.tree" => self.dashboard.browse_idx,
+            "diff.tree" => self.diff.tree_idx,
             _ => return None,
         })
     }
@@ -483,6 +489,16 @@ impl App {
             "safety.scanner" => self.ignore_view.scanner_idx = index,
             "stats.people" => self.stats_view.people_idx = index,
             "palette" => self.palette.idx = index,
+            "files.tree" => {
+                if index < self.dashboard.browse_rows.len() {
+                    self.dashboard.browse_idx = index;
+                }
+            }
+            "diff.tree" => {
+                if index < self.diff.tree_rows.len() {
+                    self.diff.tree_idx = index;
+                }
+            }
             _ => return,
         }
         // A click is also a statement about where the focus is: the sidebar

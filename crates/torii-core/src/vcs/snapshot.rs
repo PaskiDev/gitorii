@@ -2,6 +2,7 @@ use crate::core::GitRepo;
 use crate::error::{Result, ToriiError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +23,91 @@ fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn tree_blobs(repo: &git2::Repository, tree: &git2::Tree) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut blobs: Vec<(String, git2::Oid)> = Vec::new();
+    tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+        if entry.kind() == Some(git2::ObjectType::Blob) {
+            if let Some(name) = entry.name() {
+                blobs.push((format!("{dir}{name}"), entry.id()));
+            }
+        }
+        0
+    })
+    .map_err(ToriiError::Git)?;
+    let mut files = BTreeMap::new();
+    for (path, oid) in blobs {
+        let blob = repo.find_blob(oid).map_err(ToriiError::Git)?;
+        files.insert(path, blob.content().to_vec());
+    }
+    Ok(files)
+}
+
+fn overlay_dir(dir: &Path, prefix: &str, into: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let rel = if prefix.is_empty() {
+            name.into_owned()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let p = entry.path();
+        if p.is_dir() {
+            overlay_dir(&p, &rel, into)?;
+        } else if p.is_file() {
+            into.insert(rel, fs::read(&p)?);
+        }
+    }
+    Ok(())
+}
+
+fn append_file_diff(patch: &mut String, path: &str, old: &[u8], new: &[u8]) -> Result<()> {
+    if old.contains(&0) || new.contains(&0) {
+        patch.push_str(&format!("diff --git a/{path} b/{path}\n"));
+        patch.push_str("Binary files differ\n");
+        return Ok(());
+    }
+    let mut opts = git2::DiffOptions::new();
+    let mut file_patch = git2::Patch::from_buffers(
+        old,
+        Some(Path::new(path)),
+        new,
+        Some(Path::new(path)),
+        Some(&mut opts),
+    )
+    .map_err(ToriiError::Git)?;
+    let buf = file_patch.to_buf().map_err(ToriiError::Git)?;
+    patch.push_str(&String::from_utf8_lossy(&buf));
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotDiffKind {
+    Added,
+    Removed,
+    Changed,
+    Binary,
+}
+
+impl SnapshotDiffKind {
+    pub fn mark(self) -> &'static str {
+        match self {
+            Self::Added => "+",
+            Self::Removed => "-",
+            Self::Changed => "~",
+            Self::Binary => "b",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SnapshotDiffFile {
+    pub path: String,
+    pub kind: SnapshotDiffKind,
+    pub patch: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,6 +201,43 @@ impl SnapshotManager {
         Ok(())
     }
 
+    /// If `snapshot.auto_enabled` is on, take a snapshot named `reason`.
+    /// The caller decides whether the tree is dirty enough to bother.
+    pub fn maybe_auto(&self, reason: &str) -> Result<Option<String>> {
+        let cfg = crate::config::ToriiConfig::load_local(&self.repo_path)?;
+        if !cfg.snapshot.auto_enabled {
+            return Ok(None);
+        }
+        Ok(Some(self.create_snapshot(Some(reason))?))
+    }
+}
+
+/// Best-effort auto-snapshot from a live `git2::Repository`. Prints on
+/// success; a failure is a warning, not a stop.
+pub fn maybe_auto_snapshot_here(repo: &git2::Repository, reason: &str) {
+    let Some(workdir) = repo.workdir() else {
+        return;
+    };
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true).recurse_untracked_dirs(true);
+    let dirty = repo
+        .statuses(Some(&mut opts))
+        .map(|s| !s.is_empty())
+        .unwrap_or(false);
+    if !dirty {
+        return;
+    }
+    match SnapshotManager::new(workdir).and_then(|m| m.maybe_auto(reason)) {
+        Ok(Some(id)) => println!(
+            "📸 auto-snapshot {} (restore with: torii snapshot restore {})",
+            id, id
+        ),
+        Ok(None) => {}
+        Err(e) => eprintln!("⚠  auto-snapshot failed (proceeding): {e}"),
+    }
+}
+
+impl SnapshotManager {
     /// Create a new snapshot
     pub fn create_snapshot(&self, name: Option<&str>) -> Result<String> {
         let repo = GitRepo::open(&self.repo_path)?;
@@ -158,6 +281,7 @@ impl SnapshotManager {
         fs::write(metadata_path, metadata_json)?;
 
         self.create_bundle(&snapshot_dir, &repo)?;
+        self.capture_workdir(&snapshot_dir, repo.repository())?;
 
         Ok(id)
     }
@@ -295,7 +419,46 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Restore from a snapshot
+    /// Copy dirty / untracked workdir files into `snapshot_dir/worktree`
+    /// and record deletions. `git_backup` is only `.git`, so without
+    /// this a snapshot cannot restore uncommitted work.
+    fn capture_workdir(&self, snapshot_dir: &Path, repo: &git2::Repository) -> Result<()> {
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+        let statuses = repo.statuses(Some(&mut opts)).map_err(ToriiError::Git)?;
+        let wt = snapshot_dir.join("worktree");
+        let mut deleted = Vec::new();
+        for entry in statuses.iter() {
+            let Some(path) = entry.path() else { continue };
+            let st = entry.status();
+            if st.is_wt_deleted() || st.is_index_deleted() {
+                deleted.push(path.to_string());
+                continue;
+            }
+            let src = self.repo_path.join(path);
+            if src.is_dir() {
+                copy_dir_all(&src, &wt.join(path))?;
+            } else if src.is_file() {
+                let dst = wt.join(path);
+                if let Some(parent) = dst.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::copy(&src, &dst)?;
+            }
+        }
+        if !deleted.is_empty() {
+            fs::write(snapshot_dir.join("deleted.txt"), deleted.join("\n"))?;
+        }
+        Ok(())
+    }
+
+    /// Restore from a snapshot.
+    ///
+    /// Snapshots live *inside* `.git/torii/snapshots/` since 0.7.7.
+    /// The previous restore deleted `.git` wholesale, which deleted the
+    /// snapshot it was restoring from and left an empty directory.
     pub fn restore_snapshot(&self, id: &str) -> Result<()> {
         let snapshot_dir = self.snapshots_dir.join(id);
 
@@ -304,12 +467,48 @@ impl SnapshotManager {
         }
 
         let snapshot_git = snapshot_dir.join("git_backup");
+        if !snapshot_git.exists() {
+            return Err(ToriiError::Snapshot(format!(
+                "Snapshot {} has no git_backup",
+                id
+            )));
+        }
+
         let git_dir = self.repo_path.join(".git");
+        if !git_dir.is_dir() {
+            return Err(ToriiError::RepoState(
+                "restore needs a directory .git (linked worktrees are not supported yet)"
+                    .to_string(),
+            ));
+        }
 
-        fs::remove_dir_all(&git_dir)?;
-        self.copy_dir_recursive(&snapshot_git, &git_dir)?;
+        // Copy the backup out from under .git before we rewrite .git.
+        // Staging lives in torii/ so the wipe below leaves it alone.
+        let staging = self
+            .snapshots_dir
+            .parent()
+            .unwrap_or(&self.snapshots_dir)
+            .join("restore-staging");
+        if staging.exists() {
+            fs::remove_dir_all(&staging)?;
+        }
+        self.copy_dir_recursive(&snapshot_git, &staging)?;
 
-        // Reset working directory to match restored git state via git2
+        for entry in fs::read_dir(&git_dir)? {
+            let entry = entry?;
+            if entry.file_name() == "torii" {
+                continue;
+            }
+            let p = entry.path();
+            if p.is_dir() {
+                fs::remove_dir_all(&p)?;
+            } else {
+                fs::remove_file(&p)?;
+            }
+        }
+        self.copy_dir_recursive(&staging, &git_dir)?;
+        let _ = fs::remove_dir_all(&staging);
+
         {
             let repo = git2::Repository::discover(&self.repo_path).map_err(ToriiError::Git)?;
             let head = repo
@@ -325,7 +524,127 @@ impl SnapshotManager {
             .map_err(ToriiError::Git)?;
         }
 
+        let worktree = snapshot_dir.join("worktree");
+        if worktree.exists() {
+            self.copy_dir_recursive(&worktree, &self.repo_path)?;
+        }
+        let deleted = snapshot_dir.join("deleted.txt");
+        if deleted.exists() {
+            for line in fs::read_to_string(&deleted)?.lines() {
+                let p = self.repo_path.join(line);
+                if p.is_dir() {
+                    let _ = fs::remove_dir_all(&p);
+                } else if p.exists() {
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
+
         Ok(())
+    }
+
+    /// Per-file diffs of this snapshot against the current worktree
+    /// (HEAD plus uncommitted files). Empty means they match.
+    pub fn diff_files_against_current(&self, id: &str) -> Result<Vec<SnapshotDiffFile>> {
+        let old = self.snapshot_files(id)?;
+        let new = self.current_files()?;
+        let mut paths: BTreeSet<&str> = old.keys().map(|s| s.as_str()).collect();
+        paths.extend(new.keys().map(|s| s.as_str()));
+
+        let mut files = Vec::new();
+        for path in paths {
+            let a = old.get(path).map(Vec::as_slice).unwrap_or(&[]);
+            let b = new.get(path).map(Vec::as_slice).unwrap_or(&[]);
+            if a == b {
+                continue;
+            }
+            let kind = if a.contains(&0) || b.contains(&0) {
+                SnapshotDiffKind::Binary
+            } else if a.is_empty() {
+                SnapshotDiffKind::Added
+            } else if b.is_empty() {
+                SnapshotDiffKind::Removed
+            } else {
+                SnapshotDiffKind::Changed
+            };
+            let mut patch = String::new();
+            append_file_diff(&mut patch, path, a, b)?;
+            files.push(SnapshotDiffFile {
+                path: path.to_string(),
+                kind,
+                patch,
+            });
+        }
+        Ok(files)
+    }
+
+    /// Unified diff of this snapshot against the current worktree.
+    /// Empty string means they match.
+    pub fn diff_against_current(&self, id: &str) -> Result<String> {
+        let files = self.diff_files_against_current(id)?;
+        Ok(files.into_iter().map(|f| f.patch).collect())
+    }
+
+    fn snapshot_files(&self, id: &str) -> Result<BTreeMap<String, Vec<u8>>> {
+        let snapshot_dir = self.snapshots_dir.join(id);
+        if !snapshot_dir.exists() {
+            return Err(ToriiError::Snapshot(format!("Snapshot not found: {}", id)));
+        }
+        let git_backup = snapshot_dir.join("git_backup");
+        if !git_backup.is_dir() {
+            return Err(ToriiError::Snapshot(format!(
+                "Snapshot {} has no git_backup to diff against",
+                id
+            )));
+        }
+        let snap_repo = git2::Repository::open(&git_backup).map_err(ToriiError::Git)?;
+        let mut files = BTreeMap::new();
+        if let Ok(head) = snap_repo.head() {
+            if let Ok(tree) = head.peel_to_tree() {
+                files = tree_blobs(&snap_repo, &tree)?;
+            }
+        }
+        let worktree = snapshot_dir.join("worktree");
+        if worktree.is_dir() {
+            overlay_dir(&worktree, "", &mut files)?;
+        }
+        let deleted = snapshot_dir.join("deleted.txt");
+        if deleted.exists() {
+            for line in fs::read_to_string(&deleted)?.lines() {
+                files.remove(line);
+            }
+        }
+        Ok(files)
+    }
+
+    fn current_files(&self) -> Result<BTreeMap<String, Vec<u8>>> {
+        let repo = git2::Repository::discover(&self.repo_path).map_err(ToriiError::Git)?;
+        let mut files = BTreeMap::new();
+        if let Ok(head) = repo.head() {
+            if let Ok(tree) = head.peel_to_tree() {
+                files = tree_blobs(&repo, &tree)?;
+            }
+        }
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true)
+            .recurse_untracked_dirs(true)
+            .include_ignored(false);
+        let statuses = repo.statuses(Some(&mut opts)).map_err(ToriiError::Git)?;
+        for entry in statuses.iter() {
+            let Some(path) = entry.path() else { continue };
+            let st = entry.status();
+            if st.is_wt_deleted() || st.is_index_deleted() {
+                files.remove(path);
+                continue;
+            }
+            let src = self.repo_path.join(path);
+            if src.is_dir() {
+                overlay_dir(&src, path, &mut files)?;
+            } else if src.is_file() {
+                files.insert(path.to_string(), fs::read(&src)?);
+            }
+        }
+        Ok(files)
     }
 
     /// Delete a snapshot
@@ -398,24 +717,30 @@ impl SnapshotManager {
         Ok(())
     }
 
-    /// Configure auto-snapshot settings
+    /// Configure auto-snapshot settings.
+    ///
+    /// Writes the same store `torii config` reads: per-repo
+    /// `.torii/config.toml`, keys `snapshot.auto_enabled` and
+    /// `snapshot.auto_interval_minutes`. The old `.torii/config.json`
+    /// (different names, unread by `torii config`) is removed so the
+    /// two cannot disagree.
     pub fn configure_auto_snapshot(&self, enable: bool, interval: Option<u32>) -> Result<()> {
-        let config_path = self.repo_path.join(".torii").join("config.json");
-
-        #[derive(Serialize, Deserialize)]
-        struct Config {
-            auto_snapshot_enabled: bool,
-            auto_snapshot_interval_minutes: u32,
+        let mut cfg = crate::config::ToriiConfig::load_local(&self.repo_path)?;
+        cfg.snapshot.auto_enabled = enable;
+        if let Some(mins) = interval {
+            if mins == 0 {
+                return Err(ToriiError::InvalidConfig(
+                    "interval must be at least 1 minute".to_string(),
+                ));
+            }
+            cfg.snapshot.auto_interval_minutes = mins;
         }
+        cfg.save_local(&self.repo_path)?;
 
-        let config = Config {
-            auto_snapshot_enabled: enable,
-            auto_snapshot_interval_minutes: interval.unwrap_or(30),
-        };
-
-        let config_json = serde_json::to_string_pretty(&config)?;
-        fs::write(config_path, config_json)?;
-
+        let legacy = self.repo_path.join(".torii").join("config.json");
+        if legacy.exists() {
+            let _ = fs::remove_file(&legacy);
+        }
         Ok(())
     }
 
@@ -598,6 +923,182 @@ mod snapshot_location_tests {
         let tree = repo.find_tree(tree_oid).unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
             .unwrap();
+    }
+
+    #[test]
+    fn configure_auto_snapshot_writes_toml_not_json() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+
+        let mgr = SnapshotManager::new(repo_path).unwrap();
+        // leftover JSON with the old key names must not survive
+        let json = repo_path.join(".torii/config.json");
+        fs::create_dir_all(json.parent().unwrap()).unwrap();
+        fs::write(
+            &json,
+            r#"{ "auto_snapshot_enabled": false, "auto_snapshot_interval_minutes": 30 }"#,
+        )
+        .unwrap();
+
+        mgr.configure_auto_snapshot(true, Some(120)).unwrap();
+
+        assert!(
+            !json.exists(),
+            "legacy .torii/config.json must be removed so it cannot disagree"
+        );
+        let cfg = crate::config::ToriiConfig::load_local(repo_path).unwrap();
+        assert!(cfg.snapshot.auto_enabled);
+        assert_eq!(cfg.snapshot.auto_interval_minutes, 120);
+    }
+
+    #[test]
+    fn maybe_auto_is_a_noop_when_disabled() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+        let mgr = SnapshotManager::new(repo_path).unwrap();
+        assert!(mgr.maybe_auto("pre-fast-forward").unwrap().is_none());
+        assert!(fs::read_dir(repo_path.join(".git/torii/snapshots"))
+            .unwrap()
+            .next()
+            .is_none());
+    }
+
+    #[test]
+    fn maybe_auto_creates_a_snapshot_when_enabled() {
+        let tmp = TempDir::new().unwrap();
+        let repo_path = tmp.path();
+        init_repo(repo_path);
+        let mgr = SnapshotManager::new(repo_path).unwrap();
+        mgr.configure_auto_snapshot(true, Some(30)).unwrap();
+        let id = mgr
+            .maybe_auto("pre-fast-forward")
+            .unwrap()
+            .expect("snapshot");
+        assert!(repo_path.join(".git/torii/snapshots").join(&id).exists());
+    }
+
+    fn commit_file(dir: &Path, name: &str, content: &str, msg: &str) {
+        std::fs::write(dir.join(name), content).unwrap();
+        let repo = git2::Repository::open(dir).unwrap();
+        let sig = git2::Signature::now("T", "t@x").unwrap();
+        let mut idx = repo.index().unwrap();
+        idx.add_path(Path::new(name)).unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &[&parent])
+            .unwrap();
+    }
+
+    #[test]
+    fn restore_roundtrips_a_committed_file() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        commit_file(dir, "tracked.txt", "committed\n", "add tracked");
+
+        let mgr = SnapshotManager::new(dir).unwrap();
+        let id = mgr.create_snapshot(Some("before-edit")).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "mutated\n").unwrap();
+
+        mgr.restore_snapshot(&id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("tracked.txt")).unwrap(),
+            "committed\n"
+        );
+        assert!(
+            dir.join(".git/HEAD").exists(),
+            "restore must not delete the repository"
+        );
+        assert!(
+            dir.join(".git/torii/snapshots").join(&id).exists(),
+            "the snapshot itself must survive restore"
+        );
+    }
+
+    #[test]
+    fn restore_roundtrips_uncommitted_work() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        commit_file(dir, "tracked.txt", "committed\n", "add tracked");
+
+        let mgr = SnapshotManager::new(dir).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "dirty-wip\n").unwrap();
+        std::fs::write(dir.join("untracked.txt"), "keep-me\n").unwrap();
+        let id = mgr.create_snapshot(Some("with-wip")).unwrap();
+
+        std::fs::write(dir.join("tracked.txt"), "overwritten\n").unwrap();
+        std::fs::remove_file(dir.join("untracked.txt")).unwrap();
+
+        mgr.restore_snapshot(&id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("tracked.txt")).unwrap(),
+            "dirty-wip\n",
+            "uncommitted edit must come back"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("untracked.txt")).unwrap(),
+            "keep-me\n",
+            "untracked file must come back"
+        );
+    }
+
+    #[test]
+    fn restore_keeps_other_snapshots() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        let mgr = SnapshotManager::new(dir).unwrap();
+        let a = mgr.create_snapshot(Some("a")).unwrap();
+        let b = mgr.create_snapshot(Some("b")).unwrap();
+        mgr.restore_snapshot(&a).unwrap();
+        assert!(dir.join(".git/torii/snapshots").join(&a).exists());
+        assert!(dir.join(".git/torii/snapshots").join(&b).exists());
+    }
+
+    #[test]
+    fn diff_against_current_is_empty_when_nothing_changed() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        commit_file(dir, "tracked.txt", "committed\n", "add tracked");
+        let mgr = SnapshotManager::new(dir).unwrap();
+        let id = mgr.create_snapshot(Some("same")).unwrap();
+        let patch = mgr.diff_against_current(&id).unwrap();
+        assert!(
+            patch.is_empty(),
+            "unchanged worktree must diff empty, got: {patch}"
+        );
+    }
+
+    #[test]
+    fn diff_against_current_shows_an_edit_and_an_untracked_file() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        commit_file(dir, "tracked.txt", "committed\n", "add tracked");
+        let mgr = SnapshotManager::new(dir).unwrap();
+        let id = mgr.create_snapshot(Some("before")).unwrap();
+        std::fs::write(dir.join("tracked.txt"), "mutated\n").unwrap();
+        std::fs::write(dir.join("new.txt"), "fresh\n").unwrap();
+        let patch = mgr.diff_against_current(&id).unwrap();
+        assert!(
+            patch.contains("committed") && patch.contains("mutated"),
+            "edit must appear in the patch: {patch}"
+        );
+        assert!(
+            patch.contains("fresh") && patch.contains("new.txt"),
+            "untracked file must appear in the patch: {patch}"
+        );
+        let files = mgr.diff_files_against_current(&id).unwrap();
+        let names: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+        assert!(
+            names.contains(&"tracked.txt") && names.contains(&"new.txt"),
+            "{names:?}"
+        );
     }
 
     #[test]

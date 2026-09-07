@@ -96,6 +96,12 @@ pub(crate) enum SnapshotCommands {
         id: String,
     },
 
+    /// Diff a snapshot against the current worktree
+    Diff {
+        /// Snapshot ID
+        id: String,
+    },
+
     /// Undo last operation
     Undo,
 }
@@ -119,9 +125,25 @@ pub(crate) fn run(action: &SnapshotCommands) -> Result<()> {
             println!("✅ Deleted snapshot: {}", id);
         }
         SnapshotCommands::Config { enable, interval } => {
-            let interval_minutes = interval.as_ref().and_then(|s| s.parse::<u32>().ok());
+            let interval_minutes = match interval {
+                Some(s) => Some(crate::duration::parse_duration(s).map_err(|e| {
+                    anyhow::anyhow!(
+                        "invalid --interval '{s}': {e}. Use a duration such as 30m, 1h, or a number of minutes."
+                    )
+                })?),
+                None => None,
+            };
             snapshot_mgr.configure_auto_snapshot(*enable, interval_minutes)?;
-            println!("✅ Auto-snapshot configuration updated");
+            if *enable {
+                print!("✅ Auto-snapshot enabled");
+            } else {
+                print!("✅ Auto-snapshot disabled");
+            }
+            if let Some(mins) = interval_minutes {
+                println!("  (every {} min)", mins);
+            } else {
+                println!();
+            }
         }
         SnapshotCommands::Stash {
             name,
@@ -162,6 +184,21 @@ pub(crate) fn run(action: &SnapshotCommands) -> Result<()> {
         }
         SnapshotCommands::Show { id } => {
             snapshot_mgr.show(id)?;
+        }
+        SnapshotCommands::Diff { id } => {
+            let files = snapshot_mgr.diff_files_against_current(id)?;
+            if files.is_empty() {
+                println!("No differences from the current worktree.");
+            } else {
+                println!("{} file(s):", files.len());
+                for f in &files {
+                    println!("  {} {}", f.kind.mark(), f.path);
+                }
+                println!();
+                for f in &files {
+                    print!("{}", f.patch);
+                }
+            }
         }
         SnapshotCommands::Undo => {
             snapshot_mgr.undo()?;

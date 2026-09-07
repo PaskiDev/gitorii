@@ -38,8 +38,12 @@ pub(crate) fn run(action: &IssueCommands) -> Result<()> {
         IssueCommands::List { state } => {
             let issues = client.list(&owner, &repo_name, state)?;
             if issues.is_empty() {
-                println!("No {} issues.", state);
+                println!(
+                    "No {} issues on {} ({}/{}).",
+                    state, platform, owner, repo_name
+                );
             } else {
+                println!("{}  {}/{}", platform, owner, repo_name);
                 for i in &issues {
                     let labels = if i.labels.is_empty() {
                         String::new()
@@ -57,7 +61,7 @@ pub(crate) fn run(action: &IssueCommands) -> Result<()> {
                         i.state,
                         i.url,
                         i.author,
-                        &i.created_at[..10]
+                        &i.created_at[..10.min(i.created_at.len())]
                     );
                 }
             }

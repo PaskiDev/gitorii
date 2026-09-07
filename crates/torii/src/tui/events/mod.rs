@@ -67,6 +67,7 @@ pub enum Action {
     SnapshotCreate,
     SnapshotDelete,
     SnapshotSaveInterval,
+    SnapshotDiff,
     OpenDiffFromLog,
     LogCopyHash,
     SyncRun,
@@ -117,6 +118,7 @@ pub enum Action {
     IssueComment,
     IssueOpenBrowser,
     IssueRefresh,
+    IssueSwitchPlatform,
     ConfigEdit,
     ConfigSave,
     ConfigToggleScope,
@@ -231,8 +233,10 @@ impl EventHandler {
                 let typing = match app.view {
                     View::Commit => app.commit_view.focus == CommitFocus::Input,
                     View::Snapshot => {
-                        app.snapshot_view.focus == SnapshotFocus::Create
-                            || app.snapshot_view.search_mode
+                        matches!(
+                            app.snapshot_view.focus,
+                            SnapshotFocus::Create | SnapshotFocus::AutoCustom
+                        ) || app.snapshot_view.search_mode
                     }
                     View::Log => app.log.search_mode,
                     View::Branch => {
@@ -368,8 +372,16 @@ impl EventHandler {
                 }
                 if key.code == KeyCode::Esc && key.modifiers == KeyModifiers::NONE {
                     let handled_by_view = match app.view {
+                        View::Dashboard if app.dashboard.browse => {
+                            app.leave_files_browse();
+                            true
+                        }
                         View::Diff => {
-                            app.go_back();
+                            if app.diff.mode == crate::tui::app::DiffMode::SnapshotFile {
+                                app.leave_snapshot_file();
+                            } else {
+                                app.go_back();
+                            }
                             true
                         }
                         View::Commit => app.commit_view.focus == CommitFocus::Input,
@@ -466,6 +478,14 @@ impl EventHandler {
                                 app.snapshot_view.search_query.clear();
                                 app.snapshot_view.filtered.clear();
                                 app.snapshot_view.idx = 0;
+                                true
+                            } else if app.snapshot_view.focus == SnapshotFocus::AutoCustom {
+                                app.snapshot_view.auto_custom_input.clear();
+                                app.snapshot_view.auto_custom_error = None;
+                                app.snapshot_view.focus = SnapshotFocus::AutoConfig;
+                                true
+                            } else if app.snapshot_view.focus == SnapshotFocus::AutoConfig {
+                                app.snapshot_view.focus = SnapshotFocus::List;
                                 true
                             } else {
                                 false
@@ -705,21 +725,32 @@ fn handle_dashboard(key: event::KeyEvent, app: &mut App) -> Option<Action> {
         return Some(a);
     }
 
-    match (key.modifiers, key.code) {
-        (_, KeyCode::BackTab) => app.prev_panel(),
-        (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.move_up(),
-        (_, KeyCode::Down) | (_, KeyCode::Char('j')) => app.move_down(),
+    if app.dashboard.browse {
+        match crate::tui::bindings::files_tree().action(key) {
+            Some("leave") => app.leave_files_browse(),
+            Some("up") => app.files_browse_move_up(),
+            Some("down") => app.files_browse_move_down(),
+            Some("toggle-fold") => app.files_browse_toggle_fold(),
+            Some("fold") => app.files_browse_fold(),
+            Some("unfold") => app.files_browse_unfold(),
+            Some("refresh") => app.enter_files_browse(),
+            _ => {}
+        }
+        return None;
+    }
 
-        (KeyModifiers::CONTROL, KeyCode::Char('r')) => return Some(Action::Refresh),
-
-        (_, KeyCode::Char(' ')) => match app.dashboard.selected_panel {
+    match crate::tui::bindings::files().action(key) {
+        Some("tree") => app.enter_files_browse(),
+        Some("prev-panel") => app.prev_panel(),
+        Some("up") => app.move_up(),
+        Some("down") => app.move_down(),
+        Some("refresh") => return Some(Action::Refresh),
+        Some("stage") => match app.dashboard.selected_panel {
             Panel::Unstaged | Panel::Untracked => return Some(Action::StageFile),
             Panel::Staged => return Some(Action::UnstageFile),
             Panel::Log => {}
         },
-
-        (_, KeyCode::Char('d')) => app.go_to(View::Diff),
-
+        Some("diff") => app.go_to(View::Diff),
         _ => {}
     }
     None
@@ -741,6 +772,37 @@ fn handle_global_nav(key: event::KeyEvent, app: &mut App) -> Option<Action> {
 }
 
 fn handle_diff(key: event::KeyEvent, app: &mut App) -> Option<Action> {
+    use crate::tui::app::DiffMode;
+    if app.diff.mode == DiffMode::SnapshotTree {
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) | (_, KeyCode::Char('q')) => app.go_back(),
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.diff_tree_move_up(),
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => app.diff_tree_move_down(),
+            (_, KeyCode::Enter) | (_, KeyCode::Char(' ')) => app.diff_tree_toggle_fold(),
+            (_, KeyCode::Left) | (_, KeyCode::Char('h')) | (_, KeyCode::Char('-')) => {
+                app.diff_tree_fold()
+            }
+            (_, KeyCode::Right)
+            | (_, KeyCode::Char('l'))
+            | (_, KeyCode::Char('+'))
+            | (_, KeyCode::Char('=')) => app.diff_tree_unfold(),
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+            _ => {}
+        }
+        return None;
+    }
+    if app.diff.mode == DiffMode::SnapshotFile {
+        match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) | (_, KeyCode::Char('q')) => app.leave_snapshot_file(),
+            (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.diff_scroll_up(),
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) => app.diff_scroll_down(),
+            (_, KeyCode::PageUp) => app.diff_page_up(),
+            (_, KeyCode::PageDown) => app.diff_page_down(),
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+            _ => {}
+        }
+        return None;
+    }
     match (key.modifiers, key.code) {
         (_, KeyCode::Esc) | (_, KeyCode::Char('q')) => app.go_back(),
         (_, KeyCode::Up) | (_, KeyCode::Char('k')) => app.diff_scroll_up(),

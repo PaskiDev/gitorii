@@ -79,6 +79,33 @@ impl GitRepo {
         Ok(())
     }
 
+    /// Paths of blobs (and gitlinks) in HEAD, sorted. An unborn HEAD
+    /// is an empty list rather than an error: there is nothing to show.
+    pub fn list_head_paths(&self) -> Result<Vec<String>> {
+        let head = match self.repo.head() {
+            Ok(h) => h,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let tree = match head.peel_to_tree() {
+            Ok(t) => t,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let mut paths = Vec::new();
+        tree.walk(git2::TreeWalkMode::PreOrder, |dir, entry| {
+            match entry.kind() {
+                Some(git2::ObjectType::Blob) | Some(git2::ObjectType::Commit) => {
+                    if let Some(name) = entry.name() {
+                        paths.push(format!("{dir}{name}"));
+                    }
+                }
+                _ => {}
+            }
+            0
+        })?;
+        paths.sort();
+        Ok(paths)
+    }
+
     /// Add all changes to staging, respecting .toriignore.
     ///
     /// 0.7.7: `.torii/` is treated as reserved internal state and is
@@ -491,6 +518,38 @@ impl GitRepo {
         });
     }
 
+    /// Fast-forward the current branch to `oid` without clobbering local
+    /// modifications.
+    ///
+    /// libgit2's default checkout is SAFE: a file the incoming tree would
+    /// change that has uncommitted edits aborts the operation instead of
+    /// being overwritten. Dirty files the incoming tree does not touch
+    /// stay. `.force()` used to discard both, silently.
+    ///
+    /// When `snapshot.auto_enabled` is on and the working tree is dirty,
+    /// a snapshot is taken first so a later refusal is still recoverable.
+    pub fn fast_forward_to(&self, oid: git2::Oid, log_msg: &str) -> Result<()> {
+        crate::snapshot::maybe_auto_snapshot_here(&self.repo, "pre-fast-forward");
+
+        let commit = self.repo.find_commit(oid)?;
+        let tree = commit.tree()?;
+        let mut checkout = git2::build::CheckoutBuilder::new();
+        self.repo
+            .checkout_tree(tree.as_object(), Some(&mut checkout))
+            .map_err(|e| {
+                ToriiError::RepoState(format!(
+                    "Fast-forward would overwrite uncommitted changes. Commit, stash, or snapshot first. ({e})"
+                ))
+            })?;
+
+        let branch = self.get_current_branch()?;
+        let refname = format!("refs/heads/{}", branch);
+        let mut reference = self.repo.find_reference(&refname)?;
+        reference.set_target(oid, log_msg)?;
+        self.repo.set_head(&refname)?;
+        Ok(())
+    }
+
     /// Pull from remote (fetch + fast-forward merge of current branch)
     pub fn pull(&self) -> Result<()> {
         let branch = self.get_current_branch()?;
@@ -525,12 +584,7 @@ impl GitRepo {
             return Ok(());
         }
         if analysis.0.is_fast_forward() {
-            let refname = format!("refs/heads/{}", branch);
-            let mut reference = self.repo.find_reference(&refname)?;
-            reference.set_target(fetch_commit.id(), "Fast-forward")?;
-            self.repo.set_head(&refname)?;
-            self.repo
-                .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))?;
+            self.fast_forward_to(fetch_commit.id(), "Fast-forward")?;
             return Ok(());
         }
 
@@ -1347,6 +1401,43 @@ mod unborn_head_tests {
             status.staged.iter().any(|e| e.path == "new.txt"),
             "expected new.txt in staged entries, got: {:?}",
             status.staged.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn list_head_paths_on_unborn_head_is_empty() {
+        let (_tmp, gitorii) = fresh_repo_with_staged_file();
+        assert!(gitorii.list_head_paths().unwrap().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod list_head_paths_tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn list_head_paths_is_the_tree_sorted() {
+        let tmp = TempDir::new().unwrap();
+        let repo = git2::Repository::init(tmp.path()).unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        fs::write(tmp.path().join("README.md"), "hi\n").unwrap();
+        fs::write(tmp.path().join("src/lib.rs"), "fn x() {}\n").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("README.md")).unwrap();
+        index.add_path(std::path::Path::new("src/lib.rs")).unwrap();
+        index.write().unwrap();
+        let tree_id = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let sig = git2::Signature::now("t", "t@t").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        let gitorii = GitRepo::open(tmp.path()).unwrap();
+        assert_eq!(
+            gitorii.list_head_paths().unwrap(),
+            ["README.md", "src/lib.rs"]
         );
     }
 }

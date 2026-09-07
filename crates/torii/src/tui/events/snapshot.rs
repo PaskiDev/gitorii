@@ -9,7 +9,7 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
 
     // ops dropdown (only in List focus)
     if app.snapshot_view.focus == SnapshotFocus::List && app.snapshot_view.ops_mode {
-        const OPS_LEN: usize = 3;
+        const OPS_LEN: usize = 4;
         match (key.modifiers, key.code) {
             (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.snapshot_view.ops_idx > 0 => {
                 app.snapshot_view.ops_idx -= 1;
@@ -24,12 +24,13 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
                 app.snapshot_view.ops_mode = false;
                 return match idx {
                     0 => Some(Action::SnapshotRestore),
-                    1 => {
+                    1 => Some(Action::SnapshotDiff),
+                    2 => {
                         app.snapshot_view.create_name.clear();
                         app.snapshot_view.focus = SnapshotFocus::Create;
                         None
                     }
-                    2 => Some(Action::SnapshotDelete),
+                    3 => Some(Action::SnapshotDelete),
                     _ => None,
                 };
             }
@@ -81,6 +82,7 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
                     app.snapshot_view.ops_mode = true;
                     app.snapshot_view.ops_idx = 0;
                 }
+                (_, KeyCode::Char('d')) => return Some(Action::SnapshotDiff),
                 (_, KeyCode::Char('/')) => {
                     app.snapshot_view.search_mode = true;
                     app.snapshot_view.search_query.clear();
@@ -92,10 +94,11 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
                     app.snapshot_view.focus = SnapshotFocus::Create;
                 }
                 (_, KeyCode::Char('a')) => {
-                    app.snapshot_view.auto_interval_idx = AutoSnapshotInterval::all()
-                        .iter()
-                        .position(|i| i == &app.snapshot_view.auto_interval)
-                        .unwrap_or(0);
+                    app.snapshot_view.auto_interval_idx =
+                        AutoSnapshotInterval::picker_rows(&app.snapshot_view.auto_interval)
+                            .iter()
+                            .position(|i| i == &app.snapshot_view.auto_interval)
+                            .unwrap_or(0);
                     app.snapshot_view.focus = SnapshotFocus::AutoConfig;
                 }
                 _ => {}
@@ -116,7 +119,8 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
             _ => {}
         },
         SnapshotFocus::AutoConfig => {
-            let n = AutoSnapshotInterval::all().len();
+            let rows = AutoSnapshotInterval::picker_rows(&app.snapshot_view.auto_interval);
+            let n = rows.len();
             match (key.modifiers, key.code) {
                 (_, KeyCode::Up) | (_, KeyCode::Char('k'))
                     if app.snapshot_view.auto_interval_idx > 0 =>
@@ -129,8 +133,17 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
                     app.snapshot_view.auto_interval_idx += 1;
                 }
                 (_, KeyCode::Enter) => {
-                    app.snapshot_view.auto_interval =
-                        AutoSnapshotInterval::all()[app.snapshot_view.auto_interval_idx].clone();
+                    let chosen = rows[app.snapshot_view.auto_interval_idx].clone();
+                    if chosen.is_custom() {
+                        app.snapshot_view.auto_custom_input = chosen
+                            .minutes()
+                            .map(AutoSnapshotInterval::input_hint)
+                            .unwrap_or_default();
+                        app.snapshot_view.auto_custom_error = None;
+                        app.snapshot_view.focus = SnapshotFocus::AutoCustom;
+                        return None;
+                    }
+                    app.snapshot_view.auto_interval = chosen;
                     app.snapshot_view.focus = SnapshotFocus::List;
                     return Some(Action::SnapshotSaveInterval);
                 }
@@ -139,6 +152,46 @@ pub(super) fn handle_snapshot(key: event::KeyEvent, app: &mut App) -> Option<Act
                 _ => {}
             }
         }
+        SnapshotFocus::AutoCustom => match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) => {
+                app.snapshot_view.auto_custom_input.clear();
+                app.snapshot_view.auto_custom_error = None;
+                app.snapshot_view.focus = SnapshotFocus::AutoConfig;
+            }
+            (_, KeyCode::Enter) => {
+                let raw = app.snapshot_view.auto_custom_input.trim();
+                if raw.is_empty() {
+                    app.snapshot_view.auto_custom_error =
+                        Some("type a duration, e.g. 30m or 2h".to_string());
+                    return None;
+                }
+                match crate::duration::parse_duration(raw) {
+                    Ok(mins) => {
+                        app.snapshot_view.auto_interval = AutoSnapshotInterval::from_minutes(mins);
+                        app.snapshot_view.auto_custom_input.clear();
+                        app.snapshot_view.auto_custom_error = None;
+                        app.snapshot_view.focus = SnapshotFocus::List;
+                        return Some(Action::SnapshotSaveInterval);
+                    }
+                    Err(_) => {
+                        app.snapshot_view.auto_custom_error =
+                            Some("use 30m, 1h, 2h, or a number of minutes".to_string());
+                    }
+                }
+            }
+            (_, KeyCode::Backspace) => {
+                app.snapshot_view.auto_custom_input.pop();
+                app.snapshot_view.auto_custom_error = None;
+            }
+            (_, KeyCode::Char(c))
+                if key.modifiers == KeyModifiers::NONE || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                app.snapshot_view.auto_custom_input.push(c);
+                app.snapshot_view.auto_custom_error = None;
+            }
+            (KeyModifiers::CONTROL, KeyCode::Char('c')) => return Some(Action::Quit),
+            _ => {}
+        },
     }
     None
 }

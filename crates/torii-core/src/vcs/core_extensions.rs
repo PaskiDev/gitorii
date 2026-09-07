@@ -1408,20 +1408,7 @@ impl GitRepo {
         }
 
         if analysis.is_fast_forward() {
-            let refname = format!("refs/heads/{}", self.get_current_branch()?);
-            let mut reference = self
-                .repo
-                .find_reference(&refname)
-                .map_err(crate::error::ToriiError::Git)?;
-            reference
-                .set_target(annotated.id(), "Fast-forward")
-                .map_err(crate::error::ToriiError::Git)?;
-            self.repo
-                .set_head(&refname)
-                .map_err(crate::error::ToriiError::Git)?;
-            self.repo
-                .checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
-                .map_err(crate::error::ToriiError::Git)?;
+            self.fast_forward_to(annotated.id(), "Fast-forward")?;
             println!("✅ Fast-forward merged {}", branch_name);
         } else {
             // Normal merge commit
@@ -2331,6 +2318,181 @@ mod branchish_tests {
             Some("upstream"),
             "HEAD must advance to the remote-tracking commit"
         );
+    }
+
+    /// Fast-forward of a branch that does not touch a dirty file must
+    /// leave that edit in the working tree. `.force()` on checkout_head
+    /// used to discard it with no warning (issue #1).
+    #[test]
+    fn merge_fast_forward_preserves_unrelated_dirty_file() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let write = |name: &str, content: &str| {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        };
+        let commit_all = |repo: &git2::Repository, msg: &str| {
+            let mut idx = repo.index().unwrap();
+            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+            let parents: Vec<git2::Commit> = parent.into_iter().collect();
+            let prefs: Vec<&git2::Commit> = parents.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs)
+                .unwrap()
+        };
+        write("a.txt", "one\n");
+        write("untouched.txt", "keep\n");
+        commit_all(&repo, "init");
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("feature", &head, false).unwrap();
+        }
+        repo.set_head("refs/heads/feature").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        write("b.txt", "x\n");
+        commit_all(&repo, "feat: b");
+        let default_branch = repo
+            .find_reference("refs/heads/main")
+            .map(|_| "main")
+            .unwrap_or("master");
+        repo.set_head(&format!("refs/heads/{}", default_branch))
+            .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        write("untouched.txt", "keep\nDIRTY EDIT\n");
+        drop(repo);
+
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.merge_branch("feature").unwrap();
+        let body = std::fs::read_to_string(dir.path().join("untouched.txt")).unwrap();
+        assert!(
+            body.contains("DIRTY EDIT"),
+            "unrelated dirty file must survive a fast-forward, got: {body:?}"
+        );
+        assert!(
+            dir.path().join("b.txt").exists(),
+            "the incoming file from feature must still land"
+        );
+    }
+
+    /// Fast-forward that would overwrite a dirty file must refuse, and
+    /// the dirty content must still be on disk.
+    #[test]
+    fn merge_fast_forward_refuses_to_clobber_dirty_file() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let write = |name: &str, content: &str| {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        };
+        let commit_all = |repo: &git2::Repository, msg: &str| {
+            let mut idx = repo.index().unwrap();
+            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+            let parents: Vec<git2::Commit> = parent.into_iter().collect();
+            let prefs: Vec<&git2::Commit> = parents.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs)
+                .unwrap()
+        };
+        write("f.txt", "base\n");
+        commit_all(&repo, "init");
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("feature", &head, false).unwrap();
+        }
+        repo.set_head("refs/heads/feature").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        write("f.txt", "theirs\n");
+        commit_all(&repo, "theirs");
+        let default_branch = repo
+            .find_reference("refs/heads/main")
+            .map(|_| "main")
+            .unwrap_or("master");
+        repo.set_head(&format!("refs/heads/{}", default_branch))
+            .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        write("f.txt", "DIRTY\n");
+        drop(repo);
+
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let err = gr.merge_branch("feature").unwrap_err().to_string();
+        assert!(
+            err.contains("uncommitted"),
+            "error should mention uncommitted changes: {err}"
+        );
+        let body = std::fs::read_to_string(dir.path().join("f.txt")).unwrap();
+        assert_eq!(body, "DIRTY\n", "dirty content must still be on disk");
+    }
+
+    /// With auto-snapshot enabled, a dirty fast-forward takes a snapshot
+    /// before moving HEAD (issue #2). The dirty edit also survives (#1).
+    #[test]
+    fn merge_fast_forward_auto_snapshots_when_enabled() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::now("t", "t@example.com").unwrap();
+        let write = |name: &str, content: &str| {
+            std::fs::write(dir.path().join(name), content).unwrap();
+        };
+        let commit_all = |repo: &git2::Repository, msg: &str| {
+            let mut idx = repo.index().unwrap();
+            idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+                .unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+            let parents: Vec<git2::Commit> = parent.into_iter().collect();
+            let prefs: Vec<&git2::Commit> = parents.iter().collect();
+            repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &prefs)
+                .unwrap()
+        };
+        write("a.txt", "one\n");
+        write("untouched.txt", "keep\n");
+        commit_all(&repo, "init");
+        {
+            let head = repo.head().unwrap().peel_to_commit().unwrap();
+            repo.branch("feature", &head, false).unwrap();
+        }
+        repo.set_head("refs/heads/feature").unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        write("b.txt", "x\n");
+        commit_all(&repo, "feat: b");
+        let default_branch = repo
+            .find_reference("refs/heads/main")
+            .map(|_| "main")
+            .unwrap_or("master");
+        repo.set_head(&format!("refs/heads/{}", default_branch))
+            .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        drop(repo);
+
+        let mgr = crate::snapshot::SnapshotManager::new(dir.path()).unwrap();
+        mgr.configure_auto_snapshot(true, Some(30)).unwrap();
+        std::fs::write(dir.path().join("untouched.txt"), "keep\nDIRTY EDIT\n").unwrap();
+
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.merge_branch("feature").unwrap();
+        let snaps: Vec<_> = std::fs::read_dir(dir.path().join(".git/torii/snapshots"))
+            .unwrap()
+            .flatten()
+            .collect();
+        assert!(
+            !snaps.is_empty(),
+            "auto-snapshot must fire before the fast-forward"
+        );
+        let body = std::fs::read_to_string(dir.path().join("untouched.txt")).unwrap();
+        assert!(body.contains("DIRTY EDIT"));
     }
 }
 

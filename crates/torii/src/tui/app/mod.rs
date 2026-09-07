@@ -813,6 +813,10 @@ impl App {
         }
         // Cycle within view, wrap to sidebar when exhausted
         match self.view {
+            View::Dashboard if self.dashboard.browse => {
+                self.sidebar_focused = true;
+                return true;
+            }
             View::Dashboard => {
                 self.dashboard.selected_panel = match self.dashboard.selected_panel {
                     Panel::Unstaged => Panel::Untracked,
@@ -1000,6 +1004,38 @@ fn read_commit_diff(repo_path: &str, hash: &str) -> Vec<DiffLine> {
         return vec![];
     };
     diff_to_lines(&diff)
+}
+
+pub(crate) fn parse_unified_diff(patch: &str) -> Vec<DiffLine> {
+    let mut lines = Vec::new();
+    for line in patch.lines() {
+        let (kind, content) = if line.starts_with("diff ")
+            || line.starts_with("index ")
+            || line.starts_with("--- ")
+            || line.starts_with("+++ ")
+            || line.starts_with("new file")
+            || line.starts_with("deleted file")
+            || line.starts_with("Binary files")
+        {
+            (DiffLineKind::Header, line.to_string())
+        } else if line.starts_with("@@") {
+            (DiffLineKind::HunkHeader, line.to_string())
+        } else if let Some(rest) = line.strip_prefix('+') {
+            (DiffLineKind::Added, rest.to_string())
+        } else if let Some(rest) = line.strip_prefix('-') {
+            (DiffLineKind::Removed, rest.to_string())
+        } else if let Some(rest) = line.strip_prefix(' ') {
+            (DiffLineKind::Context, rest.to_string())
+        } else {
+            (DiffLineKind::Header, line.to_string())
+        };
+        lines.push(DiffLine {
+            kind,
+            content,
+            line_no: None,
+        });
+    }
+    lines
 }
 
 fn diff_to_lines(diff: &git2::Diff) -> Vec<DiffLine> {
@@ -1802,6 +1838,61 @@ target/
     }
 
     #[test]
+    fn files_browse_toggles_off_the_status_columns() {
+        let mut app = App::test_blank();
+        app.enter_files_browse();
+        assert!(app.dashboard.browse);
+        app.toggle_files_browse();
+        assert!(!app.dashboard.browse);
+        app.toggle_files_browse();
+        assert!(app.dashboard.browse);
+    }
+
+    #[test]
+    fn files_browse_move_stays_in_range() {
+        let mut app = App::test_blank();
+        app.dashboard.browse = true;
+        app.files_browse_move_down();
+        app.files_browse_move_up();
+        app.dashboard.browse_paths = vec!["a".into(), "b".into()];
+        app.rebuild_browse_rows();
+        app.files_browse_move_down();
+        assert_eq!(app.dashboard.browse_idx, 1);
+        app.files_browse_move_down();
+        assert_eq!(app.dashboard.browse_idx, 1);
+        app.files_browse_move_up();
+        assert_eq!(app.dashboard.browse_idx, 0);
+    }
+
+    #[test]
+    fn files_browse_fold_hides_children() {
+        let mut app = App::test_blank();
+        app.dashboard.browse = true;
+        app.dashboard.browse_paths = vec!["src/a.rs".into(), "src/b.rs".into()];
+        app.rebuild_browse_rows();
+        assert_eq!(app.dashboard.browse_rows.len(), 3);
+        app.files_browse_toggle_fold();
+        assert_eq!(app.dashboard.browse_rows.len(), 1);
+        assert!(app.dashboard.browse_rows[0].is_dir);
+        app.files_browse_toggle_fold();
+        assert_eq!(app.dashboard.browse_rows.len(), 3);
+    }
+
+    #[test]
+    fn files_browse_click_selects_a_row() {
+        let mut app = App::test_blank();
+        app.dashboard.browse = true;
+        app.dashboard.browse_paths = vec!["src/a.rs".into(), "z.md".into()];
+        app.rebuild_browse_rows();
+        assert_eq!(app.selected_row("files.tree"), Some(0));
+        app.select_row("files.tree", 2);
+        assert_eq!(app.dashboard.browse_idx, 2);
+        assert!(!app.sidebar_focused);
+        app.select_row("files.tree", 99);
+        assert_eq!(app.dashboard.browse_idx, 2);
+    }
+
+    #[test]
     fn log_filter_matches_message_author_and_hash() {
         let mut app = App::test_blank();
         app.commits = vec![
@@ -1917,6 +2008,9 @@ target/
                 // `Clear`ed rects placed from the view's own geometry,
                 // which is exactly the shape this test exists to catch.
                 app.clone_view.focus = CloneFocus::Platforms;
+                app.dashboard.browse = true;
+                app.dashboard.browse_paths = vec!["README.md".into(), "src/lib.rs".into()];
+                app.rebuild_browse_rows();
                 app.clone_view.run = Some(CloneRun {
                     url: "https://example.invalid/o/r.git".into(),
                     dest: "/tmp/r".into(),

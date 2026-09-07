@@ -19,7 +19,11 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     let focused = !app.sidebar_focused;
     let in_list = focused && app.snapshot_view.focus == SnapshotFocus::List;
     let in_create = focused && app.snapshot_view.focus == SnapshotFocus::Create;
-    let in_auto = focused && app.snapshot_view.focus == SnapshotFocus::AutoConfig;
+    let in_auto = focused
+        && matches!(
+            app.snapshot_view.focus,
+            SnapshotFocus::AutoConfig | SnapshotFocus::AutoCustom
+        );
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -28,7 +32,10 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             Constraint::Length(1),
             Constraint::Length(2),
             Constraint::Length(1),
-            Constraint::Length(AutoSnapshotInterval::all().len() as u16 + 1),
+            Constraint::Length(
+                AutoSnapshotInterval::picker_rows(&app.snapshot_view.auto_interval).len() as u16
+                    + 1,
+            ),
         ])
         .split(area);
 
@@ -161,7 +168,12 @@ fn render_list(f: &mut Frame, app: &App, area: Rect, active: bool) {
 
 /// The ops dropdown, anchored under the selected snapshot.
 fn render_ops(f: &mut Frame, app: &App, body: Rect) {
-    const OPS: &[(&str, bool)] = &[("restore", false), ("new", false), ("delete ⚠", true)];
+    const OPS: &[(&str, bool)] = &[
+        ("restore", false),
+        ("diff", false),
+        ("new", false),
+        ("delete ⚠", true),
+    ];
 
     let dropdown_w = 16u16;
     let dropdown_h = OPS.len() as u16 + 2;
@@ -253,12 +265,38 @@ fn render_auto(f: &mut Frame, app: &App, area: Rect, active: bool) {
     ));
     f.render_widget(Paragraph::new(Line::from(heading)), heading_row);
 
-    let items: Vec<ListItem> = AutoSnapshotInterval::all()
+    if app.snapshot_view.focus == SnapshotFocus::AutoCustom {
+        let mut spans = vec![
+            Span::raw("  "),
+            Span::styled(
+                app.snapshot_view.auto_custom_input.as_str(),
+                Style::default().fg(theme::INK),
+            ),
+            Span::styled("█", Style::default().fg(theme::accent(app))),
+        ];
+        if let Some(err) = &app.snapshot_view.auto_custom_error {
+            spans.push(Span::styled(
+                format!("  {err}"),
+                Style::default().fg(theme::BAD),
+            ));
+        } else {
+            spans.push(Span::styled(
+                "  30m, 1h, 2h, or minutes",
+                Style::default().fg(theme::INK_FAINT),
+            ));
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)), body);
+        return;
+    }
+
+    let rows = AutoSnapshotInterval::picker_rows(&app.snapshot_view.auto_interval);
+    let items: Vec<ListItem> = rows
         .iter()
         .enumerate()
         .map(|(i, interval)| {
             let is_sel = active && i == app.snapshot_view.auto_interval_idx;
-            let is_current = *interval == app.snapshot_view.auto_interval;
+            let is_current = *interval == app.snapshot_view.auto_interval
+                || (interval.is_custom() && app.snapshot_view.auto_interval.is_custom());
             ListItem::new(Line::from(vec![
                 theme::caret(app, is_sel),
                 Span::styled(

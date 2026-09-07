@@ -79,6 +79,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 ListItem::new(Line::from(vec![
                     theme::caret(app, is_sel),
                     Span::styled(
+                        if issue.platform.is_empty() {
+                            String::new()
+                        } else {
+                            format!("{} ", issue.platform)
+                        },
+                        Style::default().fg(theme::platform_color(&issue.platform)),
+                    ),
+                    Span::styled(
                         format!("#{} ", issue.number),
                         Style::default().fg(theme::WARN),
                     ),
@@ -115,6 +123,18 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         },
         focused,
     ));
+    if !iv.platform.is_empty() {
+        heading.push(Span::styled(
+            format!("  {}", iv.platform),
+            Style::default().fg(theme::platform_color(&iv.platform)),
+        ));
+        if !iv.owner.is_empty() {
+            heading.push(Span::styled(
+                format!(" {}/{}", iv.owner, iv.repo_name),
+                Style::default().fg(theme::INK_FAINT),
+            ));
+        }
+    }
     if iv.loading {
         heading.push(Span::styled(
             "  loading…",
@@ -145,6 +165,28 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         Some(issue) => {
             let open = issue.state == "open" || issue.state == "opened";
             let mut lines = vec![
+                field(
+                    "host",
+                    Span::styled(
+                        if issue.platform.is_empty() {
+                            iv.platform.clone()
+                        } else {
+                            issue.platform.clone()
+                        },
+                        Style::default().fg(theme::platform_color(if issue.platform.is_empty() {
+                            &iv.platform
+                        } else {
+                            &issue.platform
+                        })),
+                    ),
+                ),
+                field(
+                    "repo",
+                    Span::styled(
+                        format!("{}/{}", iv.owner, iv.repo_name),
+                        Style::default().fg(theme::INK_DIM),
+                    ),
+                ),
                 field(
                     "number",
                     Span::styled(
@@ -216,6 +258,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
 
     if iv.ops_mode {
         render_ops(f, app, list_body);
+    }
+    if iv.confirm == IssueConfirm::SwitchPlatform {
+        render_switch_platform(f, app, area);
     }
 }
 
@@ -334,6 +379,69 @@ fn render_input_overlay(f: &mut Frame, app: &App, area: Rect, label: &str, value
         ]))
         .block(popup(app)),
         overlay,
+    );
+}
+
+fn render_switch_platform(f: &mut Frame, app: &App, area: Rect) {
+    let entries = &app.issue_view.available_platforms;
+    let max_label = entries.iter().map(|e| e.label.len()).max().unwrap_or(20);
+    let dw = (max_label + 6).min(50) as u16;
+    let dh = (entries.len().max(1) + 2).min(12) as u16;
+    let ox = area.x + area.width.saturating_sub(dw) / 2;
+    let oy = area.y + area.height.saturating_sub(dh) / 2;
+    let drop_area = Rect::new(ox, oy, dw, dh);
+
+    let drop_items: Vec<ListItem> = if entries.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "no forge remotes",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
+    } else {
+        entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let is_sel = i == app.issue_view.platform_idx;
+                let is_active = entry.platform == app.issue_view.platform
+                    && entry.owner == app.issue_view.owner;
+                let color = if is_sel { theme::INK } else { theme::INK_DIM };
+                let prefix = if is_sel { "▶ " } else { "  " };
+                let active_marker = if is_active { " ✓" } else { "" };
+                ListItem::new(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(theme::accent(app))),
+                    Span::styled(
+                        format!("{}{}", entry.label, active_marker),
+                        Style::default().fg(color),
+                    ),
+                ]))
+                .style(if is_sel {
+                    Style::default()
+                        .bg(theme::selection(app))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                })
+            })
+            .collect()
+    };
+
+    let mut drop_state = ListState::default();
+    drop_state.select(Some(app.issue_view.platform_idx));
+
+    let drop_area = theme::clear(f, drop_area);
+    f.render_stateful_widget(
+        List::new(drop_items).block(
+            Block::default()
+                .title(Span::styled(
+                    " switch platform ",
+                    Style::default().fg(theme::INK_DIM),
+                ))
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(theme::RULE)),
+        ),
+        drop_area,
+        &mut drop_state,
     );
 }
 

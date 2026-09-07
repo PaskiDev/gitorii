@@ -690,6 +690,61 @@ fn identity_hint<'a>(app: &'a App, hint: &'a str) -> Span<'a> {
     }
 }
 
+fn files_hint(app: &App, bc: Color) -> Line<'static> {
+    if app.dashboard.browse {
+        return Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(" / ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" status  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+            Span::styled(" move  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[Enter]", Style::default().fg(bc)),
+            Span::styled(" / ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[space]", Style::default().fg(bc)),
+            Span::styled(" fold", Style::default().fg(theme::INK_FAINT)),
+        ]);
+    }
+    use crate::tui::app::Panel;
+    match app.dashboard.selected_panel {
+        Panel::Staged => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[space]", Style::default().fg(bc)),
+            Span::styled(" unstage  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[d]", Style::default().fg(bc)),
+            Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(" tree", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        Panel::Unstaged => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[space]", Style::default().fg(bc)),
+            Span::styled(" stage  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[d]", Style::default().fg(bc)),
+            Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(" tree", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        Panel::Untracked => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[space]", Style::default().fg(bc)),
+            Span::styled(" stage  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(" tree", Style::default().fg(theme::INK_FAINT)),
+        ]),
+        Panel::Log => Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[d]", Style::default().fg(bc)),
+            Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[l]", Style::default().fg(bc)),
+            Span::styled(" expand  ", Style::default().fg(theme::INK_FAINT)),
+            Span::styled("[t]", Style::default().fg(bc)),
+            Span::styled(" tree", Style::default().fg(theme::INK_FAINT)),
+        ]),
+    }
+}
+
 /// The key strip for the clone view.
 ///
 /// Lifted out of `render_hint` rather than written inside it: that
@@ -827,37 +882,7 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         ])
     } else {
         match app.view {
-            View::Dashboard => {
-                use crate::tui::app::Panel;
-                match app.dashboard.selected_panel {
-                    Panel::Staged => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" unstage  ", Style::default().fg(theme::INK_FAINT)),
-                        Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                    Panel::Unstaged => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" stage  ", Style::default().fg(theme::INK_FAINT)),
-                        Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                    Panel::Untracked => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("[space]", Style::default().fg(bc)),
-                        Span::styled(" stage", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                    Panel::Log => Line::from(vec![
-                        Span::raw(" "),
-                        Span::styled("[d]", Style::default().fg(bc)),
-                        Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
-                        Span::styled("[l]", Style::default().fg(bc)),
-                        Span::styled(" expand", Style::default().fg(theme::INK_FAINT)),
-                    ]),
-                }
-            }
+            View::Dashboard => files_hint(app, bc),
             View::Commit => {
                 let amend_style = if app.commit_view.amend {
                     Style::default().fg(bc).add_modifier(Modifier::BOLD)
@@ -1079,6 +1104,17 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         ),
                         Span::styled("█", Style::default().fg(bc)),
                     ])
+                } else if app.snapshot_view.focus == SnapshotFocus::AutoCustom {
+                    Line::from(vec![
+                        Span::raw(" "),
+                        Span::styled("interval  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled(
+                            app.snapshot_view.auto_custom_input.clone(),
+                            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled("█", Style::default().fg(bc)),
+                        Span::styled("  30m / 1h / 2h", Style::default().fg(theme::INK_FAINT)),
+                    ])
                 } else if app.snapshot_view.focus == SnapshotFocus::AutoConfig {
                     Line::from(vec![
                         Span::raw(" "),
@@ -1098,6 +1134,8 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                         Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[/]", Style::default().fg(bc)),
                         Span::styled(" search  ", Style::default().fg(theme::INK_FAINT)),
+                        Span::styled("[d]", Style::default().fg(bc)),
+                        Span::styled(" diff  ", Style::default().fg(theme::INK_FAINT)),
                         Span::styled("[a]", Style::default().fg(bc)),
                         Span::styled(" auto-config", Style::default().fg(theme::INK_FAINT)),
                     ])
@@ -1572,12 +1610,23 @@ fn render_hint(f: &mut Frame, app: &App, area: ratatui::layout::Rect) {
                             Span::styled("[any]", Style::default().fg(bc)),
                             Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
                         ]),
+                        IssueConfirm::SwitchPlatform => Line::from(vec![
+                            Span::raw(" "),
+                            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+                            Span::styled(" select  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[Enter]", Style::default().fg(bc)),
+                            Span::styled(" switch  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[Esc]", Style::default().fg(bc)),
+                            Span::styled(" cancel", Style::default().fg(theme::INK_FAINT)),
+                        ]),
                         IssueConfirm::None => Line::from(vec![
                             Span::raw(" "),
                             Span::styled("[↑↓/jk]", Style::default().fg(bc)),
                             Span::styled(" navigate  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[o]", Style::default().fg(bc)),
                             Span::styled(" operations  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled("[p]", Style::default().fg(bc)),
+                            Span::styled(" platform  ", Style::default().fg(theme::INK_FAINT)),
                             Span::styled("[^r]", Style::default().fg(bc)),
                             Span::styled(" refresh", Style::default().fg(theme::INK_FAINT)),
                         ]),

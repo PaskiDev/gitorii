@@ -19,7 +19,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::fmt;
 
 /// One keypress: a key plus the modifiers held with it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Chord {
     pub code: KeyCode,
     pub mods: KeyModifiers,
@@ -122,7 +122,7 @@ pub fn parse_binding(text: &str) -> Result<Binding, String> {
     Ok(Binding(out))
 }
 
-fn parse_chord(text: &str) -> Result<Chord, String> {
+pub(crate) fn parse_chord(text: &str) -> Result<Chord, String> {
     let mut mods = KeyModifiers::empty();
     let mut rest = text;
     loop {

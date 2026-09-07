@@ -1,4 +1,5 @@
 pub mod app;
+pub mod bindings;
 pub mod events;
 pub mod hit;
 pub mod keys;
@@ -747,6 +748,10 @@ fn run_loop(
                         format!("auto-snapshot: {}", app.snapshot_view.auto_interval.label()),
                         EventKind::Info,
                     );
+                }
+
+                Action::SnapshotDiff => {
+                    app.go_to_diff_from_snapshot();
                 }
 
                 Action::OpenDiffFromLog => {
@@ -2196,6 +2201,21 @@ fn run_loop(
                     app.load_issues();
                 }
 
+                Action::IssueSwitchPlatform => {
+                    if let Some(entry) = app
+                        .issue_view
+                        .available_platforms
+                        .get(app.issue_view.platform_idx)
+                        .cloned()
+                    {
+                        app.issue_view.platform = entry.platform;
+                        app.issue_view.owner = entry.owner;
+                        app.issue_view.repo_name = entry.repo;
+                    }
+                    app.issue_view.confirm = app::IssueConfirm::None;
+                    app.load_issues();
+                }
+
                 Action::OpenJobLogInPager => {
                     open_job_log_in_pager(terminal, app);
                 }
@@ -2350,55 +2370,56 @@ fn commit_staged(app: &App, message: &str) -> crate::error::Result<()> {
     Ok(())
 }
 
-fn snapshot_dir(app: &App) -> std::path::PathBuf {
-    std::path::Path::new(&app.repo_path).join(".git/torii-snapshots")
-}
-
 fn torii_dir(app: &App) -> std::path::PathBuf {
     std::path::Path::new(&app.repo_path).join(".torii")
 }
 
 fn save_auto_interval(app: &App) {
     use crate::tui::app::AutoSnapshotInterval;
-    let dir = torii_dir(app);
-    let _ = std::fs::create_dir_all(&dir);
-    let val = match app.snapshot_view.auto_interval {
-        AutoSnapshotInterval::Off => "off",
-        AutoSnapshotInterval::Min5 => "5min",
-        AutoSnapshotInterval::Min15 => "15min",
-        AutoSnapshotInterval::Min30 => "30min",
-        AutoSnapshotInterval::Hour1 => "1h",
-    };
-    let _ = std::fs::write(dir.join("auto-interval"), val);
+    let minutes = app.snapshot_view.auto_interval.minutes();
+    let enabled = !matches!(app.snapshot_view.auto_interval, AutoSnapshotInterval::Off);
+    if let Ok(mut cfg) = crate::config::ToriiConfig::load_local(&app.repo_path) {
+        cfg.snapshot.auto_enabled = enabled;
+        if let Some(m) = minutes {
+            cfg.snapshot.auto_interval_minutes = m;
+        }
+        let _ = cfg.save_local(&app.repo_path);
+    }
 }
 
 fn load_auto_interval(app: &mut App) {
     use crate::tui::app::AutoSnapshotInterval;
-    let path = torii_dir(app).join("auto-interval");
-    let val = std::fs::read_to_string(path).unwrap_or_default();
-    app.snapshot_view.auto_interval = match val.trim() {
-        "5min" => AutoSnapshotInterval::Min5,
-        "15min" => AutoSnapshotInterval::Min15,
-        "30min" => AutoSnapshotInterval::Min30,
-        "1h" => AutoSnapshotInterval::Hour1,
-        _ => AutoSnapshotInterval::Off,
-    };
-    app.snapshot_view.auto_interval_idx = AutoSnapshotInterval::all()
+    let mut interval = AutoSnapshotInterval::Off;
+    if let Ok(cfg) = crate::config::ToriiConfig::load_local(&app.repo_path) {
+        if cfg.snapshot.auto_enabled {
+            interval = AutoSnapshotInterval::from_minutes(cfg.snapshot.auto_interval_minutes);
+        }
+    }
+    // Pre-unification TUI file. Honor it once, then write through to toml.
+    if interval == AutoSnapshotInterval::Off {
+        let path = torii_dir(app).join("auto-interval");
+        let val = std::fs::read_to_string(path).unwrap_or_default();
+        interval = match val.trim() {
+            "5min" => AutoSnapshotInterval::Min5,
+            "15min" => AutoSnapshotInterval::Min15,
+            "30min" => AutoSnapshotInterval::Min30,
+            "1h" => AutoSnapshotInterval::Hour1,
+            _ => AutoSnapshotInterval::Off,
+        };
+        if interval != AutoSnapshotInterval::Off {
+            app.snapshot_view.auto_interval = interval.clone();
+            save_auto_interval(app);
+        }
+    }
+    app.snapshot_view.auto_interval = interval.clone();
+    app.snapshot_view.auto_interval_idx = AutoSnapshotInterval::picker_rows(&interval)
         .iter()
-        .position(|i| i == &app.snapshot_view.auto_interval)
+        .position(|i| i == &interval)
         .unwrap_or(0);
 }
 
 fn create_snapshot_with_name(app: &mut App, name: &str) -> crate::error::Result<()> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dir = snapshot_dir(app);
-    std::fs::create_dir_all(&dir)?;
-    let id = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .to_string();
-    std::fs::write(dir.join(format!("{}.meta", id)), name)?;
+    crate::snapshot::SnapshotManager::new(&app.repo_path)?.create_snapshot(Some(name))?;
     app.load_snapshots();
     Ok(())
 }
@@ -2417,8 +2438,7 @@ fn create_snapshot(app: &mut App) -> crate::error::Result<()> {
 fn delete_snapshot(app: &mut App) -> crate::error::Result<()> {
     if let Some(s) = app.snapshot_view.snapshots.get(app.snapshot_view.idx) {
         let id = s.id.clone();
-        let dir = snapshot_dir(app);
-        let _ = std::fs::remove_file(dir.join(format!("{}.meta", id)));
+        crate::snapshot::SnapshotManager::new(&app.repo_path)?.delete_snapshot(&id)?;
     }
     app.load_snapshots();
     Ok(())
@@ -2427,7 +2447,10 @@ fn delete_snapshot(app: &mut App) -> crate::error::Result<()> {
 fn restore_selected_snapshot(app: &mut App) -> crate::error::Result<()> {
     let snap = app.snapshot_view.snapshots.get(app.snapshot_view.idx);
     if let Some(s) = snap {
-        app.set_status(format!("restored: {}", s.name));
+        let id = s.id.clone();
+        let name = s.name.clone();
+        crate::snapshot::SnapshotManager::new(&app.repo_path)?.restore_snapshot(&id)?;
+        app.set_status(format!("restored: {}", name));
     }
     Ok(())
 }

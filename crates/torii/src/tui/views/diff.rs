@@ -2,12 +2,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
 
 use super::super::ui::{C_DIM, C_GREEN, C_RED, C_SUBTLE};
-use crate::tui::app::{App, DiffLine, DiffLineKind};
+use crate::snapshot::SnapshotDiffKind;
+use crate::tui::app::{App, DiffLine, DiffLineKind, DiffMode};
+use crate::tui::theme;
 
 const BG_ADDED: Color = Color::Rgb(20, 50, 20);
 const BG_REMOVED: Color = Color::Rgb(50, 15, 15);
@@ -140,6 +142,11 @@ fn build_highlighted_spans(
 // ── Main render ───────────────────────────────────────────────────────────────
 
 pub fn render(f: &mut Frame, app: &App) {
+    app.hits.borrow_mut().clear();
+    if app.diff.mode == DiffMode::SnapshotTree {
+        render_snapshot_tree(f, app);
+        return;
+    }
     let area = f.area();
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -267,10 +274,190 @@ pub fn render(f: &mut Frame, app: &App) {
             Span::styled("[PgUp/PgDn]", Style::default().fg(bc)),
             Span::styled(" page  ", Style::default().fg(C_SUBTLE)),
             Span::styled("[Esc]", Style::default().fg(bc)),
-            Span::styled(" back  ", Style::default().fg(C_SUBTLE)),
+            Span::styled(
+                if app.diff.mode == DiffMode::SnapshotFile {
+                    " files  "
+                } else {
+                    " back  "
+                },
+                Style::default().fg(C_SUBTLE),
+            ),
             Span::styled(
                 format!("{}%  {}/{} lines", pct, app.diff.scroll, total),
                 Style::default().fg(C_DIM),
+            ),
+        ])),
+        chunks[2],
+    );
+}
+
+fn render_snapshot_tree(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(area);
+
+    let bc = app.brand_color();
+    let inner_w = chunks[0].width.saturating_sub(2) as usize;
+    let title_str = "⛩  diff";
+    let file_str = app.diff.title.clone();
+    let pad = inner_w.saturating_sub(title_str.chars().count() + file_str.chars().count() + 3);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                title_str,
+                Style::default().fg(bc).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(file_str, Style::default().fg(C_SUBTLE)),
+            Span::raw(" "),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(bc)),
+        ),
+        chunks[0],
+    );
+
+    let added = app
+        .diff
+        .snapshot_files
+        .iter()
+        .filter(|f| f.kind == SnapshotDiffKind::Added)
+        .count();
+    let removed = app
+        .diff
+        .snapshot_files
+        .iter()
+        .filter(|f| f.kind == SnapshotDiffKind::Removed)
+        .count();
+    let changed = app
+        .diff
+        .snapshot_files
+        .iter()
+        .filter(|f| f.kind == SnapshotDiffKind::Changed || f.kind == SnapshotDiffKind::Binary)
+        .count();
+
+    let items: Vec<ListItem> = if app.diff.snapshot_files.is_empty() {
+        vec![ListItem::new(Span::styled(
+            "no differences from the current worktree",
+            Style::default().fg(theme::INK_FAINT),
+        ))]
+    } else {
+        app.diff
+            .tree_rows
+            .iter()
+            .enumerate()
+            .map(|(i, row)| {
+                let is_sel = i == app.diff.tree_idx;
+                let collapsed = app.diff.tree_collapsed.contains(&row.path);
+                let kind = app.diff_file_kind(&row.path);
+                let mark = if row.is_dir {
+                    " "
+                } else {
+                    kind.map(|k| k.mark()).unwrap_or(" ")
+                };
+                let mark_color = match kind {
+                    Some(SnapshotDiffKind::Added) => theme::OK,
+                    Some(SnapshotDiffKind::Removed) => theme::BAD,
+                    Some(SnapshotDiffKind::Changed) => theme::WARN,
+                    Some(SnapshotDiffKind::Binary) => theme::INK_DIM,
+                    None => theme::INK_FAINT,
+                };
+                let icon = if row.is_dir {
+                    if collapsed {
+                        "📁"
+                    } else {
+                        "📂"
+                    }
+                } else {
+                    "📄"
+                };
+                let mut label = row.name.clone();
+                if row.is_dir {
+                    let prefix = format!("{}/", row.path);
+                    let n = app
+                        .diff
+                        .snapshot_files
+                        .iter()
+                        .filter(|f| f.path.starts_with(&prefix) || f.path == row.path)
+                        .count();
+                    label = format!("{label}/  {n}");
+                }
+                ListItem::new(Line::from(vec![
+                    theme::caret(app, is_sel),
+                    Span::styled(
+                        format!("{mark} "),
+                        Style::default().fg(mark_color).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled(row.prefix(), Style::default().fg(theme::INK_FAINT)),
+                    Span::styled(format!("{icon} "), Style::default().fg(theme::INK_DIM)),
+                    Span::styled(
+                        label,
+                        Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                    ),
+                ]))
+                .style(if is_sel {
+                    Style::default().bg(theme::selection(app))
+                } else {
+                    Style::default()
+                })
+            })
+            .collect()
+    };
+
+    let mut state = ListState::default();
+    if !app.diff.tree_rows.is_empty() {
+        state.select(Some(app.diff.tree_idx));
+    }
+    let body = chunks[1];
+    f.render_stateful_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(app.border_type())
+                .border_style(Style::default().fg(bc))
+                .padding(Padding::new(1, 1, 0, 0)),
+        ),
+        body,
+        &mut state,
+    );
+    if !app.diff.tree_rows.is_empty() {
+        let inner = Block::default()
+            .borders(Borders::ALL)
+            .padding(Padding::new(1, 1, 0, 0))
+            .inner(body);
+        let first = state.offset();
+        app.hits.borrow_mut().rows(
+            inner,
+            "diff.tree",
+            first,
+            app.diff.tree_rows.len().saturating_sub(first),
+        );
+    }
+
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled("[↑↓/jk]", Style::default().fg(bc)),
+            Span::styled("  ", Style::default().fg(C_SUBTLE)),
+            Span::styled("[Enter]", Style::default().fg(bc)),
+            Span::styled(" open  ", Style::default().fg(C_SUBTLE)),
+            Span::styled("[h/l]", Style::default().fg(bc)),
+            Span::styled(" fold  ", Style::default().fg(C_SUBTLE)),
+            Span::styled("[Esc]", Style::default().fg(bc)),
+            Span::styled(" back  ", Style::default().fg(C_SUBTLE)),
+            Span::styled(
+                format!("+{added}  ~{changed}  -{removed}"),
+                Style::default().fg(theme::INK_FAINT),
             ),
         ])),
         chunks[2],
