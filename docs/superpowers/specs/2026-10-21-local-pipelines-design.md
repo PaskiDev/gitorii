@@ -97,8 +97,8 @@ El fichero `pipelines/release.toml` de este repo es la prueba de aceptación.
   incluye OOM de `cargo test` (exit 137) y SIGSEGV de rustc arreglado con
   `RUST_MIN_STACK=33554432` y `CARGO_BUILD_JOBS=2`. Por defecto los jobs van
   **de uno en uno** y los límites por job son de primera clase.
-- Docker tiene que estar instalado y accesible para el usuario. torii no lo
-  instala.
+- Docker o Podman tiene que estar instalado y accesible para el usuario.
+  torii no los instala ni los integra.
 - `.torii/` ya está en `.toriignore` (línea 22); ahí van los datos de
   ejecución.
 
@@ -176,13 +176,26 @@ directorio de trabajo de la ejecución y lo monta en el contenedor en
 `/workspace`. Cambios sin commitear no entran. Si el árbol de trabajo está
 sucio, torii avisa pero sigue.
 
-### Motor de contenedores: CLI de `docker` (Claude)
+### Motor de contenedores: Docker o Podman, sin integrarlos (usuario)
 
-torii llama a `docker` con `std::process::Command`, igual que
-`util/hooks.rs` ejecuta comandos. Sin dependencia nueva (nada de
-`bollard`). `TORII_CONTAINER_ENGINE=podman` cambia el binario; v1 solo se
-prueba con Docker. Si `docker` no está o no responde, error claro antes de
-empezar.
+torii no integra ni empaqueta ningún motor: ni dependencia (nada de
+`bollard`), ni instalación. Solo la parte de pipelines locales lo necesita;
+el resto de torii funciona igual sin él. torii llama al binario con
+`std::process::Command`, igual que `util/hooks.rs` ejecuta comandos.
+
+Se soportan **Docker y Podman** (usuario). Detección: si
+`TORII_CONTAINER_ENGINE` está definida (`docker` o `podman`), se usa esa;
+si no, `docker` y, si no responde, `podman`. Los argumentos de `run` son
+los mismos para los dos. Los bind mounts llevan `:z` para que funcionen con
+SELinux (este host es el10); fuera de SELinux se ignora.
+
+**Sin motor (usuario):** `torii pipeline run` falla antes de empezar con un
+mensaje que dice que hace falta Docker o Podman, enlaza la instalación de
+los dos y recuerda `TORII_CONTAINER_ENGINE`. Si el binario existe pero no
+responde (demonio parado, usuario fuera del grupo `docker`), el mensaje lo
+dice. `torii pipeline check` valida igual y solo añade ese aviso. En v1 el
+aviso sale solo en la CLI. Cuando la TUI tenga vista de pipelines locales,
+abrirla sin motor mostrará una ventana con el mismo texto (usuario).
 
 ### Ejecución (Claude)
 
@@ -273,7 +286,8 @@ viene después.
   a la VM sin que torii aprovisione nada. Camino natural para macOS.
 - macOS nativo, contenedores Windows.
 - Disparo al crear un tag (`torii tag create`) o al hacer push.
-- Vista en la TUI.
+- Vista en la TUI. Sin motor, abrirla muestra el aviso de Docker/Podman en
+  una ventana.
 - `torii package upload` / `torii release create` para todas las
   plataformas.
 - Que Gate genere el TOML o que torii acepte `.gate`.

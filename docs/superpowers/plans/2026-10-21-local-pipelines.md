@@ -8,7 +8,7 @@ definidas en `pipelines/<nombre>.toml`, y el release de gitorii pasa a
 
 **Architecture:** Módulo nuevo `torii_lib::local_pipeline` en `torii-core`:
 modelo TOML → confianza → exportar el commit con git2 → planificador que
-lanza cada job con `docker run` (CLI por subprocess) detrás de un trait
+lanza cada job con `docker run` o `podman run` (CLI por subprocess) detrás de un trait
 `Launcher`, para que el planificador se pruebe sin Docker. La CLI solo
 parsea flags, instala el manejador de Ctrl+C y pinta.
 
@@ -22,7 +22,8 @@ std::process, std::thread. Sin dependencias nuevas.
 - Sin dependencias nuevas en ningún `Cargo.toml` (nada de `bollard`, `ctrlc`, `which`).
 - Control de versiones solo con `torii` (`torii save <ficheros> -m "..."`), nunca `git`.
 - Compilar y testear con `CARGO_BUILD_JOBS=2 RUST_MIN_STACK=33554432` (OOM y SIGSEGV de rustc en este host).
-- Motor: binario `docker`, cambiable con `TORII_CONTAINER_ENGINE` (p. ej. `podman`).
+- Motor: Docker **o** Podman, sin integrarlos: torii no los empaqueta, no los instala y no añade crates para hablar con ellos. Solo se invoca el binario. `TORII_CONTAINER_ENGINE=docker|podman` fuerza uno; si no, `docker` y luego `podman`.
+- Sin motor, `pipeline run` falla antes de empezar con `MISSING_ENGINE_HELP` (Task 5). Solo CLI en v1; la constante queda pública para que la futura vista de la TUI la muestre en una ventana.
 - Jobs de uno en uno por defecto (`--parallel 1`).
 - Datos de ejecución en `<repo>/.torii/pipelines/<run-id>/` (`.torii/` ya está ignorado).
 - Confianza en `~/.config/torii/pipeline-trust.toml`, separado de `hook-trust.toml`, con sha256. `TORII_TRUST_PIPELINES=1` acepta sin preguntar.
@@ -37,8 +38,9 @@ std::process, std::thread. Sin dependencias nuevas.
 1. Nombre de pipeline o de job con `/`, `..` o espacios (`torii pipeline run ../x`): error de validación, nunca una ruta fuera de `pipelines/` ni un nombre de contenedor inválido. → Task 1.
 2. Secreto definido en el host pero vacío (`GITLAB_TOKEN=`): cuenta como ausente; enmascarar `""` destrozaría cada línea. → Task 6.
 3. Repo en una ruta con espacios: cada `-v` va como un solo elemento de argv. → Task 5.
-4. `--ref` que no existe, o `--job` que no existe: error antes de crear el directorio de ejecución. → Task 6.
-5. Tag anotado frente a tag ligero: los dos rellenan `TORII_TAG` y construyen el commit al que apuntan, no el objeto tag. → Task 3.
+4. Máquina sin Docker ni Podman, o con Docker instalado y el demonio parado: mensaje que dice qué instalar o qué falla, nunca un `No such file or directory` crudo. → Tasks 5 y 7.
+5. `--ref` que no existe, o `--job` que no existe: error antes de crear el directorio de ejecución. → Task 6.
+6. Tag anotado frente a tag ligero: los dos rellenan `TORII_TAG` y construyen el commit al que apuntan, no el objeto tag. → Task 3.
 
 ## Estructura de ficheros
 
@@ -345,18 +347,44 @@ descendente; sin `.torii/pipelines` → vector vacío.
       fn kill(&self, container_name: &str);
   }
   pub struct Engine { pub bin: String }
+  #[derive(Debug)]
+  pub enum EngineError {
+      NotInstalled { tried: Vec<String> },                  // ningún binario en PATH
+      NotResponding { bin: String, detail: String },        // existe pero `<bin> version` falla
+      BadOverride(String),                                  // TORII_CONTAINER_ENGINE no es docker ni podman
+  }
+  impl std::fmt::Display for EngineError { ... }            // + impl std::error::Error
+  pub const MISSING_ENGINE_HELP: &str;                      // texto de abajo
   impl Engine {
-      pub fn from_env() -> Self;                    // TORII_CONTAINER_ENGINE o "docker"
-      pub fn check(&self) -> anyhow::Result<()>;    // `<bin> version`; falla → error que nombra el binario y dice que torii no lo instala
+      pub fn detect() -> Result<Engine, EngineError>;       // lee TORII_CONTAINER_ENGINE
+      pub fn detect_with(override_: Option<&str>, candidates: &[&str]) -> Result<Engine, EngineError>; // testable
       pub fn run_args(spec: &RunSpec) -> Vec<String>;
   }
   impl Launcher for Engine { ... }                  // kill = `<bin> kill <name>`, errores ignorados
   pub fn cache_volume_name(repo: &Path, container_path: &str) -> String;
   ```
 
-`run_args` produce exactamente, en este orden:
-`run --rm --name <container_name> -w /workspace -v <workspace>:/workspace
--v <script>:/torii/script.sh:ro`, por cada need `-v <dir>:/artifacts/<job>:ro`,
+`detect_with`: con override, solo ese candidato (`docker` o `podman`; otro
+valor → `BadOverride`). Sin override, prueba `candidates` en orden
+(`detect()` pasa `["docker", "podman"]`) con `<bin> version`: el primero
+que sale con 0 gana. Si ninguno arranca porque no está en PATH →
+`NotInstalled`; si alguno existe pero falla → `NotResponding` del primero
+que existe, con su stderr. `Display` de `NotInstalled` y `BadOverride` acaba
+en `MISSING_ENGINE_HELP`; el de `NotResponding` dice que `<bin>` está
+instalado pero no responde y, para docker, sugiere comprobar que el demonio
+corre y que el usuario está en el grupo `docker`. `MISSING_ENGINE_HELP`:
+
+```text
+Local pipelines need a container engine: install Docker or Podman.
+  Docker: https://docs.docker.com/engine/install/
+  Podman: https://podman.io/docs/installation
+torii does not bundle or install either. Set TORII_CONTAINER_ENGINE=docker|podman to choose one.
+```
+
+`run_args` produce exactamente, en este orden (los bind mounts llevan `z`
+para SELinux; Docker y Podman lo aceptan e ignoran fuera de SELinux):
+`run --rm --name <container_name> -w /workspace -v <workspace>:/workspace:z
+-v <script>:/torii/script.sh:ro,z`, por cada need `-v <dir>:/artifacts/<job>:ro,z`,
 por cada cache `-v <vol>:<path>`, `--memory <m>` si hay, `--cpus <c>` si
 hay, por cada env `-e <NAME>`, `<image> sh -c <WRAPPER>`. Con `owner`,
 además `-e TORII_OWNER=<uid>:<gid>`. `WRAPPER` es la constante:
@@ -381,8 +409,8 @@ por pipe, un hilo por stream que llama a `on_line`, `wait()`; sin código
         caches: vec![("torii-x-y".into(), "/cache".into())],
         env: vec![("TOKEN".into(), "s3cr3t".into())], memory: Some("6g".into()), cpus: Some(2.0), owner: Some((1000, 1000)) };
     let a = Engine::run_args(&spec);
-    assert_eq!(&a[..9], ["run","--rm","--name","torii-r-build","-w","/workspace","-v","/my repo/w:/workspace","-v"]);
-    assert!(a.contains(&"/my repo/a/build:/artifacts/build:ro".to_string()));
+    assert_eq!(&a[..9], ["run","--rm","--name","torii-r-build","-w","/workspace","-v","/my repo/w:/workspace:z","-v"]);
+    assert!(a.contains(&"/my repo/a/build:/artifacts/build:ro,z".to_string()));
     assert!(a.windows(2).any(|w| w == ["-e", "TOKEN"]));
     assert!(!a.iter().any(|s| s.contains("s3cr3t")));
     assert!(a.windows(2).any(|w| w == ["-e", "TORII_OWNER=1000:1000"]));
@@ -391,10 +419,21 @@ por pipe, un hilo por stream que llama a `on_line`, `wait()`; sin código
 #[test] fn cache_volume_name_is_stable_and_distinct() {
     // mismo repo+ruta → igual; otra ruta → distinto; formato "torii-" + 12 hex + "-" + 12 hex
 }
-#[test] fn engine_from_env_honours_override() { /* TORII_CONTAINER_ENGINE=podman → bin "podman" */ }
-#[test] fn check_fails_for_missing_binary() {
-    let e = Engine { bin: "torii-no-such-engine".into() };
-    assert!(e.check().unwrap_err().to_string().contains("torii-no-such-engine"));
+#[test] fn detect_reports_missing_engines_with_help() {
+    let e = Engine::detect_with(None, &["torii-no-such-a", "torii-no-such-b"]).unwrap_err();
+    assert!(matches!(e, EngineError::NotInstalled { .. }));
+    let msg = e.to_string();
+    assert!(msg.contains("Docker") && msg.contains("Podman") && msg.contains("TORII_CONTAINER_ENGINE"));
+}
+#[test] fn detect_falls_through_to_next_candidate() {
+    // `true` sale con 0 aunque reciba `version` → Engine { bin: "true" }
+    assert_eq!(Engine::detect_with(None, &["torii-no-such-a", "true"]).unwrap().bin, "true");
+}
+#[test] fn detect_reports_installed_but_not_responding() {
+    // `false` existe y sale con 1 → NotResponding { bin: "false", .. }; el mensaje contiene "false" y no MISSING_ENGINE_HELP
+}
+#[test] fn detect_rejects_unknown_override() {
+    assert!(matches!(Engine::detect_with(Some("lxc"), &["docker", "podman"]), Err(EngineError::BadOverride(_))));
 }
 ```
 
@@ -486,7 +525,7 @@ Los secretos de prueba usan nombres `TORII_TEST_SECRET_*` distintos por test par
 - Test: `crates/torii/tests/local_pipeline.rs`
 
 **Interfaces:**
-- Consumes: `load`, `ensure_trusted`, `TrustStore::default_store`, `Engine::from_env`/`check`, `run`, `list_runs` (T1-T6).
+- Consumes: `load`, `ensure_trusted`, `TrustStore::default_store`, `Engine::detect`, `EngineError`, `run`, `list_runs` (T1-T6).
 - Produces (en `PipelineCommands`):
   ```rust
   /// Run a pipeline from pipelines/<name>.toml locally in Docker (no platform involved)
@@ -501,8 +540,8 @@ Los secretos de prueba usan nombres `TORII_TEST_SECRET_*` distintos por test par
 
 Comportamiento:
 - Raíz del repo con `git2::Repository::discover(current_dir)` → `workdir()`.
-- `check`: `load`; OK → `✅ <name>: N jobs (<orden>)`; error → Err.
-- `run`: `load` → `ensure_trusted` (sin store → error) → `Engine::check` → instala SIGINT (unix: `libc::signal(SIGINT, handler)` cuyo handler hace `CANCEL.store(true)` sobre un `static CANCEL: AtomicBool`) → `run`. Al final, tabla de jobs con estado y la ruta de la ejecución. Estado distinto de `Success` → Err (exit ≠ 0).
+- `check`: `load`; OK → `✅ <name>: N jobs (<orden>)`; error → Err. Después, si `Engine::detect()` falla, imprime `⚠️ ` + el error por stderr, sin cambiar el exit 0.
+- `run`: `load` → `Engine::detect()` (error → Err con su `Display`, antes de pedir confianza) → `ensure_trusted` (sin store → error) → instala SIGINT (unix: `libc::signal(SIGINT, handler)` cuyo handler hace `CANCEL.store(true)` sobre un `static CANCEL: AtomicBool`) → `run`. Al final, tabla de jobs con estado y la ruta de la ejecución. Estado distinto de `Success` → Err (exit ≠ 0).
 - `runs`: tabla `ID  STATUS  PIPELINE  COMMIT(7)  STARTED`, hasta `limit`; vacío → `No local pipeline runs.`
 - Ayuda de `torii pipeline`: añadir tres ejemplos (`run release --ref v0.16.0`, `check release`, `runs`) y una frase: `run`, `check` y `runs` son locales y no usan `--remote`.
 
@@ -523,7 +562,13 @@ En `crates/torii/tests/local_pipeline.rs` (binario con `env!("CARGO_BIN_EXE_tori
 #[test] fn check_works_without_remote() { /* pipelines/ci.toml válido → exit 0, stdout contiene "ci" */ }
 #[test] fn check_reports_cycle() { /* exit ≠ 0, stderr contiene "cycle" */ }
 #[test] fn runs_empty() { /* stdout contiene "No local pipeline runs." */ }
+#[test] fn run_without_engine_explains_docker_or_podman() {
+    // PATH apuntando a un tempdir vacío
+    // → exit ≠ 0, stderr contiene "Docker", "Podman" y "TORII_CONTAINER_ENGINE"; no existe .torii/pipelines
+}
+#[test] fn check_without_engine_warns_but_passes() { /* mismo PATH vacío → exit 0, stderr contiene "Podman" */ }
 #[test] fn run_untrusted_without_tty_refuses() {
+    // motor falso que responde: script `docker` con `exit 0` en un tempdir, primero en PATH
     // stdin null, sin TORII_TRUST_PIPELINES, HOME/XDG_CONFIG_HOME en un tempdir → exit ≠ 0, stderr contiene "TORII_TRUST_PIPELINES=1"; no existe .torii/pipelines
 }
 #[test] #[ignore = "needs docker"] fn run_end_to_end_with_docker() {
@@ -534,7 +579,7 @@ En `crates/torii/tests/local_pipeline.rs` (binario con `env!("CARGO_BIN_EXE_tori
 
 - [ ] **Step 2:** `cargo test -p gitorii pipeline_run_parses_local_flags` y `cargo test -p gitorii --test local_pipeline` → FAIL.
 - [ ] **Step 3:** Implementar.
-- [ ] **Step 4:** Mismos comandos → PASS. Luego `cargo test -p gitorii --test local_pipeline -- --ignored` con Docker → PASS. `cargo clippy -p gitorii -p torii-lib -- -D warnings` limpio.
+- [ ] **Step 4:** Mismos comandos → PASS. Luego `cargo test -p gitorii --test local_pipeline -- --ignored` con Docker → PASS, y otra vez con `TORII_CONTAINER_ENGINE=podman` si Podman está instalado (si no, decirlo en el informe). `cargo clippy -p gitorii -p torii-lib -- -D warnings` limpio.
 - [ ] **Step 5:** `torii save crates/torii -m "feat(pipeline): torii pipeline run/check/runs for local Docker pipelines"`
 
 ---
@@ -559,7 +604,7 @@ CI de plataformas (todo local; ficheros como plan B):
 - `.github/workflows/release.yml`: `on: push: tags` → `on: workflow_dispatch:`, mismo comentario (lanzarlo eligiendo el tag como ref).
 
 Docs:
-- `COMMANDS.md`: sección de `torii pipeline` con `run`, `check`, `runs`, el formato TOML (los campos de Task 1), `TORII_TRUST_PIPELINES`, `TORII_CONTAINER_ENGINE` y las variables `TORII_*`.
+- `COMMANDS.md`: sección de `torii pipeline` con `run`, `check`, `runs`, el requisito de Docker o Podman (torii no los instala), el formato TOML (los campos de Task 1), `TORII_TRUST_PIPELINES`, `TORII_CONTAINER_ENGINE` y las variables `TORII_*`.
 - `ROADMAP.md`: las dos líneas que cita el spec ("Gate … Not a runner" y "Runners observability … Out of scope") con una nota de que el runner local existe y no depende de Gate ni registra runners.
 - `CHANGELOG.md`: entrada en la sección sin publicar (o crear `## [Unreleased]` si no hay) con el comando nuevo y el cambio de disparo del CI.
 
