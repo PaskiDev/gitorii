@@ -5,6 +5,7 @@
 //! platform-side APIs live in [`crate::platforms`].
 
 pub mod commit_scan;
+pub mod conflict;
 pub mod core;
 pub mod core_extensions;
 pub mod core_tag;
