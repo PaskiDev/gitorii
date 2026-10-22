@@ -6,6 +6,7 @@
 
 pub mod commit_scan;
 pub mod conflict;
+pub use conflict::IntegrateOutcome;
 pub mod core;
 pub mod core_extensions;
 pub mod core_tag;

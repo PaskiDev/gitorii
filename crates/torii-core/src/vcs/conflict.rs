@@ -59,6 +59,29 @@ pub trait ConflictResolver {
     fn choose(&self, ctx: &ConflictContext, files: &[ConflictFile]) -> Result<Resolution>;
 }
 
+/// Result of merge / rebase / cherry-pick when a resolver may be asked.
+#[derive(Debug, PartialEq, Eq)]
+pub enum IntegrateOutcome {
+    Done,
+    /// This many files are still conflicted; the operation is left in progress.
+    Conflicts(usize),
+}
+
+/// Ask `r` how to resolve the current index conflicts and apply its answer.
+/// Returns how many files are still conflicted.
+pub fn resolve_with(
+    repo: &Repository,
+    ctx: &ConflictContext,
+    r: &dyn ConflictResolver,
+) -> Result<usize> {
+    let files = list_conflicts(repo)?;
+    if files.is_empty() {
+        return Ok(0);
+    }
+    let res = r.choose(ctx, &files)?;
+    resolve_files(repo, ctx.op, &res)
+}
+
 /// Always leaves the conflicts for manual resolution.
 pub struct ManualResolver;
 
@@ -233,6 +256,21 @@ fn plan_one(
     })
 }
 
+/// git2 0.19 cannot set GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH, so checkout paths
+/// are matched as globs. Escape glob metacharacters (and a leading `!`) so a
+/// conflicted name like `a[1].txt` selects only itself.
+fn escape_pathspec(rel: &Path) -> String {
+    let s = rel.to_string_lossy();
+    let mut out = String::with_capacity(s.len() + 2);
+    for (i, ch) in s.chars().enumerate() {
+        if matches!(ch, '\\' | '*' | '?' | '[') || (i == 0 && ch == '!') {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Apply `res`; returns how many files are still conflicted.
 ///
 /// All merges are computed first, then the index is edited and saved, and only
@@ -305,7 +343,7 @@ pub fn resolve_files(repo: &Repository, op: OpKind, res: &Resolution) -> Result<
                 if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
                     std::fs::remove_file(&full)?;
                 }
-                cb.path(rel);
+                cb.path(escape_pathspec(rel));
                 any = true;
             }
         }
@@ -766,5 +804,21 @@ mod tests {
         // Saved index is untouched too.
         let fresh = git2::Repository::open(dir.path()).unwrap();
         assert_eq!(list_conflicts(&fresh).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn glob_chars_in_conflicted_name_do_not_touch_other_files() {
+        let (dir, repo) = conflicted_with(|d, i| {
+            write(d, "a1.txt", b"same\n");
+            let body: &[u8] = [&b"x\n"[..], b"o\n", b"t\n"][i];
+            write(d, "a[1].txt", body);
+        });
+        write(&dir, "a1.txt", b"dirty\n");
+        assert_eq!(
+            resolve_files(&repo, OpKind::Merge, &Resolution::All(Side::Remote)).unwrap(),
+            0
+        );
+        assert_eq!(read(&dir, "a[1].txt"), "t\n");
+        assert_eq!(read(&dir, "a1.txt"), "dirty\n");
     }
 }

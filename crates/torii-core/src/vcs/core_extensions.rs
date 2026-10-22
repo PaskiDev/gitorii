@@ -1,6 +1,9 @@
 // Extended Git operations for Torii
 use crate::core::GitRepo;
 use crate::error::Result;
+use crate::vcs::conflict::{
+    resolve_with, ConflictContext, ConflictResolver, IntegrateOutcome, ManualResolver, OpKind,
+};
 use chrono::NaiveDateTime;
 use git2::BranchType;
 
@@ -1391,6 +1394,17 @@ impl GitRepo {
     /// Merge a branch (local or remote-tracking, e.g. `origin/main`) into the
     /// current branch
     pub fn merge_branch(&self, branch_name: &str) -> Result<()> {
+        self.merge_branch_with(branch_name, &ManualResolver)?;
+        Ok(())
+    }
+
+    /// Like [`merge_branch`](Self::merge_branch), but asks `r` how to resolve
+    /// conflicts and finishes the merge when none remain.
+    pub fn merge_branch_with(
+        &self,
+        branch_name: &str,
+        r: &dyn ConflictResolver,
+    ) -> Result<IntegrateOutcome> {
         let resolved = self.resolve_branchish(branch_name)?;
         let annotated = self
             .repo
@@ -1404,7 +1418,7 @@ impl GitRepo {
 
         if analysis.is_up_to_date() {
             println!("Already up to date.");
-            return Ok(());
+            return Ok(IntegrateOutcome::Done);
         }
 
         if analysis.is_fast_forward() {
@@ -1418,10 +1432,22 @@ impl GitRepo {
 
             let mut index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
             if index.has_conflicts() {
-                println!(
-                    "⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\""
-                );
-                return Ok(());
+                let ctx = ConflictContext {
+                    op: OpKind::Merge,
+                    local_label: self
+                        .get_current_branch()
+                        .unwrap_or_else(|_| "HEAD".to_string()),
+                    remote_label: branch_name.to_string(),
+                };
+                let left = resolve_with(&self.repo, &ctx, r)?;
+                if left > 0 {
+                    println!(
+                        "⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\""
+                    );
+                    return Ok(IntegrateOutcome::Conflicts(left));
+                }
+                // resolve_files saved the index to disk; reload our handle.
+                index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
             }
 
             let tree_oid = index.write_tree().map_err(crate::error::ToriiError::Git)?;
@@ -1458,11 +1484,22 @@ impl GitRepo {
             println!("✅ Merged {}", branch_name);
         }
 
-        Ok(())
+        Ok(IntegrateOutcome::Done)
     }
 
     /// Rebase current branch onto another branch (local or remote-tracking)
     pub fn rebase_branch(&self, branch_name: &str) -> Result<()> {
+        self.rebase_branch_with(branch_name, &ManualResolver)?;
+        Ok(())
+    }
+
+    /// Like [`rebase_branch`](Self::rebase_branch), but asks `r` at every
+    /// conflicted stop and carries on when none remain.
+    pub fn rebase_branch_with(
+        &self,
+        branch_name: &str,
+        r: &dyn ConflictResolver,
+    ) -> Result<IntegrateOutcome> {
         // git2's Rebase API is available — use it for non-interactive rebase
         let resolved = self.resolve_branchish(branch_name)?;
         let upstream = self
@@ -1478,11 +1515,27 @@ impl GitRepo {
         let sig = crate::core::resolve_signature(&self.repo)?;
 
         while let Some(op) = rebase.next() {
-            op.map_err(crate::error::ToriiError::Git)?;
+            let op = op.map_err(crate::error::ToriiError::Git)?;
             let index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
             if index.has_conflicts() {
-                println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
-                return Ok(());
+                let label = self
+                    .repo
+                    .find_commit(op.id())
+                    .map(|c| {
+                        let id = c.id().to_string();
+                        format!("{} {}", &id[..7], c.summary().unwrap_or(""))
+                    })
+                    .unwrap_or_else(|_| op.id().to_string());
+                let ctx = ConflictContext {
+                    op: OpKind::Rebase,
+                    local_label: label,
+                    remote_label: branch_name.to_string(),
+                };
+                let left = resolve_with(&self.repo, &ctx, r)?;
+                if left > 0 {
+                    println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
+                    return Ok(IntegrateOutcome::Conflicts(left));
+                }
             }
             rebase
                 .commit(None, &sig, None)
@@ -1494,7 +1547,7 @@ impl GitRepo {
             .map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Rebased onto {}", branch_name);
-        Ok(())
+        Ok(IntegrateOutcome::Done)
     }
 
     /// List all tracked files in the index
@@ -2636,5 +2689,131 @@ mod rewrite_boundary_tests {
             msg.contains("01/01/2026"),
             "the rejected value belongs in the message: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod conflict_resolver_tests {
+    use super::*;
+    use crate::vcs::conflict::{FixedResolver, IntegrateOutcome, ManualResolver, Side};
+    use tempfile::TempDir;
+
+    fn sig() -> git2::Signature<'static> {
+        git2::Signature::now("t", "t@example.com").unwrap()
+    }
+
+    fn commit_all(
+        dir: &TempDir,
+        repo: &git2::Repository,
+        files: &[(&str, &str)],
+        msg: &str,
+        parents: &[git2::Oid],
+    ) -> git2::Oid {
+        for (n, c) in files {
+            std::fs::write(dir.path().join(n), c).unwrap();
+        }
+        let mut idx = repo.index().unwrap();
+        idx.add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        idx.write().unwrap();
+        let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+        let pcs: Vec<git2::Commit> = parents
+            .iter()
+            .map(|&o| repo.find_commit(o).unwrap())
+            .collect();
+        let prefs: Vec<&git2::Commit> = pcs.iter().collect();
+        let s = sig();
+        repo.commit(Some("HEAD"), &s, &s, msg, &tree, &prefs)
+            .unwrap()
+    }
+
+    fn reset_hard(repo: &git2::Repository, to: git2::Oid) {
+        repo.reset(
+            repo.find_commit(to).unwrap().as_object(),
+            git2::ResetType::Hard,
+            None,
+        )
+        .unwrap();
+    }
+
+    fn read(dir: &TempDir, name: &str) -> String {
+        std::fs::read_to_string(dir.path().join(name)).unwrap()
+    }
+
+    /// HEAD says "ours\n" in f.txt, refs/remotes/origin/main says "theirs\n".
+    fn merge_conflict_repo() -> (TempDir, GitRepo) {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let base = commit_all(&dir, &repo, &[("f.txt", "base\n")], "base", &[]);
+        let theirs = commit_all(&dir, &repo, &[("f.txt", "theirs\n")], "theirs", &[base]);
+        repo.reference("refs/remotes/origin/main", theirs, true, "test")
+            .unwrap();
+        reset_hard(&repo, base);
+        commit_all(&dir, &repo, &[("f.txt", "ours\n")], "ours", &[base]);
+        drop(repo);
+        let gr = GitRepo::open(dir.path()).unwrap();
+        (dir, gr)
+    }
+
+    #[test]
+    fn merge_with_remote_resolver_commits_merge() {
+        let (dir, gr) = merge_conflict_repo();
+        let out = gr
+            .merge_branch_with("origin/main", &FixedResolver(Side::Remote))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.parent_count(), 2);
+        assert_eq!(read(&dir, "f.txt"), "theirs\n");
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn merge_with_manual_resolver_reports_conflicts() {
+        let (_dir, gr) = merge_conflict_repo();
+        let out = gr
+            .merge_branch_with("origin/main", &ManualResolver)
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Conflicts(1));
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Merge);
+    }
+
+    #[test]
+    fn rebase_with_local_resolver_keeps_own_content_across_stops() {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let base = commit_all(
+            &dir,
+            &repo,
+            &[("a.txt", "base\n"), ("b.txt", "base\n")],
+            "base",
+            &[],
+        );
+        let up = commit_all(
+            &dir,
+            &repo,
+            &[("a.txt", "up-a\n"), ("b.txt", "up-b\n")],
+            "upstream",
+            &[base],
+        );
+        repo.branch("upstream", &repo.find_commit(up).unwrap(), true)
+            .unwrap();
+        reset_hard(&repo, base);
+        let m1 = commit_all(&dir, &repo, &[("a.txt", "mine-a\n")], "mine 1", &[base]);
+        commit_all(&dir, &repo, &[("b.txt", "mine-b\n")], "mine 2", &[m1]);
+        drop(repo);
+
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let out = gr
+            .rebase_branch_with("upstream", &FixedResolver(Side::Local))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        assert_eq!(read(&dir, "a.txt"), "mine-a\n");
+        assert_eq!(read(&dir, "b.txt"), "mine-b\n");
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.message(), Some("mine 2"));
+        assert_eq!(head.parent(0).unwrap().message(), Some("mine 1"));
+        assert_eq!(head.parent(0).unwrap().parent(0).unwrap().id(), up);
     }
 }
