@@ -9,6 +9,7 @@ use std::path::PathBuf;
 mod auth;
 mod clone;
 mod config;
+#[allow(dead_code)] // TODO(task 4): remove once wired
 mod conflict_picker;
 mod fsck;
 mod history;
