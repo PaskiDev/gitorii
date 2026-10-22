@@ -498,9 +498,8 @@ pub(crate) fn cherry_pick(
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Commit hash required: torii cherry-pick <hash>"))?;
         let resolver = TerminalResolver { forced: forced_side(*local, *remote) };
-        if let IntegrateOutcome::Done = repo.cherry_pick_with(hash, &resolver)? {
-            println!("✅ Cherry-picked: {}", hash);
-        }
+        // Core prints the success line (or the "Resolve ..." hint) itself.
+        let _: IntegrateOutcome = repo.cherry_pick_with(hash, &resolver)?;
     }
     Ok(())
 }

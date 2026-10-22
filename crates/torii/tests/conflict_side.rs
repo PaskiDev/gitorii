@@ -44,6 +44,8 @@ fn torii(fx: &Fixture, args: &[&str]) -> Output {
         .current_dir(fx.dir.path())
         .env("HOME", fx.home.path())
         .env("XDG_CONFIG_HOME", fx.home.path())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", fx.home.path().join("no-such-gitconfig"))
         .stdin(Stdio::null())
         .output()
         .expect("run torii")
@@ -78,8 +80,17 @@ fn merge_with_remote_flag_resolves_and_commits() {
 fn cherry_pick_with_local_flag_keeps_head_content() {
     let fx = fixture();
     let hash = fx.theirs.to_string();
+    let before = git2::Repository::open(fx.dir.path()).unwrap().head().unwrap().peel_to_commit().unwrap().id();
     let out = torii(&fx, &["cherry-pick", &hash, "--local"]);
     assert!(out.status.success(), "{out:?}");
     assert_eq!(f_txt(&fx), "local\n");
     assert!(!f_txt(&fx).contains("<<<<<<<"));
+    let repo = git2::Repository::open(fx.dir.path()).unwrap();
+    assert_eq!(repo.state(), git2::RepositoryState::Clean);
+    assert!(!repo.path().join("CHERRY_PICK_HEAD").exists());
+    let head = repo.head().unwrap().peel_to_commit().unwrap();
+    assert_eq!(head.parent_count(), 1);
+    assert_eq!(head.parent_id(0).unwrap(), before);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(stdout.matches('✅').count(), 1, "{stdout}");
 }

@@ -259,11 +259,11 @@ enum Commands {
         preview: bool,
 
         /// On conflicts, keep local changes in conflicting hunks (no prompt)
-        #[arg(long, conflicts_with = "remote")]
+        #[arg(long, conflicts_with_all = ["remote", "preview", "pull", "push", "fetch", "force"])]
         local: bool,
 
         /// On conflicts, take incoming changes in conflicting hunks (no prompt)
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["preview", "pull", "push", "fetch", "force"])]
         remote: bool,
 
         /// Verify local vs remote head without pulling/pushing
@@ -421,11 +421,11 @@ enum Commands {
         abort: bool,
 
         /// On conflicts, keep local changes in conflicting hunks (no prompt)
-        #[arg(long, conflicts_with = "remote")]
+        #[arg(long, conflicts_with_all = ["remote", "continue", "abort"])]
         local: bool,
 
         /// On conflicts, take incoming changes in conflicting hunks (no prompt)
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["continue", "abort"])]
         remote: bool,
     },
 
@@ -1651,6 +1651,12 @@ mod tests {
         assert!(parse(&["history", "rebase", "--abort", "--local"]).is_err());
         let c = parse(&["cherry-pick", "abc", "--remote"]).unwrap();
         assert!(matches!(c.command, Commands::CherryPick { remote: true, .. }));
+        assert!(parse(&["cherry-pick", "--continue", "--local"]).is_err());
+        assert!(parse(&["cherry-pick", "--abort", "--remote"]).is_err());
+        for other in ["--preview", "--pull", "--push", "--fetch", "--force"] {
+            assert!(parse(&["sync", "origin/main", other, "--local"]).is_err(), "{other}");
+            assert!(parse(&["sync", "origin/main", other, "--remote"]).is_err(), "{other}");
+        }
     }
 
     #[test]
