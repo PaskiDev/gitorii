@@ -50,11 +50,11 @@ and a self-hosted platform registry — all from one binary called `torii`.
 **Prebuilt binary** (Linux / macOS — recommended, no compiler needed):
 
 ```bash
-curl -L "https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.17.1/torii-linux-x86_64" \
+curl -L "https://gitlab.com/api/v4/projects/paskidev%2Fgitorii/packages/generic/gitorii/v0.17.2/torii-linux-x86_64" \
   -o ~/.local/bin/torii && chmod +x ~/.local/bin/torii
 ```
 
-(replace `v0.17.1` with the latest tag from the
+(replace `v0.17.2` with the latest tag from the
 [releases page](https://gitlab.com/paskidev/gitorii/-/releases); aliases
 exist for `torii-linux-aarch64` and `torii-windows-x86_64.exe`).
 

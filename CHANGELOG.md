@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2] - 2026-10-22
+
+### Changed
+- The repository picker shown when `torii tui` starts in a directory with several
+  repositories now uses the same chrome as the rest of the TUI: one window with
+  hairline rules, a one-line header, a word tab strip and your accent colour.
+- The in-TUI "switch repo" menu matches it and opens under the repository name.
+
 ## [0.17.1] - 2026-10-22
 
 ### Changed
