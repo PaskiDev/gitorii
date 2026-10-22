@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `--local` / `--remote` on `torii sync` (merge and rebase), `torii history rebase <base>`
+  and `torii cherry-pick`: resolve conflicting hunks without a prompt, keeping your
+  changes or taking the incoming ones. Without a flag, a terminal gets an interactive
+  side picker; without a terminal the conflict markers are left as before.
+
 ## [0.16.2] - 2026-10-22
 
 ### Fixed

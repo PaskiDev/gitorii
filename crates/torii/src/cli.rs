@@ -9,7 +9,6 @@ use std::path::PathBuf;
 mod auth;
 mod clone;
 mod config;
-#[allow(dead_code)] // TODO(task 4): remove once wired
 mod conflict_picker;
 mod fsck;
 mod history;
@@ -217,7 +216,9 @@ enum Commands {
   torii sync main                  Integrate main into current branch (smart merge/rebase)
   torii sync main --merge          Force merge strategy
   torii sync main --rebase         Force rebase strategy
-  torii sync main --preview        Preview what would happen without executing")]
+  torii sync main --preview        Preview what would happen without executing
+  torii sync origin/main --merge --remote
+                                   On conflicts, take the incoming side (no prompt)")]
     Sync {
         /// When `--fetch` is present: name of the remote to fetch from
         /// (e.g. `upstream`). Without `--fetch`: branch to integrate
@@ -256,6 +257,14 @@ enum Commands {
         /// Preview integration without executing
         #[arg(long)]
         preview: bool,
+
+        /// On conflicts, keep local changes in conflicting hunks (no prompt)
+        #[arg(long, conflicts_with = "remote")]
+        local: bool,
+
+        /// On conflicts, take incoming changes in conflicting hunks (no prompt)
+        #[arg(long)]
+        remote: bool,
 
         /// Verify local vs remote head without pulling/pushing
         #[arg(long)]
@@ -396,7 +405,8 @@ enum Commands {
         after_help = "Examples:
   torii cherry-pick abc1234           Apply a commit
   torii cherry-pick --continue        Resume after resolving conflicts
-  torii cherry-pick --abort           Abort an in-progress cherry-pick"
+  torii cherry-pick --abort           Abort an in-progress cherry-pick
+  torii cherry-pick abc123 --remote   On conflicts, take the incoming side (no prompt)"
     )]
     CherryPick {
         /// Commit hash to cherry-pick
@@ -409,6 +419,14 @@ enum Commands {
         /// Abort cherry-pick
         #[arg(long)]
         abort: bool,
+
+        /// On conflicts, keep local changes in conflicting hunks (no prompt)
+        #[arg(long, conflicts_with = "remote")]
+        local: bool,
+
+        /// On conflicts, take incoming changes in conflicting hunks (no prompt)
+        #[arg(long)]
+        remote: bool,
     },
 
     /// Manage branches
@@ -1327,10 +1345,13 @@ impl Cli {
                 merge,
                 rebase,
                 preview,
+                local,
+                remote,
                 verify,
                 skip_hooks,
             } => repo::sync(
-                branch, pull, push, force, fetch, all, merge, rebase, preview, verify, skip_hooks,
+                branch, pull, push, force, fetch, all, merge, rebase, preview, local, remote,
+                verify, skip_hooks,
             ),
             Commands::Status { tracked, null } => repo::status(tracked, null),
             Commands::Log {
@@ -1359,7 +1380,9 @@ impl Cli {
                 commit,
                 r#continue,
                 abort,
-            } => repo::cherry_pick(commit, r#continue, abort),
+                local,
+                remote,
+            } => repo::cherry_pick(commit, r#continue, abort, local, remote),
             Commands::Branch {
                 name,
                 create,
@@ -1611,6 +1634,23 @@ mod tests {
             }
         ));
         assert!(parse(&["cherry-pick", "--abort"]).is_ok());
+    }
+
+    #[test]
+    fn conflict_side_flags_parse_and_exclude() {
+        let c = parse(&["sync", "origin/main", "--merge", "--remote"]).unwrap();
+        assert!(matches!(c.command, Commands::Sync { remote: true, local: false, .. }));
+        assert!(parse(&["sync", "origin/main", "--local", "--remote"]).is_err());
+        let c = parse(&["history", "rebase", "main", "--local"]).unwrap();
+        assert!(matches!(
+            c.command,
+            Commands::History { action: HistoryCommands::Rebase { local: true, .. } }
+        ));
+        assert!(parse(&["history", "rebase", "main", "-i", "--local"]).is_err());
+        assert!(parse(&["history", "rebase", "--root", "--remote"]).is_err());
+        assert!(parse(&["history", "rebase", "--abort", "--local"]).is_err());
+        let c = parse(&["cherry-pick", "abc", "--remote"]).unwrap();
+        assert!(matches!(c.command, Commands::CherryPick { remote: true, .. }));
     }
 
     #[test]

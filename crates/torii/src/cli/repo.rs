@@ -1,9 +1,11 @@
 //! Daily-flow repository commands: init, save, sync, status, log,
 //! diff, blame, cherry-pick, branch, show.
 
+use super::conflict_picker::TerminalResolver;
 use super::scan::DEFAULT_COMMITS_POLICY;
 use super::sign::{run_show_signature, SignOverrideGuard};
 use crate::core::GitRepo;
+use crate::vcs::conflict::{IntegrateOutcome, Side};
 use crate::mirror::MirrorManager;
 use crate::scanner;
 use anyhow::Result;
@@ -204,6 +206,17 @@ pub(crate) fn save(
     Ok(())
 }
 
+/// Map the `--local` / `--remote` flags to a forced side (clap keeps them exclusive).
+pub(crate) fn forced_side(local: bool, remote: bool) -> Option<Side> {
+    if local {
+        Some(Side::Local)
+    } else if remote {
+        Some(Side::Remote)
+    } else {
+        None
+    }
+}
+
 // Mirrors the clap variant fields 1:1 — a param struct would just duplicate the enum.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn sync(
@@ -216,11 +229,14 @@ pub(crate) fn sync(
     merge: &bool,
     rebase: &bool,
     preview: &bool,
+    local: &bool,
+    remote: &bool,
     verify: &bool,
     skip_hooks: &bool,
 ) -> Result<()> {
     let repo = GitRepo::open(".")?;
     let repo_path = std::path::Path::new(".");
+    let resolver = TerminalResolver { forced: forced_side(*local, *remote) };
     let ti = crate::toriignore::ToriIgnore::load(repo_path)?;
     if !*skip_hooks {
         crate::hooks::pre_sync(&ti.hooks, repo_path)?;
@@ -248,17 +264,20 @@ pub(crate) fn sync(
             println!("💡 Recommendation: Use merge for feature branches, rebase for clean history");
         } else if *merge {
             println!("🔀 Merging branch '{}'...", branch_name);
-            repo.merge_branch(branch_name)?;
-            println!("✅ Merged branch: {}", branch_name);
+            if let IntegrateOutcome::Done = repo.merge_branch_with(branch_name, &resolver)? {
+                println!("✅ Merged branch: {}", branch_name);
+            }
         } else if *rebase {
             println!("🔄 Rebasing onto branch '{}'...", branch_name);
-            repo.rebase_branch(branch_name)?;
-            println!("✅ Rebased onto: {}", branch_name);
+            if let IntegrateOutcome::Done = repo.rebase_branch_with(branch_name, &resolver)? {
+                println!("✅ Rebased onto: {}", branch_name);
+            }
         } else {
             // Smart integration (default to merge for now)
             println!("🔀 Integrating branch '{}'...", branch_name);
-            repo.merge_branch(branch_name)?;
-            println!("✅ Integrated branch: {}", branch_name);
+            if let IntegrateOutcome::Done = repo.merge_branch_with(branch_name, &resolver)? {
+                println!("✅ Integrated branch: {}", branch_name);
+            }
         }
     } else if *force {
         repo.push(true)?;
@@ -462,7 +481,13 @@ pub(crate) fn blame(file: &String, lines: &Option<String>) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn cherry_pick(commit: &Option<String>, r#continue: &bool, abort: &bool) -> Result<()> {
+pub(crate) fn cherry_pick(
+    commit: &Option<String>,
+    r#continue: &bool,
+    abort: &bool,
+    local: &bool,
+    remote: &bool,
+) -> Result<()> {
     let repo = GitRepo::open(".")?;
     if *r#continue {
         repo.cherry_pick_continue()?;
@@ -472,7 +497,10 @@ pub(crate) fn cherry_pick(commit: &Option<String>, r#continue: &bool, abort: &bo
         let hash = commit
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Commit hash required: torii cherry-pick <hash>"))?;
-        repo.cherry_pick(hash)?;
+        let resolver = TerminalResolver { forced: forced_side(*local, *remote) };
+        if let IntegrateOutcome::Done = repo.cherry_pick_with(hash, &resolver)? {
+            println!("✅ Cherry-picked: {}", hash);
+        }
     }
     Ok(())
 }

@@ -1,5 +1,6 @@
 //! `torii history` — history rewriting and inspection.
 
+use super::conflict_picker::TerminalResolver;
 use super::fsck::run_fsck;
 use super::sign::SignOverrideGuard;
 use crate::core::GitRepo;
@@ -40,6 +41,8 @@ pub(crate) enum HistoryCommands {
     },
 
     /// Rebase current branch onto a target
+    ///
+    /// Example: torii history rebase main --local
     Rebase {
         /// Target branch or commit to rebase onto
         target: Option<String>,
@@ -67,6 +70,20 @@ pub(crate) enum HistoryCommands {
         /// Skip the current patch
         #[arg(long)]
         skip: bool,
+
+        /// On conflicts, keep local changes in conflicting hunks (no prompt)
+        #[arg(
+            long,
+            conflicts_with_all = ["remote", "interactive", "todo_file", "root", "continue", "abort", "skip"]
+        )]
+        local: bool,
+
+        /// On conflicts, take incoming changes in conflicting hunks (no prompt)
+        #[arg(
+            long,
+            conflicts_with_all = ["interactive", "todo_file", "root", "continue", "abort", "skip"]
+        )]
+        remote: bool,
     },
 
     /// Find unreachable objects (orphaned commits/blobs/trees) — recovery aid
@@ -418,6 +435,8 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             r#continue,
             abort,
             skip,
+            local,
+            remote,
         } => {
             if *r#continue {
                 repo.rebase_continue()?;
@@ -438,8 +457,13 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
                 let base = target.as_deref().ok_or_else(|| anyhow::anyhow!("Target required: torii history rebase HEAD~3 --interactive (or use --root)"))?;
                 repo.rebase_interactive(base)?;
             } else if let Some(base) = target {
-                repo.rebase_branch(base)?;
-                println!("✅ Rebased onto: {}", base);
+                let forced = crate::cli::repo::forced_side(*local, *remote);
+                let resolver = TerminalResolver { forced };
+                if let crate::vcs::conflict::IntegrateOutcome::Done =
+                    repo.rebase_branch_with(base, &resolver)?
+                {
+                    println!("✅ Rebased onto: {}", base);
+                }
             } else {
                 anyhow::bail!("Specify a target or use --root / --interactive / --todo-file / --continue / --abort / --skip");
             }
