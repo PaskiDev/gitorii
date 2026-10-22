@@ -7,6 +7,7 @@ mod branch;
 mod clone;
 mod commit;
 mod config;
+mod conflict;
 mod dashboard;
 mod diff;
 mod history;
@@ -32,6 +33,7 @@ pub use branch::*;
 pub use clone::*;
 pub use commit::*;
 pub use config::*;
+pub use conflict::*;
 pub use dashboard::*;
 pub use diff::*;
 pub use history::*;
@@ -177,6 +179,8 @@ pub struct App {
 
     pub event_log: Vec<EventEntry>,
     pub show_event_log: bool,
+    /// Conflicts waiting for a side; owns the keyboard while open.
+    pub conflict: Option<ConflictPrompt>,
     pub sync_rx: Option<std::sync::mpsc::Receiver<Result<String>>>,
     pub pr_rx: Option<std::sync::mpsc::Receiver<Result<Vec<PrEntry>>>>,
     pub issue_rx: Option<std::sync::mpsc::Receiver<Result<Vec<IssueEntry>>>>,
@@ -276,6 +280,7 @@ impl App {
             clone_view: CloneState::default(),
             event_log: vec![],
             show_event_log: false,
+            conflict: None,
             sync_rx: None,
             pr_rx: None,
             issue_rx: None,
@@ -353,6 +358,7 @@ impl App {
             clone_view: CloneState::default(),
             event_log: vec![],
             show_event_log: false,
+            conflict: None,
             sync_rx: None,
             pr_rx: None,
             issue_rx: None,

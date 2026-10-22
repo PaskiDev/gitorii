@@ -50,7 +50,7 @@ pub(super) fn handle_branch(key: event::KeyEvent, app: &mut App) -> Option<Actio
             (_, KeyCode::Up) | (_, KeyCode::Char('k')) if app.branch_view.ops_idx > 0 => {
                 app.branch_view.ops_idx -= 1;
             }
-            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.branch_view.ops_idx < 3 => {
+            (_, KeyCode::Down) | (_, KeyCode::Char('j')) if app.branch_view.ops_idx < 5 => {
                 app.branch_view.ops_idx += 1;
             }
             (_, KeyCode::Enter) => {
@@ -65,7 +65,18 @@ pub(super) fn handle_branch(key: event::KeyEvent, app: &mut App) -> Option<Actio
                     2 if !app.branch_view.current_has_upstream => {
                         return Some(Action::BranchPush);
                     }
-                    3 => {
+                    3 | 4 => {
+                        if let Some(b) = app.branch_view.branches.get(app.branch_view.idx) {
+                            if b.is_current {
+                                app.branch_view.status = Some("already on this branch".to_string());
+                            } else if idx == 3 {
+                                return Some(Action::BranchMerge);
+                            } else {
+                                return Some(Action::BranchRebase);
+                            }
+                        }
+                    }
+                    5 => {
                         if let Some(b) = app.branch_view.branches.get(app.branch_view.idx) {
                             if !b.is_current && !b.is_remote {
                                 app.branch_view.confirm = BranchConfirm::Delete;

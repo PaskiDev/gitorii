@@ -16,7 +16,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
-use app::{App, CloneStatus, EventKind, SyncOp, SyncStatus, View};
+use app::{App, CloneStatus, EventKind, Integrate, SyncOp, SyncStatus, View};
 use events::{Action, EventHandler};
 
 /// Path to the currently-running torii binary. The TUI shells out to
@@ -660,6 +660,18 @@ fn run_loop(
                     }
                 }
 
+                Action::BranchMerge | Action::BranchRebase => {
+                    if let Some(b) = app.branch_view.branches.get(app.branch_view.idx) {
+                        let name = b.name.clone();
+                        app.integrate(if matches!(action, Action::BranchMerge) {
+                            Integrate::Merge(name)
+                        } else {
+                            Integrate::Rebase(name)
+                        });
+                        app.go_to(View::Branch);
+                    }
+                }
+
                 Action::BranchDelete => {
                     if let Some(b) = app.branch_view.branches.get(app.branch_view.idx) {
                         let name = b.name.clone();
@@ -867,28 +879,7 @@ fn run_loop(
                 Action::HistoryCherryPick => {
                     if let Some(entry) = app.history_view.reflog.get(app.history_view.idx) {
                         let hash = entry.id.clone();
-                        let ok = std::process::Command::new(torii_exe())
-                            .args(["cherry-pick", &hash])
-                            .current_dir(&app.repo_path)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .map(|s| s.success())
-                            .unwrap_or(false);
-                        let msg = if ok {
-                            format!("cherry-picked: {}", hash)
-                        } else {
-                            format!("cherry-pick failed: {}", hash)
-                        };
-                        app.log_event(
-                            &msg,
-                            if ok {
-                                EventKind::Success
-                            } else {
-                                EventKind::Error
-                            },
-                        );
-                        app.refresh()?;
+                        app.integrate(Integrate::CherryPick(hash));
                     }
                 }
 
@@ -897,28 +888,7 @@ fn run_loop(
                     app.history_view.input.clear();
                     app.view = View::Log;
                     if !target.is_empty() {
-                        let ok = std::process::Command::new(torii_exe())
-                            .args(["history", "rebase", &target])
-                            .current_dir(&app.repo_path)
-                            .stdout(std::process::Stdio::null())
-                            .stderr(std::process::Stdio::null())
-                            .status()
-                            .map(|s| s.success())
-                            .unwrap_or(false);
-                        let msg = if ok {
-                            format!("rebased onto: {}", target)
-                        } else {
-                            format!("rebase failed onto: {}", target)
-                        };
-                        app.log_event(
-                            &msg,
-                            if ok {
-                                EventKind::Success
-                            } else {
-                                EventKind::Error
-                            },
-                        );
-                        app.refresh()?;
+                        app.integrate(Integrate::Rebase(target));
                     }
                 }
 

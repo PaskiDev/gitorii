@@ -12,6 +12,7 @@ mod branch;
 mod clone;
 mod commit;
 mod config;
+mod conflict;
 mod history;
 mod issue;
 mod log;
@@ -32,6 +33,7 @@ use clone::*;
 pub use commit::COMMIT_TYPES;
 use commit::*;
 use config::*;
+use conflict::*;
 use history::*;
 use issue::*;
 use log::*;
@@ -63,6 +65,8 @@ pub enum Action {
     BranchDelete,
     BranchCreate,
     BranchPush,
+    BranchMerge,
+    BranchRebase,
     SnapshotRestore,
     SnapshotCreate,
     SnapshotDelete,
@@ -158,6 +162,11 @@ impl EventHandler {
                 // The palette owns the keyboard while it is open.
                 if app.palette.open {
                     handle_palette(key, app);
+                    return Ok(None);
+                }
+                // So does a conflict prompt: the operation is waiting on it.
+                if app.conflict.is_some() {
+                    handle_conflict(key, app);
                     return Ok(None);
                 }
                 // So does the config screen while it is recording a binding —

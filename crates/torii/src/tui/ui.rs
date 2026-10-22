@@ -261,6 +261,11 @@ pub fn render(f: &mut Frame, app: &App) {
         render_palette(f, app, area);
     }
 
+    // Over even the palette: the operation is stopped until it is answered.
+    if let Some(p) = &app.conflict {
+        render_conflict(f, app, p, area);
+    }
+
     // A half-typed sequence says so, or `g` looks like a key that did nothing.
     if !app.pending_chords.is_empty() {
         render_pending_chords(f, app, rows[4]);
@@ -556,6 +561,129 @@ fn render_event_log(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(
         List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
         inner,
+    );
+}
+
+/// The conflict prompt: which side wins, everywhere or file by file. Same
+/// words and keys as the CLI prompt.
+fn render_conflict(f: &mut Frame, app: &App, p: &super::app::ConflictPrompt, area: Rect) {
+    use crate::cli::conflict_picker::{op_name, sanitize, FileState};
+
+    let w = 72u16.min(area.width.saturating_sub(4));
+    let h = match &p.picker {
+        None => 9u16,
+        Some(st) => st.files.len() as u16 + 4,
+    }
+    .min(area.height.saturating_sub(4));
+    let overlay = Rect::new(
+        area.x + area.width.saturating_sub(w) / 2,
+        area.y + area.height.saturating_sub(h) / 2,
+        w,
+        h,
+    );
+    let overlay = theme::clear(f, overlay);
+
+    let remote_label = sanitize(p.job.target());
+    let local_label = sanitize(&p.local_label);
+    let mut hint = vec![Span::raw(" ")];
+    if p.picker.is_some() {
+        hint.extend(theme::key_hint(app, "space", "remote/local"));
+        hint.extend(theme::key_hint(app, "backspace", "conflict"));
+        hint.extend(theme::key_hint(app, "enter", "apply"));
+        hint.extend(theme::key_hint(app, "esc", "cancel"));
+    } else {
+        hint.extend(theme::key_hint(app, "l", "local"));
+        hint.extend(theme::key_hint(app, "r", "remote"));
+        hint.extend(theme::key_hint(app, "f", "file by file"));
+        hint.extend(theme::key_hint(app, "m", "manual"));
+    }
+    let n = p.files.len();
+    let block = Block::default()
+        .title(Span::styled(
+            format!(" {} conflict{} ", n, if n == 1 { "" } else { "s" }),
+            Style::default()
+                .fg(theme::WARN)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .title_bottom(Line::from(hint))
+        .borders(Borders::ALL)
+        .border_type(app.border_type())
+        .border_style(Style::default().fg(theme::RULE));
+    let inner = block.inner(overlay);
+    f.render_widget(block, overlay);
+
+    let Some(st) = &p.picker else {
+        let faint = Style::default().fg(theme::INK_FAINT);
+        let ink = Style::default().fg(theme::INK).add_modifier(Modifier::BOLD);
+        let key = Style::default().fg(theme::accent(app));
+        let lines = vec![
+            Line::from(vec![
+                Span::styled(format!("{}: ", op_name(p.job.op())), faint),
+                Span::styled(remote_label.clone(), ink),
+                Span::styled(" into ", faint),
+                Span::styled(local_label.clone(), ink),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("local   ", Style::default().fg(theme::OK)),
+                Span::styled(local_label, ink),
+                Span::styled("  your work", faint),
+            ]),
+            Line::from(vec![
+                Span::styled("remote  ", Style::default().fg(theme::INK_DIM)),
+                Span::styled(remote_label, ink),
+                Span::styled("  incoming", faint),
+            ]),
+            Line::raw(""),
+            Line::from(vec![
+                Span::styled("l", key),
+                Span::styled(" local wins everywhere   ", faint),
+                Span::styled("r", key),
+                Span::styled(" remote wins everywhere", faint),
+            ]),
+            Line::from(vec![
+                Span::styled("f", key),
+                Span::styled(" choose file by file     ", faint),
+                Span::styled("m", key),
+                Span::styled(" leave markers, resolve by hand", faint),
+            ]),
+        ];
+        f.render_widget(
+            Paragraph::new(lines).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+            inner,
+        );
+        return;
+    };
+
+    let items: Vec<ListItem> = st
+        .files
+        .iter()
+        .enumerate()
+        .map(|(i, (path, fs))| {
+            let is_sel = i == st.cursor;
+            let (label, color) = match fs {
+                FileState::Conflict => ("conflict", theme::WARN),
+                FileState::Remote => ("remote  ", theme::INK),
+                FileState::Local => ("local   ", theme::OK),
+            };
+            ListItem::new(Line::from(vec![
+                theme::caret(app, is_sel),
+                Span::styled(label, Style::default().fg(color)),
+                Span::raw(" "),
+                Span::styled(
+                    sanitize(path),
+                    Style::default().fg(if is_sel { theme::INK } else { theme::INK_DIM }),
+                ),
+            ]))
+            .style(theme::row_style(app, is_sel))
+        })
+        .collect();
+    let mut state = ListState::default();
+    state.select(Some(st.cursor));
+    f.render_stateful_widget(
+        List::new(items).block(Block::default().padding(Padding::new(1, 1, 0, 0))),
+        inner,
+        &mut state,
     );
 }
 

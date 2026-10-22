@@ -161,7 +161,7 @@ impl Drop for RawGuard {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PromptKey {
+pub(crate) enum PromptKey {
     Local,
     Remote,
     Manual,
@@ -176,7 +176,7 @@ fn is_ctrl_c(ev: &KeyEvent) -> bool {
     ev.modifiers.contains(KeyModifiers::CONTROL) && ev.code == KeyCode::Char('c')
 }
 
-fn prompt_key(ev: &KeyEvent) -> Option<PromptKey> {
+pub(crate) fn prompt_key(ev: &KeyEvent) -> Option<PromptKey> {
     if !is_press(ev) {
         return None;
     }
@@ -192,7 +192,7 @@ fn prompt_key(ev: &KeyEvent) -> Option<PromptKey> {
     }
 }
 
-fn picker_key(ev: &KeyEvent) -> Option<PickerKey> {
+pub(crate) fn picker_key(ev: &KeyEvent) -> Option<PickerKey> {
     if !is_press(ev) {
         return None;
     }
@@ -210,7 +210,7 @@ fn picker_key(ev: &KeyEvent) -> Option<PickerKey> {
     }
 }
 
-fn op_name(op: OpKind) -> &'static str {
+pub(crate) fn op_name(op: OpKind) -> &'static str {
     match op {
         OpKind::Merge => "merge",
         OpKind::Rebase => "rebase",
@@ -286,7 +286,7 @@ fn fit_path(s: &str, width: usize) -> String {
 }
 
 /// Replace control characters so a hostile file name cannot inject escapes.
-fn sanitize(s: &str) -> String {
+pub(crate) fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
 }
 

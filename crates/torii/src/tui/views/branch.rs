@@ -116,11 +116,14 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let can_delete = selected
             .map(|b| !b.is_current && !b.is_remote)
             .unwrap_or(false);
+        let can_integrate = selected.map(|b| !b.is_current).unwrap_or(false);
 
         let ops: &[(&str, bool)] = &[
             ("checkout", false),
             ("new branch", false),
             ("push", false),
+            ("merge", false),
+            ("rebase onto", false),
             ("delete ⚠", true),
         ];
 
@@ -139,7 +142,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
             .enumerate()
             .map(|(i, (label, danger))| {
                 let is_sel = i == app.branch_view.ops_idx;
-                let dimmed = (i == 2 && push_disabled) || (i == 3 && !can_delete);
+                let dimmed = (i == 2 && push_disabled)
+                    || ((i == 3 || i == 4) && !can_integrate)
+                    || (i == 5 && !can_delete);
                 let color = if dimmed {
                     theme::INK_FAINT
                 } else if *danger {

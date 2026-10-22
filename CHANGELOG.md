@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `torii cherry-pick`: resolve conflicting hunks without a prompt, keeping your
   changes or taking the incoming ones. Without a flag, a terminal gets an interactive
   side picker; without a terminal the conflict markers are left as before.
+- **The TUI asks which side wins on conflicts.** The branch view's ops menu gains
+  `merge` and `rebase onto`; they, and the history view's cherry-pick and rebase,
+  open a prompt when they stop on conflicts: `l` local wins, `r` remote wins, `f`
+  file by file, `m` leave the markers. Once nothing is left in conflict the
+  operation carries on, and a rebase that stops again asks again.
 
 ## [0.16.2] - 2026-10-22
 
