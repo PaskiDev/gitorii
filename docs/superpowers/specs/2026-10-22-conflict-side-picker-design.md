@@ -90,6 +90,10 @@ Cuando una operación deja conflictos:
    su commit, el rebase continúa al siguiente commit, el cherry-pick crea
    su commit. Si queda alguno, termina con el mensaje de hoy ("Resolve
    … and run …"). **(Claude: continuar solo)**
+   Si el resultado de un commit queda idéntico al de su padre (p. ej.
+   gana remoto en todo un commit de rebase, o gana local en todo un
+   cherry-pick), no se crea un commit vacío: el rebase lo descarta y el
+   cherry-pick termina con "Nothing to apply", como hace git. **(Claude)**
 
 **Sin terminal interactiva** (script, CI, stdin redirigido) → se comporta
 como hoy, salvo que se pase un flag:
