@@ -57,6 +57,12 @@ pub enum Resolution {
 
 pub trait ConflictResolver {
     fn choose(&self, ctx: &ConflictContext, files: &[ConflictFile]) -> Result<Resolution>;
+
+    /// True when the resolver never resolves anything, so callers can skip
+    /// inspecting the conflicts altogether.
+    fn is_manual(&self) -> bool {
+        false
+    }
 }
 
 /// Result of merge / rebase / cherry-pick when a resolver may be asked.
@@ -74,6 +80,15 @@ pub fn resolve_with(
     ctx: &ConflictContext,
     r: &dyn ConflictResolver,
 ) -> Result<usize> {
+    if r.is_manual() {
+        // Nothing to resolve: report the conflicts as they are, touching nothing.
+        let mut n = 0;
+        for c in repo.index()?.conflicts()? {
+            c?;
+            n += 1;
+        }
+        return Ok(n);
+    }
     let files = list_conflicts(repo)?;
     if files.is_empty() {
         return Ok(0);
@@ -88,6 +103,10 @@ pub struct ManualResolver;
 impl ConflictResolver for ManualResolver {
     fn choose(&self, _: &ConflictContext, _: &[ConflictFile]) -> Result<Resolution> {
         Ok(Resolution::Manual)
+    }
+
+    fn is_manual(&self) -> bool {
+        true
     }
 }
 
@@ -257,18 +276,28 @@ fn plan_one(
 }
 
 /// git2 0.19 cannot set GIT_CHECKOUT_DISABLE_PATHSPEC_MATCH, so checkout paths
-/// are matched as globs. Escape glob metacharacters (and a leading `!`) so a
-/// conflicted name like `a[1].txt` selects only itself.
-fn escape_pathspec(rel: &Path) -> String {
+/// are parsed by libgit2 as attr-style globs. Escape everything that parser
+/// treats specially so a conflicted name selects only itself: glob
+/// metacharacters, a leading `!` (negation) or `#` (comment), and blanks
+/// (trailing ones are trimmed otherwise). Newline-like characters cannot be
+/// escaped (they truncate the pattern), so such names are refused.
+fn escape_pathspec(rel: &Path) -> Result<String> {
     let s = rel.to_string_lossy();
     let mut out = String::with_capacity(s.len() + 2);
     for (i, ch) in s.chars().enumerate() {
-        if matches!(ch, '\\' | '*' | '?' | '[') || (i == 0 && ch == '!') {
+        if matches!(ch, '\n' | '\r' | '\x0b' | '\x0c') {
+            anyhow::bail!(
+                "cannot safely check out {:?}: name contains a line-break character",
+                s
+            );
+        }
+        if matches!(ch, '\\' | '*' | '?' | '[' | ' ' | '\t') || (i == 0 && matches!(ch, '!' | '#'))
+        {
             out.push('\\');
         }
         out.push(ch);
     }
-    out
+    Ok(out)
 }
 
 /// Apply `res`; returns how many files are still conflicted.
@@ -301,6 +330,13 @@ pub fn resolve_files(repo: &Repository, op: OpKind, res: &Resolution) -> Result<
     }
     if plans.is_empty() {
         return Ok(conflicts.len());
+    }
+
+    // Validate every checkout path before anything is modified.
+    for (rel, plan) in &plans {
+        if matches!(plan, Plan::Entry(..)) {
+            escape_pathspec(rel)?;
+        }
     }
 
     let edit = |index: &mut git2::Index| -> Result<()> {
@@ -343,7 +379,7 @@ pub fn resolve_files(repo: &Repository, op: OpKind, res: &Resolution) -> Result<
                 if std::fs::symlink_metadata(&full).is_ok_and(|m| m.file_type().is_symlink()) {
                     std::fs::remove_file(&full)?;
                 }
-                cb.path(escape_pathspec(rel));
+                cb.path(escape_pathspec(rel)?);
                 any = true;
             }
         }
@@ -820,5 +856,57 @@ mod tests {
         );
         assert_eq!(read(&dir, "a[1].txt"), "t\n");
         assert_eq!(read(&dir, "a1.txt"), "dirty\n");
+    }
+
+    /// Resolve a conflict on `name` while `neighbour` is dirty; the neighbour
+    /// must survive and the conflicted file must take the remote content.
+    fn neighbour_survives(name: &str, neighbour: &str) {
+        let (dir, repo) = conflicted_with(|d, i| {
+            write(d, neighbour, b"same\n");
+            let body: &[u8] = [&b"x\n"[..], b"o\n", b"t\n"][i];
+            write(d, name, body);
+        });
+        write(&dir, neighbour, b"dirty\n");
+        assert_eq!(
+            resolve_files(&repo, OpKind::Merge, &Resolution::All(Side::Remote)).unwrap(),
+            0,
+            "{name:?}"
+        );
+        assert_eq!(read(&dir, name), "t\n", "{name:?}");
+        assert_eq!(read(&dir, neighbour), "dirty\n", "{name:?}");
+    }
+
+    #[test]
+    fn leading_hash_name_does_not_widen_checkout() {
+        neighbour_survives("#a.txt", "other.txt");
+    }
+
+    #[test]
+    fn trailing_space_name_does_not_touch_trimmed_name() {
+        neighbour_survives("a.txt ", "a.txt");
+    }
+
+    #[test]
+    fn leading_bang_name_does_not_touch_others() {
+        neighbour_survives("!a.txt", "a.txt");
+    }
+
+    #[test]
+    fn tab_and_space_inside_name_are_literal() {
+        neighbour_survives("a b\tc.txt", "a");
+    }
+
+    #[test]
+    fn newline_name_is_refused_before_touching_anything() {
+        let (dir, repo) = conflicted_with(|d, i| {
+            let body: &[u8] = [&b"x\n"[..], b"o\n", b"t\n"][i];
+            write(d, "a.txt", body);
+            write(d, "b\nc.txt", body);
+        });
+        let before = read(&dir, "a.txt");
+        assert!(resolve_files(&repo, OpKind::Merge, &Resolution::All(Side::Remote)).is_err());
+        assert_eq!(read(&dir, "a.txt"), before);
+        let fresh = git2::Repository::open(dir.path()).unwrap();
+        assert_eq!(list_conflicts(&fresh).unwrap().len(), 2);
     }
 }

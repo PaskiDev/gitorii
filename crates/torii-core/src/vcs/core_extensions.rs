@@ -1537,9 +1537,14 @@ impl GitRepo {
                     return Ok(IntegrateOutcome::Conflicts(left));
                 }
             }
-            rebase
-                .commit(None, &sig, None)
-                .map_err(crate::error::ToriiError::Git)?;
+            // A replayed commit whose tree equals its parent (e.g. the remote
+            // side won every conflict) is reported as Applied: drop it, as
+            // git does, and go on.
+            match rebase.commit(None, &sig, None) {
+                Ok(_) => {}
+                Err(e) if e.code() == git2::ErrorCode::Applied => {}
+                Err(e) => return Err(crate::error::ToriiError::Git(e)),
+            }
         }
 
         rebase
@@ -2815,5 +2820,78 @@ mod conflict_resolver_tests {
         assert_eq!(head.message(), Some("mine 2"));
         assert_eq!(head.parent(0).unwrap().message(), Some("mine 1"));
         assert_eq!(head.parent(0).unwrap().parent(0).unwrap().id(), up);
+    }
+
+    struct Recording(std::cell::RefCell<Vec<(OpKind, String, String)>>, Side);
+
+    impl ConflictResolver for Recording {
+        fn choose(
+            &self,
+            ctx: &ConflictContext,
+            _: &[crate::vcs::conflict::ConflictFile],
+        ) -> anyhow::Result<crate::vcs::conflict::Resolution> {
+            self.0
+                .borrow_mut()
+                .push((ctx.op, ctx.local_label.clone(), ctx.remote_label.clone()));
+            Ok(crate::vcs::conflict::Resolution::All(self.1))
+        }
+    }
+
+    /// upstream and own branch (2 commits) clash in a.txt and b.txt respectively.
+    fn rebase_repo() -> (TempDir, git2::Oid, git2::Oid, git2::Oid) {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let base = commit_all(
+            &dir,
+            &repo,
+            &[("a.txt", "base\n"), ("b.txt", "base\n")],
+            "base",
+            &[],
+        );
+        let up = commit_all(
+            &dir,
+            &repo,
+            &[("a.txt", "up-a\n"), ("b.txt", "up-b\n")],
+            "upstream",
+            &[base],
+        );
+        repo.branch("upstream", &repo.find_commit(up).unwrap(), true)
+            .unwrap();
+        reset_hard(&repo, base);
+        let m1 = commit_all(&dir, &repo, &[("a.txt", "mine-a\n")], "mine 1", &[base]);
+        let m2 = commit_all(&dir, &repo, &[("b.txt", "mine-b\n")], "mine 2", &[m1]);
+        (dir, up, m1, m2)
+    }
+
+    #[test]
+    fn rebase_resolver_is_asked_at_each_stop_with_own_context() {
+        let (dir, _up, m1, m2) = rebase_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let rec = Recording(Default::default(), Side::Local);
+        assert_eq!(
+            gr.rebase_branch_with("upstream", &rec).unwrap(),
+            IntegrateOutcome::Done
+        );
+        let calls = rec.0.borrow();
+        assert_eq!(calls.len(), 2);
+        for (call, id) in calls.iter().zip([m1, m2]) {
+            assert_eq!(call.0, OpKind::Rebase);
+            assert!(call.1.starts_with(&id.to_string()[..7]), "{}", call.1);
+            assert_eq!(call.2, "upstream");
+        }
+    }
+
+    #[test]
+    fn rebase_with_remote_resolver_drops_emptied_commits() {
+        let (dir, up, _m1, _m2) = rebase_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let out = gr
+            .rebase_branch_with("upstream", &FixedResolver(Side::Remote))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), up);
+        assert_eq!(read(&dir, "a.txt"), "up-a\n");
+        assert_eq!(read(&dir, "b.txt"), "up-b\n");
     }
 }
