@@ -439,7 +439,7 @@ pub(crate) fn run(action: &HistoryCommands) -> Result<()> {
             remote,
         } => {
             if *r#continue {
-                repo.rebase_continue()?;
+                repo.rebase_continue_with(&TerminalResolver { forced: None })?;
             } else if *abort {
                 repo.rebase_abort()?;
             } else if *skip {

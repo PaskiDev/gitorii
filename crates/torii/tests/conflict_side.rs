@@ -88,9 +88,10 @@ fn cherry_pick_with_local_flag_keeps_head_content() {
     let repo = git2::Repository::open(fx.dir.path()).unwrap();
     assert_eq!(repo.state(), git2::RepositoryState::Clean);
     assert!(!repo.path().join("CHERRY_PICK_HEAD").exists());
+    // Local wins everything: the pick is empty, so no commit is created.
     let head = repo.head().unwrap().peel_to_commit().unwrap();
-    assert_eq!(head.parent_count(), 1);
-    assert_eq!(head.parent_id(0).unwrap(), before);
+    assert_eq!(head.id(), before);
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(stdout.matches('✅').count(), 1, "{stdout}");
+    assert!(stdout.contains("Nothing to apply"), "{stdout}");
+    assert_eq!(stdout.matches('✅').count(), 0, "{stdout}");
 }

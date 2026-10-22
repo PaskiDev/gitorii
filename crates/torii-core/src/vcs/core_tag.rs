@@ -97,7 +97,7 @@ impl GitRepo {
         self.repo.cherrypick(&commit, None)?;
 
         // Check for conflicts
-        let mut index = self.repo.index()?;
+        let index = self.repo.index()?;
         if index.has_conflicts() {
             let id = commit.id().to_string();
             let ctx = ConflictContext {
@@ -120,23 +120,27 @@ impl GitRepo {
                 println!("💡 Resolve conflicts and run: torii cherry-pick --continue");
                 return Ok(IntegrateOutcome::Conflicts(left));
             }
-            index = self.repo.index()?;
         }
 
-        // Create commit
+        self.finish_cherry_pick(commit.message().unwrap_or("Cherry-picked commit"))
+    }
+
+    /// Commit the index as a cherry-pick (message of the picked commit) and
+    /// clear the pick state; skip the commit when it would change nothing.
+    fn finish_cherry_pick(&self, message: &str) -> Result<IntegrateOutcome> {
+        let mut index = self.repo.index()?;
         let sig = crate::core::resolve_signature(&self.repo)?;
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let head = self.repo.head()?.peel_to_commit()?;
 
-        crate::core::commit_inner(
-            &self.repo,
-            Some("HEAD"),
-            &sig,
-            commit.message().unwrap_or("Cherry-picked commit"),
-            &tree,
-            &[&head],
-        )?;
+        if tree.id() == head.tree_id() {
+            self.repo.cleanup_state()?;
+            println!("ℹ️  Nothing to apply: the cherry-picked changes are already in HEAD");
+            return Ok(IntegrateOutcome::Done);
+        }
+
+        crate::core::commit_inner(&self.repo, Some("HEAD"), &sig, message, &tree, &[&head])?;
         // Leave no CHERRY_PICK_HEAD behind once the commit exists.
         self.repo.cleanup_state()?;
 
@@ -149,23 +153,21 @@ impl GitRepo {
     pub fn cherry_pick_continue(&self) -> Result<()> {
         println!("🔄 Continuing cherry-pick...");
 
-        let sig = crate::core::resolve_signature(&self.repo)?;
-        let mut index = self.repo.index()?;
-        let tree_oid = index.write_tree()?;
-        let tree = self.repo.find_tree(tree_oid)?;
-        let head = self.repo.head()?.peel_to_commit()?;
+        if self.repo.index()?.has_conflicts() {
+            anyhow::bail!(
+                "Unresolved conflicts remain. Resolve them and stage the files, then run: torii cherry-pick --continue"
+            );
+        }
 
-        crate::core::commit_inner(
-            &self.repo,
-            Some("HEAD"),
-            &sig,
-            "Cherry-picked commit",
-            &tree,
-            &[&head],
-        )?;
+        // The picked commit's message, as `cherry_pick_with` would use.
+        let message = std::fs::read_to_string(self.repo.path().join("CHERRY_PICK_HEAD"))
+            .ok()
+            .and_then(|s| git2::Oid::from_str(s.trim()).ok())
+            .and_then(|oid| self.repo.find_commit(oid).ok())
+            .and_then(|c| c.message().map(|m| m.to_string()))
+            .unwrap_or_else(|| "Cherry-picked commit".to_string());
 
-        println!("✅ Cherry-pick complete");
-
+        self.finish_cherry_pick(&message)?;
         Ok(())
     }
 
@@ -231,7 +233,7 @@ impl GitRepo {
 #[cfg(test)]
 mod cherry_pick_resolver_tests {
     use super::*;
-    use crate::vcs::conflict::{FixedResolver, IntegrateOutcome, Side};
+    use crate::vcs::conflict::{FixedResolver, IntegrateOutcome, ManualResolver, Side};
     use tempfile::TempDir;
 
     #[test]
@@ -277,6 +279,94 @@ mod cherry_pick_resolver_tests {
         assert_eq!(head.parent_count(), 1);
         assert_eq!(head.parent(0).unwrap().id(), ours);
         assert_eq!(head.message(), Some("picked"));
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    /// HEAD ("ours") and the picked commit clash on f.txt.
+    fn pick_repo() -> (TempDir, git2::Oid, git2::Oid) {
+        let dir = TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let s = git2::Signature::now("t", "t@example.com").unwrap();
+        let commit = |content: &str, msg: &str, parents: &[git2::Oid]| {
+            std::fs::write(dir.path().join("f.txt"), content).unwrap();
+            let mut idx = repo.index().unwrap();
+            idx.add_path(std::path::Path::new("f.txt")).unwrap();
+            idx.write().unwrap();
+            let tree = repo.find_tree(idx.write_tree().unwrap()).unwrap();
+            let pcs: Vec<git2::Commit> = parents
+                .iter()
+                .map(|&o| repo.find_commit(o).unwrap())
+                .collect();
+            let prefs: Vec<&git2::Commit> = pcs.iter().collect();
+            repo.commit(Some("HEAD"), &s, &s, msg, &tree, &prefs)
+                .unwrap()
+        };
+        let base = commit("base\n", "base", &[]);
+        let picked = commit("picked\n", "picked: original message", &[base]);
+        repo.reset(
+            repo.find_commit(base).unwrap().as_object(),
+            git2::ResetType::Hard,
+            None,
+        )
+        .unwrap();
+        let ours = commit("ours\n", "ours", &[base]);
+        (dir, picked, ours)
+    }
+
+    #[test]
+    fn cherry_pick_continue_uses_original_message_and_cleans_state() {
+        let (dir, picked, ours) = pick_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let out = gr
+            .cherry_pick_with(&picked.to_string(), &ManualResolver)
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Conflicts(1));
+        std::fs::write(dir.path().join("f.txt"), "merged\n").unwrap();
+        let mut idx = gr.repo.index().unwrap();
+        idx.add_path(std::path::Path::new("f.txt")).unwrap();
+        idx.write().unwrap();
+
+        gr.cherry_pick_continue().unwrap();
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.message(), Some("picked: original message"));
+        assert_eq!(head.parent(0).unwrap().id(), ours);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn cherry_pick_continue_refuses_unresolved_conflicts() {
+        let (dir, picked, ours) = pick_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.cherry_pick_with(&picked.to_string(), &ManualResolver)
+            .unwrap();
+        assert!(gr.cherry_pick_continue().is_err());
+        assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), ours);
+    }
+
+    #[test]
+    fn cherry_pick_skips_commit_when_nothing_to_apply() {
+        let (dir, picked, ours) = pick_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        let out = gr
+            .cherry_pick_with(&picked.to_string(), &FixedResolver(Side::Local))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), ours);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn cherry_pick_continue_skips_empty_result() {
+        let (dir, picked, ours) = pick_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.cherry_pick_with(&picked.to_string(), &ManualResolver)
+            .unwrap();
+        std::fs::write(dir.path().join("f.txt"), "ours\n").unwrap();
+        let mut idx = gr.repo.index().unwrap();
+        idx.add_path(std::path::Path::new("f.txt")).unwrap();
+        idx.write().unwrap();
+        gr.cherry_pick_continue().unwrap();
+        assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), ours);
         assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
     }
 }

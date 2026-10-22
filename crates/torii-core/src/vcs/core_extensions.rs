@@ -440,30 +440,60 @@ impl GitRepo {
 
     /// Continue an in-progress rebase
     pub fn rebase_continue(&self) -> Result<()> {
+        self.rebase_continue_with(&ManualResolver)?;
+        Ok(())
+    }
+
+    /// Like [`rebase_continue`](Self::rebase_continue), but asks `r` at the
+    /// current stop (if still conflicted) and at every later conflicted stop.
+    pub fn rebase_continue_with(&self, r: &dyn ConflictResolver) -> Result<IntegrateOutcome> {
         // Two rebase formats coexist:
         //   - libgit2-initiated rebases → use Repository::open_rebase
         //   - `git rebase -i` (CLI, used for interactive/edit/reword) → not
         //     openable via libgit2; delegate to `git rebase --continue`
-        if self.has_cli_rebase_in_progress() {
-            return self.delegate_rebase_subcommand("--continue", "continued");
-        }
-        let mut rebase = self.repo.open_rebase(None).map_err(|_| {
-            crate::error::ToriiError::RepoState("No rebase in progress".to_string())
-        })?;
+        // libgit2 also keeps its state in `rebase-merge/`, so only delegate
+        // when it cannot open the rebase itself (or git marked it interactive).
+        let git_dir = self.repo.path();
+        let looks_cli = git_dir.join("rebase-apply").exists()
+            || git_dir.join("rebase-merge/interactive").exists();
+        let opened = if looks_cli {
+            None
+        } else {
+            self.repo.open_rebase(None).ok()
+        };
+        let mut rebase = match opened {
+            Some(rb) => rb,
+            None if self.has_cli_rebase_in_progress() => {
+                self.delegate_rebase_subcommand("--continue", "continued")?;
+                return Ok(IntegrateOutcome::Done);
+            }
+            None => {
+                return Err(crate::error::ToriiError::RepoState(
+                    "No rebase in progress".to_string(),
+                ))
+            }
+        };
 
         let sig = crate::core::resolve_signature(&self.repo)?;
+        let remote_label = std::fs::read_to_string(self.repo.path().join("rebase-merge/onto_name"))
+            .map(|s| s.trim().to_string())
+            .ok()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "upstream".to_string());
 
-        // Commit the currently resolved step
-        rebase
-            .commit(None, &sig, None)
-            .map_err(crate::error::ToriiError::Git)?;
+        // Current step: resolved by hand, or still conflicted.
+        if let Some(cur) = rebase.operation_current() {
+            if let Some(op_id) = rebase.nth(cur).map(|o| o.id()) {
+                if let Some(out) =
+                    self.rebase_commit_step(&mut rebase, op_id, &sig, &remote_label, r)?
+                {
+                    return Ok(out);
+                }
+            }
+        }
 
-        // Apply remaining steps
-        while let Some(op) = rebase.next() {
-            let _op = op.map_err(crate::error::ToriiError::Git)?;
-            rebase
-                .commit(None, &sig, None)
-                .map_err(crate::error::ToriiError::Git)?;
+        if let Some(out) = self.rebase_run_remaining(&mut rebase, &sig, &remote_label, r)? {
+            return Ok(out);
         }
 
         rebase
@@ -471,7 +501,72 @@ impl GitRepo {
             .map_err(crate::error::ToriiError::Git)?;
 
         println!("✅ Rebase continued");
-        Ok(())
+        Ok(IntegrateOutcome::Done)
+    }
+
+    /// Handle one rebase stop: ask `r` if the index is conflicted, then
+    /// commit. `Some(Conflicts)` means stop; `None` means carry on.
+    fn rebase_commit_step(
+        &self,
+        rebase: &mut git2::Rebase<'_>,
+        op_id: git2::Oid,
+        sig: &git2::Signature<'_>,
+        remote_label: &str,
+        r: &dyn ConflictResolver,
+    ) -> Result<Option<IntegrateOutcome>> {
+        let index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
+        if index.has_conflicts() {
+            let label = self
+                .repo
+                .find_commit(op_id)
+                .map(|c| {
+                    let id = c.id().to_string();
+                    format!("{} {}", &id[..7], c.summary().unwrap_or(""))
+                })
+                .unwrap_or_else(|_| op_id.to_string());
+            let ctx = ConflictContext {
+                op: OpKind::Rebase,
+                local_label: label,
+                remote_label: remote_label.to_string(),
+            };
+            let left = match resolve_with(&self.repo, &ctx, r) {
+                Ok(n) => n,
+                Err(e) => {
+                    println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
+                    return Err(e.into());
+                }
+            };
+            if left > 0 {
+                println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
+                return Ok(Some(IntegrateOutcome::Conflicts(left)));
+            }
+        }
+        // A replayed commit whose tree equals its parent (e.g. the remote
+        // side won every conflict) is reported as Applied: drop it, as
+        // git does, and go on.
+        match rebase.commit(None, sig, None) {
+            Ok(_) => {}
+            Err(e) if e.code() == git2::ErrorCode::Applied => {}
+            Err(e) => return Err(crate::error::ToriiError::Git(e)),
+        }
+        Ok(None)
+    }
+
+    /// Replay the remaining operations; stops early on unresolved conflicts.
+    fn rebase_run_remaining(
+        &self,
+        rebase: &mut git2::Rebase<'_>,
+        sig: &git2::Signature<'_>,
+        remote_label: &str,
+        r: &dyn ConflictResolver,
+    ) -> Result<Option<IntegrateOutcome>> {
+        while let Some(op) = rebase.next() {
+            let op = op.map_err(crate::error::ToriiError::Git)?;
+            if let Some(out) = self.rebase_commit_step(rebase, op.id(), sig, remote_label, r)? {
+                return Ok(Some(out));
+            }
+        }
+        Ok(None)
     }
 
     /// Abort the current rebase
@@ -1522,43 +1617,8 @@ impl GitRepo {
 
         let sig = crate::core::resolve_signature(&self.repo)?;
 
-        while let Some(op) = rebase.next() {
-            let op = op.map_err(crate::error::ToriiError::Git)?;
-            let index = self.repo.index().map_err(crate::error::ToriiError::Git)?;
-            if index.has_conflicts() {
-                let label = self
-                    .repo
-                    .find_commit(op.id())
-                    .map(|c| {
-                        let id = c.id().to_string();
-                        format!("{} {}", &id[..7], c.summary().unwrap_or(""))
-                    })
-                    .unwrap_or_else(|_| op.id().to_string());
-                let ctx = ConflictContext {
-                    op: OpKind::Rebase,
-                    local_label: label,
-                    remote_label: branch_name.to_string(),
-                };
-                let left = match resolve_with(&self.repo, &ctx, r) {
-                    Ok(n) => n,
-                    Err(e) => {
-                        println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
-                        return Err(e.into());
-                    }
-                };
-                if left > 0 {
-                    println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
-                    return Ok(IntegrateOutcome::Conflicts(left));
-                }
-            }
-            // A replayed commit whose tree equals its parent (e.g. the remote
-            // side won every conflict) is reported as Applied: drop it, as
-            // git does, and go on.
-            match rebase.commit(None, &sig, None) {
-                Ok(_) => {}
-                Err(e) if e.code() == git2::ErrorCode::Applied => {}
-                Err(e) => return Err(crate::error::ToriiError::Git(e)),
-            }
+        if let Some(out) = self.rebase_run_remaining(&mut rebase, &sig, branch_name, r)? {
+            return Ok(out);
         }
 
         rebase
@@ -2907,5 +2967,62 @@ mod conflict_resolver_tests {
         assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), up);
         assert_eq!(read(&dir, "a.txt"), "up-a\n");
         assert_eq!(read(&dir, "b.txt"), "up-b\n");
+    }
+
+    fn resolve_by_hand(dir: &TempDir, gr: &GitRepo, name: &str, content: &str) {
+        std::fs::write(dir.path().join(name), content).unwrap();
+        let mut idx = gr.repo.index().unwrap();
+        idx.add_path(std::path::Path::new(name)).unwrap();
+        idx.write().unwrap();
+    }
+
+    #[test]
+    fn rebase_continue_with_asks_at_later_stops() {
+        let (dir, up, _m1, _m2) = rebase_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        assert_eq!(
+            gr.rebase_branch_with("upstream", &ManualResolver).unwrap(),
+            IntegrateOutcome::Conflicts(1)
+        );
+        resolve_by_hand(&dir, &gr, "a.txt", "mine-a\n");
+        let out = gr
+            .rebase_continue_with(&FixedResolver(Side::Local))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(read(&dir, "a.txt"), "mine-a\n");
+        assert_eq!(read(&dir, "b.txt"), "mine-b\n");
+        let head = gr.repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.message(), Some("mine 2"));
+        assert_eq!(head.parent(0).unwrap().message(), Some("mine 1"));
+        assert_eq!(head.parent(0).unwrap().parent(0).unwrap().id(), up);
+    }
+
+    #[test]
+    fn rebase_continue_with_manual_stops_at_later_conflict() {
+        let (dir, _up, _m1, _m2) = rebase_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.rebase_branch_with("upstream", &ManualResolver).unwrap();
+        resolve_by_hand(&dir, &gr, "a.txt", "mine-a\n");
+        assert_eq!(
+            gr.rebase_continue_with(&ManualResolver).unwrap(),
+            IntegrateOutcome::Conflicts(1)
+        );
+        assert_ne!(gr.repo.state(), git2::RepositoryState::Clean);
+    }
+
+    #[test]
+    fn rebase_continue_drops_commit_that_became_empty() {
+        let (dir, up, _m1, _m2) = rebase_repo();
+        let gr = GitRepo::open(dir.path()).unwrap();
+        gr.rebase_branch_with("upstream", &ManualResolver).unwrap();
+        // Resolve to upstream's content: the commit turns empty.
+        resolve_by_hand(&dir, &gr, "a.txt", "up-a\n");
+        let out = gr
+            .rebase_continue_with(&FixedResolver(Side::Remote))
+            .unwrap();
+        assert_eq!(out, IntegrateOutcome::Done);
+        assert_eq!(gr.repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(gr.repo.head().unwrap().peel_to_commit().unwrap().id(), up);
     }
 }
