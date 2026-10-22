@@ -36,7 +36,8 @@ pub fn restore(repo_path: &Path, paths: &[PathBuf], opts: &Opts) -> Result<()> {
             "`restore` needs at least one path".into(),
         ));
     }
-    let repo = Repository::open(repo_path).map_err(ToriiError::Git)?;
+    // `discover`, not `open`: torii may run from a subdirectory.
+    let repo = Repository::discover(repo_path).map_err(ToriiError::Git)?;
     if repo.workdir().is_none() {
         return Err(ToriiError::RepoState("bare repo".into()));
     }

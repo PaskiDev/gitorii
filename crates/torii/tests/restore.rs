@@ -116,6 +116,21 @@ fn the_snapshot_does_not_copy_the_repo() {
 }
 
 #[test]
+fn restore_works_from_a_subdirectory() {
+    let tmp = repo_with_a_commit();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/a.txt"), "one\n").unwrap();
+    assert!(torii(tmp.path(), &["save", "-am", "add src"])
+        .status
+        .success());
+    std::fs::write(tmp.path().join("src/a.txt"), "edited\n").unwrap();
+
+    let out = torii(&tmp.path().join("src"), &["restore", "a.txt"]);
+    assert!(out.status.success(), "restore failed: {out:?}");
+    assert_eq!(read(&tmp, "src/a.txt"), "one\n");
+}
+
+#[test]
 fn no_snapshot_skips_the_safety_net() {
     let tmp = repo_with_a_commit();
     std::fs::write(tmp.path().join("note.txt"), "throwaway\n").unwrap();
