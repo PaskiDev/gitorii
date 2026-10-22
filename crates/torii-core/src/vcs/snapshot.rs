@@ -995,6 +995,9 @@ mod snapshot_location_tests {
         let repo_path = tmp.path();
         init_repo(repo_path);
         let mgr = SnapshotManager::new(repo_path).unwrap();
+        // Disabled here, explicitly: the global config of the machine
+        // running the tests may enable it.
+        mgr.configure_auto_snapshot(false, None).unwrap();
         assert!(mgr.maybe_auto("pre-fast-forward").unwrap().is_none());
         assert!(fs::read_dir(repo_path.join(".git/torii/snapshots"))
             .unwrap()
