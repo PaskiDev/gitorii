@@ -350,29 +350,29 @@ fn render_header(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_repo_picker(f: &mut Frame, app: &App, header_area: Rect) {
-    let bc = app.brand_color();
     let paths = app.workspace_repo_paths();
     if paths.is_empty() {
         return;
     }
 
+    let name_of = |p: &String| {
+        std::path::Path::new(p)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| p.clone())
+    };
+    // caret + name + "  current" + the box's two borders and padding.
     let dropdown_w: u16 = paths
         .iter()
-        .map(|p| {
-            std::path::Path::new(p)
-                .file_name()
-                .map(|n| n.to_string_lossy().len())
-                .unwrap_or(p.len())
-                + 4
-        })
+        .map(|p| name_of(p).chars().count() + 15)
         .max()
         .unwrap_or(20)
-        .min(40) as u16;
+        .min(48) as u16;
     let dropdown_h = paths.len() as u16 + 2;
 
-    // Position: just below "⛩  gitorii  /  " prefix (~18 chars + 1 border + 1 space)
-    let x = header_area.x + 18;
-    let y = header_area.y + header_area.height; // just below header
+    // Under the repository name in the chrome bar, which starts after " ⛩ ".
+    let x = header_area.x + 2;
+    let y = header_area.y + header_area.height;
     let drop_area = Rect::new(x, y, dropdown_w, dropdown_h.min(header_area.height + 10));
 
     let current = std::fs::canonicalize(&app.repo_path).ok();
@@ -380,52 +380,50 @@ fn render_repo_picker(f: &mut Frame, app: &App, header_area: Rect) {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let name = std::path::Path::new(p)
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.clone());
             let is_current = std::fs::canonicalize(p).ok() == current;
             let is_sel = i == app.repo_picker_idx;
-            let color = if is_sel {
-                theme::INK
-            } else if is_current {
-                theme::OK
-            } else {
-                theme::INK_FAINT
-            };
-            let prefix = if is_sel {
-                "▶ "
-            } else if is_current {
-                "✓ "
-            } else {
-                "  "
-            };
-            let style = if is_sel {
+            let mut spans = vec![
+                theme::caret(app, is_sel),
+                Span::styled(
+                    name_of(p),
+                    Style::default().fg(if is_current && !is_sel {
+                        theme::OK
+                    } else if is_sel {
+                        theme::INK
+                    } else {
+                        theme::INK_DIM
+                    }),
+                ),
+            ];
+            if is_current {
+                spans.push(Span::styled(
+                    "  current",
+                    Style::default().fg(theme::INK_FAINT),
+                ));
+            }
+            ListItem::new(Line::from(spans)).style(if is_sel {
                 Style::default()
-                    .bg(app.selected_bg())
+                    .bg(theme::selection(app))
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
-            };
-            ListItem::new(Line::from(vec![
-                Span::styled(prefix, Style::default().fg(bc)),
-                Span::styled(name, Style::default().fg(color)),
-            ]))
-            .style(style)
+            })
         })
         .collect();
 
     let mut state = ratatui::widgets::ListState::default();
     state.select(Some(app.repo_picker_idx));
 
+    // A popup is a window, so it keeps its box — in the rule colour, like the
+    // palette's.
     let block = Block::default()
         .title(Span::styled(
             " switch repo ",
-            Style::default().fg(bc).add_modifier(Modifier::BOLD),
+            Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
         ))
         .borders(Borders::ALL)
         .border_type(app.border_type())
-        .border_style(Style::default().fg(bc));
+        .border_style(Style::default().fg(theme::RULE));
 
     let drop_area = theme::clear(f, drop_area);
     f.render_stateful_widget(List::new(items).block(block), drop_area, &mut state);

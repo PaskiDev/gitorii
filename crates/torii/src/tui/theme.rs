@@ -15,11 +15,11 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, Borders},
+    widgets::{Block, BorderType, Borders},
     Frame,
 };
 
-use super::app::App;
+use super::app::{App, BorderStyle, TuiSettings};
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 //
@@ -64,6 +64,13 @@ pub fn accent(app: &App) -> Color {
     app.brand_color()
 }
 
+/// The accent straight from the settings file, for screens drawn before there
+/// is an [`App`] — the repository picker that runs ahead of the TUI.
+pub fn accent_of(settings: &TuiSettings) -> Color {
+    let (r, g, b) = settings.brand_color;
+    Color::Rgb(r, g, b)
+}
+
 /// The selected row's background.
 ///
 /// The site paints it with `--accent-soft`, the accent at low alpha. A
@@ -74,10 +81,16 @@ pub fn accent(app: &App) -> Color {
 /// A `selected_bg` written in the settings file still wins — someone who
 /// picked their own colour keeps it.
 pub fn selection(app: &App) -> Color {
-    if app.settings.selected_bg_explicit {
-        return app.selected_bg();
+    selection_of(&app.settings)
+}
+
+/// [`selection`] for a screen with settings but no [`App`].
+pub fn selection_of(settings: &TuiSettings) -> Color {
+    if settings.selected_bg_explicit {
+        let (r, g, b) = settings.selected_bg;
+        return Color::Rgb(r, g, b);
     }
-    wash(accent(app))
+    wash(accent_of(settings))
 }
 
 /// Mix a colour down towards black, to roughly the weight `--accent-soft`
@@ -100,9 +113,19 @@ fn wash(color: Color) -> Color {
 
 /// The one border on screen: the window itself.
 pub fn frame(app: &App) -> Block<'static> {
+    frame_of(&app.settings)
+}
+
+/// [`frame`] for a screen with settings but no [`App`].
+pub fn frame_of(settings: &TuiSettings) -> Block<'static> {
+    let border_type = if settings.border_style == BorderStyle::Rounded {
+        BorderType::Rounded
+    } else {
+        BorderType::Plain
+    };
     Block::default()
         .borders(Borders::ALL)
-        .border_type(app.border_type())
+        .border_type(border_type)
         .border_style(Style::default().fg(RULE))
 }
 
@@ -293,8 +316,13 @@ pub fn panel_title(label: &str, count: Option<usize>, active: bool) -> Vec<Span<
 /// The selection marker. The site uses `›`; a block or a filled triangle reads
 /// as a cursor from a different program.
 pub fn caret(app: &App, selected: bool) -> Span<'static> {
+    caret_in(accent(app), selected)
+}
+
+/// [`caret`] in a given accent.
+pub fn caret_in(accent: Color, selected: bool) -> Span<'static> {
     if selected {
-        Span::styled("› ", Style::default().fg(accent(app)))
+        Span::styled("› ", Style::default().fg(accent))
     } else {
         Span::raw("  ")
     }
@@ -302,9 +330,14 @@ pub fn caret(app: &App, selected: bool) -> Span<'static> {
 
 /// Row style for a list entry.
 pub fn row_style(app: &App, selected: bool) -> Style {
+    row_style_in(selection(app), selected)
+}
+
+/// [`row_style`] on a given selection colour.
+pub fn row_style_in(selection: Color, selected: bool) -> Style {
     if selected {
         Style::default()
-            .bg(selection(app))
+            .bg(selection)
             .fg(INK)
             .add_modifier(Modifier::BOLD)
     } else {
@@ -315,8 +348,13 @@ pub fn row_style(app: &App, selected: bool) -> Style {
 /// One key hint, as the foot of the site's window sets them: the key in the
 /// accent, the verb in faint ink, two spaces between pairs.
 pub fn key_hint(app: &App, key: &str, label: &str) -> [Span<'static>; 2] {
+    key_hint_in(accent(app), key, label)
+}
+
+/// [`key_hint`] in a given accent.
+pub fn key_hint_in(accent: Color, key: &str, label: &str) -> [Span<'static>; 2] {
     [
-        Span::styled(key.to_string(), Style::default().fg(accent(app))),
+        Span::styled(key.to_string(), Style::default().fg(accent)),
         Span::styled(format!("  {}  ", label), Style::default().fg(INK_FAINT)),
     ]
 }

@@ -6,25 +6,17 @@ use crossterm::{
 use dirs;
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph, Tabs},
     Terminal,
 };
 use std::io;
 use std::path::{Path, PathBuf};
 
-const BRAND_COLOR: Color = Color::Rgb(255, 76, 76);
-const SELECTED_BG: Color = Color::Rgb(40, 40, 60);
-const C_WHITE: Color = Color::Rgb(220, 220, 220);
-const C_SUBTLE: Color = Color::Rgb(140, 140, 160);
-const C_DIM: Color = Color::Rgb(80, 80, 100);
-const C_GREEN: Color = Color::Rgb(100, 220, 100);
-#[allow(dead_code)]
-const C_YELLOW: Color = Color::Rgb(255, 210, 80);
-#[allow(dead_code)]
-const C_BORDER: Color = Color::Rgb(60, 60, 80);
+use crate::tui::app::TuiSettings;
+use crate::tui::theme;
 
 pub enum PickerResult {
     SingleRepo(PathBuf),
@@ -86,26 +78,12 @@ fn load_saved_workspaces() -> Vec<SavedWorkspace> {
     out
 }
 
-fn load_border_type() -> ratatui::widgets::BorderType {
-    let path = dirs::home_dir()
-        .map(|h| h.join(".torii/tui-settings.toml"))
-        .unwrap_or_default();
-    if let Ok(content) = std::fs::read_to_string(&path) {
-        for line in content.lines() {
-            if let Some((k, v)) = line.split_once('=') {
-                if k.trim() == "border_style" && v.trim().trim_matches('"') == "sharp" {
-                    return ratatui::widgets::BorderType::Plain;
-                }
-            }
-        }
-    }
-    ratatui::widgets::BorderType::Rounded
-}
-
 pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
     let repos = find_git_repos(start_dir, 3);
     let saved_ws = load_saved_workspaces();
-    let border_type = load_border_type();
+    let settings = TuiSettings::load();
+    let accent = theme::accent_of(&settings);
+    let selection = theme::selection_of(&settings);
 
     if repos.is_empty() && saved_ws.is_empty() {
         return Ok(PickerResult::Cancelled);
@@ -138,181 +116,130 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
 
     let result = loop {
         terminal.draw(|f| {
-            let area = f.area();
+            // One window with hairline rules, the chrome the TUI itself draws:
+            // chrome bar | rule | tabs | rule | body | rule | key line
+            let window = theme::frame_of(&settings);
+            let inner = window.inner(f.area());
+            f.render_widget(window, f.area());
 
-            let chunks = Layout::default()
+            let rows = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(3),
-                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                    Constraint::Length(1),
                     Constraint::Min(1),
                     Constraint::Length(1),
+                    Constraint::Length(1),
                 ])
-                .split(area);
+                .split(inner);
+            for rule in [rows[1], rows[3], rows[5]] {
+                theme::hrule(f, rule, &[]);
+            }
 
-            // ── Header ──────────────────────────────────────────────────────────
+            // ── Chrome bar ──────────────────────────────────────────────────────
             {
-                let inner_w = chunks[0].width.saturating_sub(2) as usize;
-                let left_str = "⛩  gitorii";
-                let right_str = "— select repositories";
-                let left_len = left_str.chars().count() + 1;
-                let right_len = right_str.chars().count() + 1;
-                let pad = inner_w.saturating_sub(left_len + right_len);
-                let line = Line::from(vec![
+                let left = vec![
+                    Span::styled("⛩", Style::default().fg(accent)),
                     Span::raw(" "),
                     Span::styled(
-                        left_str,
-                        Style::default()
-                            .fg(BRAND_COLOR)
-                            .add_modifier(Modifier::BOLD),
+                        "gitorii",
+                        Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
                     ),
-                    Span::raw(" ".repeat(pad)),
-                    Span::styled(right_str, Style::default().fg(C_SUBTLE)),
-                    Span::raw(" "),
-                ]);
-                f.render_widget(
-                    Paragraph::new(line).block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .border_type(border_type)
-                            .border_style(Style::default().fg(BRAND_COLOR)),
-                    ),
-                    chunks[0],
-                );
+                    Span::styled("  select repositories", Style::default().fg(theme::INK_DIM)),
+                ];
+                let right = vec![Span::styled(
+                    display_dir(start_dir),
+                    Style::default().fg(theme::INK_FAINT),
+                )];
+                let width = |spans: &[Span]| -> usize {
+                    spans.iter().map(|s| s.content.chars().count()).sum()
+                };
+                let pad = (rows[0].width as usize).saturating_sub(width(&left) + width(&right) + 2);
+                let mut spans = vec![Span::raw(" ")];
+                spans.extend(left);
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.extend(right);
+                spans.push(Span::raw(" "));
+                f.render_widget(Paragraph::new(Line::from(spans)), rows[0]);
             }
 
             // ── Tabs ────────────────────────────────────────────────────────────
-            let tab_repos_active = tab == PickerTab::Repos;
-            let tab_ws_active = tab == PickerTab::Workspaces;
-            let tab_line = Line::from(vec![
-                Span::raw(" "),
-                Span::styled(
-                    "[1] ",
-                    Style::default()
-                        .fg(if tab_repos_active {
-                            C_WHITE
-                        } else {
-                            BRAND_COLOR
-                        })
-                        .add_modifier(if tab_repos_active {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::styled(
-                    format!("repos ({})", repos.len()),
-                    Style::default().fg(if tab_repos_active {
-                        C_WHITE
-                    } else {
-                        BRAND_COLOR
-                    }),
-                ),
-                Span::raw("   "),
-                Span::styled(
-                    "[2] ",
-                    Style::default()
-                        .fg(if tab_ws_active { C_WHITE } else { BRAND_COLOR })
-                        .add_modifier(if tab_ws_active {
-                            Modifier::BOLD
-                        } else {
-                            Modifier::empty()
-                        }),
-                ),
-                Span::styled(
-                    format!("recent workspaces ({})", saved_ws.len()),
-                    Style::default().fg(if tab_ws_active { C_WHITE } else { BRAND_COLOR }),
-                ),
-            ]);
-            f.render_widget(
-                Paragraph::new(tab_line).block(
-                    Block::default()
-                        .borders(Borders::ALL)
-                        .border_type(border_type)
-                        .border_style(Style::default().fg(BRAND_COLOR)),
-                ),
-                chunks[1],
-            );
+            let titles = vec![
+                format!("1 repos ({})", repos.len()),
+                format!("2 recent workspaces ({})", saved_ws.len()),
+            ];
+            let tabs = Tabs::new(titles)
+                .select(if tab == PickerTab::Repos { 0 } else { 1 })
+                .style(Style::default().fg(theme::INK_DIM))
+                .highlight_style(Style::default().fg(theme::INK).add_modifier(Modifier::BOLD))
+                .divider(Span::styled("·", Style::default().fg(theme::RULE)))
+                .padding(" ", " ");
+            f.render_widget(tabs, rows[2]);
 
-            // ── Contenido ───────────────────────────────────────────────────────
+            // ── Body ────────────────────────────────────────────────────────────
+            let body = rows[4];
             match tab {
                 PickerTab::Repos => {
-                    // Sub-layout vertical: lista + nombre ws + (si nombrando)
-                    let sub = Layout::default()
+                    // list | rule | workspace name
+                    let parts = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([Constraint::Min(1), Constraint::Length(3)])
-                        .split(chunks[2]);
+                        .constraints([
+                            Constraint::Min(1),
+                            Constraint::Length(1),
+                            Constraint::Length(1),
+                        ])
+                        .split(body);
+                    theme::hrule(f, parts[1], &[]);
 
+                    let [heading, list_area] = theme::heading_and_body(inset(parts[0]));
                     let n_sel = selected.iter().filter(|&&s| s).count();
+                    let mut heading_spans = vec![Span::raw(" ")];
+                    heading_spans.extend(theme::panel_title(
+                        "repos",
+                        Some(repos.len()),
+                        matches!(mode, PickerMode::Selecting),
+                    ));
+                    if n_sel > 0 {
+                        heading_spans.push(Span::styled(
+                            format!("  {} selected", n_sel),
+                            Style::default().fg(theme::OK),
+                        ));
+                    }
+                    f.render_widget(Paragraph::new(Line::from(heading_spans)), heading);
+
                     let items: Vec<ListItem> = repos
                         .iter()
                         .enumerate()
                         .map(|(i, p)| {
                             let is_cur = i == idx;
                             let is_sel = selected[i];
-                            let style = if is_cur {
-                                Style::default()
-                                    .bg(SELECTED_BG)
-                                    .add_modifier(Modifier::BOLD)
-                            } else {
-                                Style::default()
-                            };
-                            let check = if is_sel { "◆ " } else { "◇ " };
                             let name = p
                                 .file_name()
                                 .map(|n| n.to_string_lossy().to_string())
                                 .unwrap_or_else(|| p.to_string_lossy().to_string());
-                            let path_str = p.to_string_lossy().to_string();
                             ListItem::new(Line::from(vec![
+                                theme::caret_in(accent, is_cur),
                                 Span::styled(
-                                    if is_cur { "▶ " } else { "  " },
-                                    Style::default().fg(BRAND_COLOR),
+                                    if is_sel { "◆ " } else { "◇ " },
+                                    Style::default().fg(if is_sel {
+                                        theme::OK
+                                    } else {
+                                        theme::INK_FAINT
+                                    }),
                                 ),
-                                Span::styled(
-                                    check,
-                                    Style::default().fg(if is_sel { C_GREEN } else { C_DIM }),
-                                ),
-                                Span::styled(
-                                    format!("{:<24}", name),
-                                    Style::default().fg(if is_cur { C_WHITE } else { C_SUBTLE }),
-                                ),
-                                Span::styled(path_str, Style::default().fg(C_DIM)),
+                                Span::raw(format!("{:<24} ", name)),
+                                Span::styled(display_dir(p), Style::default().fg(theme::INK_FAINT)),
                             ]))
-                            .style(style)
+                            .style(theme::row_style_in(selection, is_cur))
                         })
                         .collect();
-
-                    let list_title = format!(" repos ({} found, {} selected) ", repos.len(), n_sel);
                     let mut list_state = ListState::default();
                     list_state.select(Some(idx));
-                    f.render_stateful_widget(
-                        List::new(items).block(
-                            Block::default()
-                                .title(Span::styled(
-                                    list_title,
-                                    Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                                ))
-                                .borders(Borders::ALL)
-                                .border_type(border_type)
-                                .border_style(Style::default().fg(C_WHITE)),
-                        ),
-                        sub[0],
-                        &mut list_state,
-                    );
+                    f.render_stateful_widget(List::new(items), list_area, &mut list_state);
 
-                    let (ws_label, ws_style, ws_border) = match mode {
-                        PickerMode::NamingWorkspace => (
-                            " workspace name ",
-                            Style::default().fg(C_WHITE).add_modifier(Modifier::BOLD),
-                            Style::default().fg(C_WHITE),
-                        ),
-                        PickerMode::Selecting => (
-                            " workspace name (auto) ",
-                            Style::default().fg(BRAND_COLOR),
-                            Style::default().fg(BRAND_COLOR),
-                        ),
-                    };
-                    let name_content = match mode {
+                    let name_line = match mode {
                         PickerMode::NamingWorkspace => {
                             // Snap to nearest char boundary so we never slice
                             // through a multi-byte codepoint (ñ, emoji, etc.)
@@ -329,30 +256,25 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                                 &ws_name[cursor + cur_char.len_utf8()..]
                             };
                             Line::from(vec![
-                                Span::raw(" "),
-                                Span::styled(before, Style::default().fg(C_WHITE)),
+                                Span::styled(
+                                    " workspace  ",
+                                    Style::default().fg(theme::INK).add_modifier(Modifier::BOLD),
+                                ),
+                                Span::styled(before, Style::default().fg(theme::INK)),
                                 Span::styled(
                                     cur_char.to_string(),
-                                    Style::default().bg(BRAND_COLOR).fg(C_WHITE),
+                                    Style::default().bg(accent).fg(theme::INK),
                                 ),
-                                Span::styled(after, Style::default().fg(C_WHITE)),
+                                Span::styled(after, Style::default().fg(theme::INK)),
                             ])
                         }
                         PickerMode::Selecting => Line::from(vec![
-                            Span::raw(" "),
-                            Span::styled(&ws_name, Style::default().fg(C_DIM)),
+                            Span::styled(" workspace  ", Style::default().fg(theme::INK_FAINT)),
+                            Span::styled(&ws_name, Style::default().fg(theme::INK_DIM)),
+                            Span::styled("  (auto)", Style::default().fg(theme::INK_FAINT)),
                         ]),
                     };
-                    f.render_widget(
-                        Paragraph::new(name_content).block(
-                            Block::default()
-                                .title(Span::styled(ws_label, ws_style))
-                                .borders(Borders::ALL)
-                                .border_type(border_type)
-                                .border_style(ws_border),
-                        ),
-                        sub[1],
-                    );
+                    f.render_widget(Paragraph::new(name_line), inset(parts[2]));
                 }
 
                 PickerTab::Workspaces => {
@@ -360,86 +282,63 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                         f.render_widget(
                             Paragraph::new(Span::styled(
                                 "  no saved workspaces",
-                                Style::default().fg(C_DIM),
-                            ))
-                            .block(
-                                Block::default()
-                                    .borders(Borders::ALL)
-                                    .border_type(border_type)
-                                    .border_style(Style::default().fg(BRAND_COLOR)),
-                            ),
-                            chunks[2],
+                                Style::default().fg(theme::INK_FAINT),
+                            )),
+                            inset(body),
                         );
                     } else {
+                        // workspaces(28) │ repos of the selected one
                         let cols = Layout::default()
                             .direction(Direction::Horizontal)
                             .constraints([Constraint::Length(28), Constraint::Min(1)])
-                            .split(chunks[2]);
+                            .split(body);
+                        let divider = theme::divider_right();
+                        let left_pane = divider.inner(cols[0]);
+                        f.render_widget(divider, cols[0]);
+                        let spine = [cols[0].right().saturating_sub(1)];
+                        theme::tie_above(f, body, &spine);
+                        theme::tie_below(f, body, &spine);
 
-                        // Lista workspaces izquierda
-                        let ws_list_items: Vec<ListItem> = saved_ws
+                        let [left_heading, left_body] = theme::heading_and_body(left_pane);
+                        let mut spans = vec![Span::raw(" ")];
+                        spans.extend(theme::panel_title(
+                            "workspaces",
+                            Some(saved_ws.len()),
+                            !ws_panel_right,
+                        ));
+                        f.render_widget(Paragraph::new(Line::from(spans)), left_heading);
+
+                        let ws_items: Vec<ListItem> = saved_ws
                             .iter()
                             .enumerate()
                             .map(|(i, ws)| {
                                 let is_cur = i == ws_idx;
-                                let style = if is_cur {
-                                    Style::default()
-                                        .bg(SELECTED_BG)
-                                        .add_modifier(Modifier::BOLD)
-                                } else {
-                                    Style::default()
-                                };
                                 ListItem::new(Line::from(vec![
-                                    Span::styled(
-                                        if is_cur && !ws_panel_right {
-                                            "▶ "
-                                        } else {
-                                            "  "
-                                        },
-                                        Style::default().fg(BRAND_COLOR),
-                                    ),
-                                    Span::styled(
-                                        format!("{:<20}", ws.name),
-                                        Style::default().fg(if is_cur {
-                                            C_WHITE
-                                        } else {
-                                            C_SUBTLE
-                                        }),
-                                    ),
+                                    theme::caret_in(accent, is_cur && !ws_panel_right),
+                                    Span::raw(format!("{:<20}", ws.name)),
                                     Span::styled(
                                         format!(" {}", ws.repos.len()),
-                                        Style::default().fg(C_DIM),
+                                        Style::default().fg(theme::INK_FAINT),
                                     ),
                                 ]))
-                                .style(style)
+                                .style(theme::row_style_in(selection, is_cur))
                             })
                             .collect();
-
-                        let left_border = if !ws_panel_right {
-                            C_WHITE
-                        } else {
-                            BRAND_COLOR
-                        };
                         let mut left_state = ListState::default();
                         left_state.select(Some(ws_idx));
-                        f.render_stateful_widget(
-                            List::new(ws_list_items).block(
-                                Block::default()
-                                    .title(Span::styled(
-                                        " workspaces ",
-                                        Style::default().fg(left_border),
-                                    ))
-                                    .borders(Borders::ALL)
-                                    .border_type(border_type)
-                                    .border_style(Style::default().fg(left_border)),
-                            ),
-                            cols[0],
-                            &mut left_state,
-                        );
+                        f.render_stateful_widget(List::new(ws_items), left_body, &mut left_state);
 
-                        // Lista repos del workspace seleccionado (derecha)
-                        let repo_items: Vec<ListItem> = saved_ws
-                            .get(ws_idx)
+                        let [right_heading, right_body] = theme::heading_and_body(inset(cols[1]));
+                        let ws = saved_ws.get(ws_idx);
+                        let mut spans = vec![Span::raw(" ")];
+                        spans.extend(theme::panel_title(
+                            ws.map(|w| w.name.as_str()).unwrap_or("repos"),
+                            ws.map(|w| w.repos.len()),
+                            ws_panel_right,
+                        ));
+                        f.render_widget(Paragraph::new(Line::from(spans)), right_heading);
+
+                        let repo_items: Vec<ListItem> = ws
                             .map(|ws| {
                                 ws.repos
                                     .iter()
@@ -449,107 +348,65 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
                                             .map(|n| n.to_string_lossy().to_string())
                                             .unwrap_or_else(|| p.clone());
                                         ListItem::new(Line::from(vec![
-                                            Span::styled("  ", Style::default()),
+                                            Span::raw("  "),
                                             Span::styled(
-                                                format!("{:<22}", name),
-                                                Style::default().fg(C_SUBTLE),
+                                                format!("{:<22} ", name),
+                                                Style::default().fg(theme::INK_DIM),
                                             ),
-                                            Span::styled(p.as_str(), Style::default().fg(C_DIM)),
+                                            Span::styled(
+                                                display_dir(Path::new(p)),
+                                                Style::default().fg(theme::INK_FAINT),
+                                            ),
                                         ]))
                                     })
                                     .collect()
                             })
                             .unwrap_or_default();
-
-                        let ws_title = saved_ws
-                            .get(ws_idx)
-                            .map(|ws| format!(" {} — repos ", ws.name))
-                            .unwrap_or_else(|| " repos ".to_string());
-                        let right_border = if ws_panel_right { C_WHITE } else { BRAND_COLOR };
-                        f.render_widget(
-                            List::new(repo_items).block(
-                                Block::default()
-                                    .title(Span::styled(
-                                        ws_title,
-                                        Style::default().fg(right_border),
-                                    ))
-                                    .borders(Borders::ALL)
-                                    .border_type(border_type)
-                                    .border_style(Style::default().fg(right_border)),
-                            ),
-                            cols[1],
-                        );
+                        f.render_widget(List::new(repo_items), right_body);
                     }
                 }
             }
 
-            // ── Hint ────────────────────────────────────────────────────────────
-            let hint = match tab {
+            // ── Key line ────────────────────────────────────────────────────────
+            let n = selected.iter().filter(|&&s| s).count();
+            let keys: &[(&str, &str)] = match tab {
                 PickerTab::Repos => match mode {
-                    PickerMode::Selecting => {
-                        let n = selected.iter().filter(|&&s| s).count();
-                        if n == 1 {
-                            Line::from(vec![
-                                hint_key("[↑↓]"),
-                                hint_txt(" nav  "),
-                                hint_key("[space]"),
-                                hint_txt(" mark  "),
-                                hint_key("[Enter]"),
-                                hint_txt(" open repo  "),
-                                hint_key("[2]"),
-                                hint_txt(" workspaces  "),
-                                hint_key("[q]"),
-                                hint_txt(" quit"),
-                            ])
-                        } else if n > 1 {
-                            Line::from(vec![
-                                hint_key("[space]"),
-                                hint_txt(" mark  "),
-                                hint_key("[a]"),
-                                hint_txt(" all  "),
-                                hint_key("[A]"),
-                                hint_txt(" none  "),
-                                hint_key("[Enter]"),
-                                hint_txt(" create workspace  "),
-                                hint_key("[q]"),
-                                hint_txt(" quit"),
-                            ])
-                        } else {
-                            Line::from(vec![
-                                hint_key("[↑↓/jk]"),
-                                hint_txt(" nav  "),
-                                hint_key("[space]"),
-                                hint_txt(" mark  "),
-                                hint_key("[a]"),
-                                hint_txt(" all  "),
-                                hint_key("[2]"),
-                                hint_txt(" workspaces  "),
-                                hint_key("[q]"),
-                                hint_txt(" quit"),
-                            ])
-                        }
-                    }
-                    PickerMode::NamingWorkspace => Line::from(vec![
-                        hint_key("[Enter]"),
-                        hint_txt(" confirm  "),
-                        hint_key("[Esc]"),
-                        hint_txt(" cancel"),
-                    ]),
+                    PickerMode::Selecting if n == 1 => &[
+                        ("↑↓/jk", "navigate"),
+                        ("space", "mark"),
+                        ("Enter", "open repo"),
+                        ("2", "workspaces"),
+                        ("q", "quit"),
+                    ],
+                    PickerMode::Selecting if n > 1 => &[
+                        ("space", "mark"),
+                        ("a", "all"),
+                        ("A", "none"),
+                        ("Enter", "create workspace"),
+                        ("q", "quit"),
+                    ],
+                    PickerMode::Selecting => &[
+                        ("↑↓/jk", "navigate"),
+                        ("space", "mark"),
+                        ("a", "all"),
+                        ("2", "workspaces"),
+                        ("q", "quit"),
+                    ],
+                    PickerMode::NamingWorkspace => &[("Enter", "confirm"), ("Esc", "cancel")],
                 },
-                PickerTab::Workspaces => Line::from(vec![
-                    hint_key("[↑↓/jk]"),
-                    hint_txt(" nav  "),
-                    hint_key("[→/←]"),
-                    hint_txt(" foco  "),
-                    hint_key("[Enter]"),
-                    hint_txt(" open workspace  "),
-                    hint_key("[1]"),
-                    hint_txt(" repos  "),
-                    hint_key("[q]"),
-                    hint_txt(" quit"),
-                ]),
+                PickerTab::Workspaces => &[
+                    ("↑↓/jk", "navigate"),
+                    ("←→", "focus"),
+                    ("Enter", "open workspace"),
+                    ("1", "repos"),
+                    ("q", "quit"),
+                ],
             };
-            f.render_widget(Paragraph::new(hint), chunks[3]);
+            let mut spans = vec![Span::raw(" ")];
+            for (key, label) in keys {
+                spans.extend(theme::key_hint_in(accent, key, label));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)), rows[6]);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(200))? {
@@ -690,11 +547,26 @@ pub fn run_picker(start_dir: &Path) -> crate::error::Result<PickerResult> {
     Ok(result)
 }
 
-fn hint_key(s: &'static str) -> Span<'static> {
-    Span::styled(s, Style::default().fg(BRAND_COLOR))
+/// A pane's content, one column in from the rules either side, the way the
+/// TUI hands a view its area.
+fn inset(area: Rect) -> Rect {
+    Rect {
+        x: area.x + 1,
+        y: area.y,
+        width: area.width.saturating_sub(2),
+        height: area.height,
+    }
 }
-fn hint_txt(s: &'static str) -> Span<'static> {
-    Span::styled(s, Style::default().fg(C_SUBTLE))
+
+/// A path as a person would type it: the home directory shown as `~`.
+fn display_dir(path: &Path) -> String {
+    let shown = path.to_string_lossy().to_string();
+    match dirs::home_dir().map(|h| h.to_string_lossy().to_string()) {
+        Some(home) if !home.is_empty() && shown.starts_with(&home) => {
+            format!("~{}", &shown[home.len()..])
+        }
+        _ => shown,
+    }
 }
 
 fn find_git_repos(base: &Path, max_depth: usize) -> Vec<PathBuf> {

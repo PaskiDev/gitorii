@@ -582,11 +582,6 @@ impl App {
         ratatui::style::Color::Rgb(r, g, b)
     }
 
-    pub fn selected_bg(&self) -> ratatui::style::Color {
-        let (r, g, b) = self.settings.selected_bg;
-        ratatui::style::Color::Rgb(r, g, b)
-    }
-
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.status_msg = Some(msg.into());
     }
