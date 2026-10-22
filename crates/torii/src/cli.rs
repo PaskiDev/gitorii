@@ -9,6 +9,7 @@ use std::path::PathBuf;
 mod auth;
 mod clone;
 mod config;
+mod conflict_picker;
 mod fsck;
 mod history;
 mod ignore;
