@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-10-22
+
+### Fixed
+
+- **`torii restore` no longer copies the whole repository to save one
+  file.** The safety snapshot taken before discarding an edit copied
+  `.git` on every call: reverting a formatter's changes file by file
+  left 44 copies of a 112 MB `.git`. It now saves only the files about
+  to be discarded, under `worktree/`. `torii snapshot restore` writes
+  them back without touching `.git`, and `torii snapshot diff` shows
+  just those files.
+- **`torii restore` works from a subdirectory.** It opened the
+  repository at the current directory and failed with `could not find
+  repository at '.'` anywhere below the root.
+
 ## [0.16.1] - 2026-09-07
 
 ### Added
