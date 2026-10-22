@@ -98,9 +98,14 @@ fn discard(repo: &Repository, repo_path: &Path, specs: &[String], no_snapshot: b
     }
 
     // Snapshot BEFORE mutating, and only when there is something to lose.
+    // Only the dirty files are at risk — `.git` is not touched — so they are
+    // what gets saved. The paths are relative to the work tree root, which
+    // is not `repo_path` when torii runs from a subdirectory.
     if !no_snapshot {
-        match crate::snapshot::SnapshotManager::new(repo_path) {
-            Ok(mgr) => match mgr.create_snapshot(Some("pre-restore")) {
+        let files: Vec<&str> = dirty.iter().map(|s| s.as_str()).collect();
+        let root = repo.workdir().unwrap_or(repo_path);
+        match crate::snapshot::SnapshotManager::new(root) {
+            Ok(mgr) => match mgr.create_files_snapshot(Some("pre-restore"), &files) {
                 Ok(id) => println!(
                     "📸 Snapshot: {} (revert with: torii snapshot restore {})",
                     id, id

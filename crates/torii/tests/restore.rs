@@ -67,6 +67,54 @@ fn restore_takes_a_snapshot_before_it_destroys_anything() {
     );
 }
 
+/// The id printed in "📸 Snapshot: <id> (revert with: …)".
+fn snapshot_id(stdout: &str) -> String {
+    stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("📸 Snapshot: "))
+        .and_then(|rest| rest.split_whitespace().next())
+        .expect("restore should print the snapshot id")
+        .to_string()
+}
+
+#[test]
+fn the_snapshot_gives_the_discarded_edit_back() {
+    let tmp = repo_with_a_commit();
+    std::fs::create_dir(tmp.path().join("src")).unwrap();
+    std::fs::write(tmp.path().join("src/a.txt"), "one\n").unwrap();
+    assert!(torii(tmp.path(), &["save", "-am", "add src"])
+        .status
+        .success());
+    std::fs::write(tmp.path().join("note.txt"), "work worth keeping\n").unwrap();
+    std::fs::write(tmp.path().join("src/a.txt"), "also worth keeping\n").unwrap();
+
+    let out = torii(tmp.path(), &["restore", "note.txt", "src"]);
+    assert!(out.status.success(), "restore failed: {out:?}");
+    let id = snapshot_id(&String::from_utf8_lossy(&out.stdout));
+    assert_eq!(read(&tmp, "note.txt"), "committed\n");
+
+    let back = torii(tmp.path(), &["snapshot", "restore", &id]);
+    assert!(back.status.success(), "snapshot restore failed: {back:?}");
+    assert_eq!(read(&tmp, "note.txt"), "work worth keeping\n");
+    assert_eq!(read(&tmp, "src/a.txt"), "also worth keeping\n");
+}
+
+#[test]
+fn the_snapshot_does_not_copy_the_repo() {
+    // One `.git` copy per call filled 4.9 GB when a formatter's changes were
+    // reverted file by file. Only the edited files are at risk.
+    let tmp = repo_with_a_commit();
+    std::fs::write(tmp.path().join("note.txt"), "edit\n").unwrap();
+
+    let out = torii(tmp.path(), &["restore", "note.txt"]);
+    let id = snapshot_id(&String::from_utf8_lossy(&out.stdout));
+    let dir = tmp.path().join(".git/torii/snapshots").join(&id);
+    assert!(
+        !dir.join("git_backup").exists(),
+        "a pre-restore snapshot must not copy the gitdir"
+    );
+}
+
 #[test]
 fn no_snapshot_skips_the_safety_net() {
     let tmp = repo_with_a_commit();

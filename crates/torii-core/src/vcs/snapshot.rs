@@ -241,6 +241,37 @@ impl SnapshotManager {
     /// Create a new snapshot
     pub fn create_snapshot(&self, name: Option<&str>) -> Result<String> {
         let repo = GitRepo::open(&self.repo_path)?;
+        let (id, snapshot_dir) = self.new_snapshot_dir(&repo, name)?;
+
+        self.create_bundle(&snapshot_dir, &repo)?;
+        self.capture_workdir(&snapshot_dir, repo.repository())?;
+
+        Ok(id)
+    }
+
+    /// Snapshot only `paths` (relative to the work tree root) as they are on
+    /// disk now, into `worktree/` and with no `git_backup`. For an operation
+    /// that overwrites a few files and leaves `.git` alone: a gitdir copy
+    /// costs the whole repo per call, which filled 4.9 GB when a formatter's
+    /// changes were reverted file by file.
+    pub fn create_files_snapshot(&self, name: Option<&str>, paths: &[&str]) -> Result<String> {
+        let repo = GitRepo::open(&self.repo_path)?;
+        let (id, snapshot_dir) = self.new_snapshot_dir(&repo, name)?;
+
+        let wt = snapshot_dir.join("worktree");
+        for path in paths {
+            let dst = wt.join(path);
+            if let Some(parent) = dst.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(self.repo_path.join(path), &dst)?;
+        }
+
+        Ok(id)
+    }
+
+    /// Reserve a fresh `<snapshots>/<id>/` and write its metadata.
+    fn new_snapshot_dir(&self, repo: &GitRepo, name: Option<&str>) -> Result<(String, PathBuf)> {
         let timestamp = Utc::now();
         // Include millis so back-to-back snapshots in the same second don't
         // collide and silently overwrite each other (the original `_HMS`
@@ -280,10 +311,7 @@ impl SnapshotManager {
         let metadata_json = serde_json::to_string_pretty(&metadata)?;
         fs::write(metadata_path, metadata_json)?;
 
-        self.create_bundle(&snapshot_dir, &repo)?;
-        self.capture_workdir(&snapshot_dir, repo.repository())?;
-
-        Ok(id)
+        Ok((id, snapshot_dir))
     }
 
     /// Create a git bundle for the snapshot
@@ -467,6 +495,12 @@ impl SnapshotManager {
         }
 
         let snapshot_git = snapshot_dir.join("git_backup");
+        let worktree = snapshot_dir.join("worktree");
+        // A files snapshot: put its files back, leave `.git` alone.
+        if !snapshot_git.exists() && worktree.is_dir() {
+            self.copy_dir_recursive(&worktree, &self.repo_path)?;
+            return Ok(());
+        }
         if !snapshot_git.exists() {
             return Err(ToriiError::Snapshot(format!(
                 "Snapshot {} has no git_backup",
@@ -524,7 +558,6 @@ impl SnapshotManager {
             .map_err(ToriiError::Git)?;
         }
 
-        let worktree = snapshot_dir.join("worktree");
         if worktree.exists() {
             self.copy_dir_recursive(&worktree, &self.repo_path)?;
         }
@@ -591,20 +624,24 @@ impl SnapshotManager {
             return Err(ToriiError::Snapshot(format!("Snapshot not found: {}", id)));
         }
         let git_backup = snapshot_dir.join("git_backup");
-        if !git_backup.is_dir() {
+        let worktree = snapshot_dir.join("worktree");
+        let mut files = if git_backup.is_dir() {
+            let snap_repo = git2::Repository::open(&git_backup).map_err(ToriiError::Git)?;
+            let blobs = match snap_repo.head().and_then(|h| h.peel_to_tree()) {
+                Ok(tree) => tree_blobs(&snap_repo, &tree)?,
+                Err(_) => BTreeMap::new(),
+            };
+            blobs
+        } else if worktree.is_dir() {
+            // A files snapshot holds only some files: everything else is
+            // as it is now.
+            self.current_files()?
+        } else {
             return Err(ToriiError::Snapshot(format!(
                 "Snapshot {} has no git_backup to diff against",
                 id
             )));
-        }
-        let snap_repo = git2::Repository::open(&git_backup).map_err(ToriiError::Git)?;
-        let mut files = BTreeMap::new();
-        if let Ok(head) = snap_repo.head() {
-            if let Ok(tree) = head.peel_to_tree() {
-                files = tree_blobs(&snap_repo, &tree)?;
-            }
-        }
-        let worktree = snapshot_dir.join("worktree");
+        };
         if worktree.is_dir() {
             overlay_dir(&worktree, "", &mut files)?;
         }
@@ -1098,6 +1135,36 @@ mod snapshot_location_tests {
         assert!(
             names.contains(&"tracked.txt") && names.contains(&"new.txt"),
             "{names:?}"
+        );
+    }
+
+    #[test]
+    fn a_files_snapshot_saves_and_diffs_only_its_files() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path();
+        init_repo(dir);
+        commit_file(dir, "a.txt", "a committed\n", "add a");
+        commit_file(dir, "b.txt", "b committed\n", "add b");
+        std::fs::write(dir.join("a.txt"), "a edited\n").unwrap();
+        let mgr = SnapshotManager::new(dir).unwrap();
+        let id = mgr
+            .create_files_snapshot(Some("pre-restore"), &["a.txt"])
+            .unwrap();
+        assert!(!mgr.snapshots_dir.join(&id).join("git_backup").exists());
+
+        std::fs::write(dir.join("a.txt"), "a committed\n").unwrap();
+        let files = mgr.diff_files_against_current(&id).unwrap();
+        let names: Vec<_> = files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(names, ["a.txt"], "only the saved file differs");
+
+        mgr.restore_snapshot(&id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "a edited\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("b.txt")).unwrap(),
+            "b committed\n"
         );
     }
 
