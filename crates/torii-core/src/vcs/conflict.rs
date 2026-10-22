@@ -366,11 +366,7 @@ pub fn resolve_files(repo: &Repository, op: OpKind, res: &Resolution) -> Result<
     let mut any = false;
     for (rel, plan) in &plans {
         match plan {
-            Plan::Remove => match std::fs::remove_file(workdir.join(rel)) {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(e.into()),
-            },
+            Plan::Remove => {}
             // Gitlinks have no file content to check out.
             Plan::Entry(e, _) if e.mode & S_IFMT == 0o160000 => {}
             Plan::Entry(..) => {
@@ -386,6 +382,24 @@ pub fn resolve_files(repo: &Repository, op: OpKind, res: &Resolution) -> Result<
     }
     if any {
         repo.checkout_index(Some(&mut index), Some(&mut cb))?;
+    }
+
+    // Removals come last so a failure here cannot leave other resolved files
+    // with conflict markers in the working tree.
+    for (rel, plan) in &plans {
+        if !matches!(plan, Plan::Remove) {
+            continue;
+        }
+        let full = workdir.join(rel);
+        // Submodule directories stay on disk, as in git.
+        if std::fs::symlink_metadata(&full).is_ok_and(|m| m.is_dir()) {
+            continue;
+        }
+        match std::fs::remove_file(&full) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => eprintln!("warning: could not remove {}: {e}", rel.display()),
+        }
     }
 
     let mut left = 0;
@@ -785,6 +799,39 @@ mod tests {
         let e = idx.get_path(std::path::Path::new("sub"), 0).unwrap();
         assert_eq!(e.mode, 0o160000);
         assert_eq!(e.id, git2::Oid::from_bytes(&[3u8; 20]).unwrap());
+    }
+
+    #[test]
+    fn removing_submodule_dir_keeps_dir_and_resolves_other_files() {
+        let (dir, repo) = hunk_repo();
+        std::fs::create_dir_all(dir.path().join("sub")).unwrap();
+        write(&dir, "sub/inner.txt", b"x\n");
+        let mut idx = repo.index().unwrap();
+        // Remote side has no entry for `sub`: choosing it deletes the gitlink.
+        for (stage, byte) in [(1u16, 1u8), (2, 2)] {
+            idx.add(&git2::IndexEntry {
+                ctime: git2::IndexTime::new(0, 0),
+                mtime: git2::IndexTime::new(0, 0),
+                dev: 0,
+                ino: 0,
+                mode: 0o160000,
+                uid: 0,
+                gid: 0,
+                file_size: 0,
+                id: git2::Oid::from_bytes(&[byte; 20]).unwrap(),
+                flags: stage << 12,
+                flags_extended: 0,
+                path: b"sub".to_vec(),
+            })
+            .unwrap();
+        }
+        idx.write().unwrap();
+        assert!(read(&dir, "f.txt").contains("<<<<<<<"));
+        let left = resolve_files(&repo, OpKind::Merge, &Resolution::All(Side::Remote)).unwrap();
+        assert_eq!(left, 0);
+        assert!(!read(&dir, "f.txt").contains("<<<<<<<"));
+        assert!(dir.path().join("sub").is_dir());
+        assert!(list_conflicts(&repo).unwrap().is_empty());
     }
 
     #[test]

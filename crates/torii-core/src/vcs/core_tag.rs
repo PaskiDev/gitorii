@@ -107,7 +107,14 @@ impl GitRepo {
                     .unwrap_or_else(|_| "HEAD".to_string()),
                 remote_label: format!("{} {}", &id[..7], commit.summary().unwrap_or("")),
             };
-            let left = resolve_with(&self.repo, &ctx, r)?;
+            let left = match resolve_with(&self.repo, &ctx, r) {
+                Ok(n) => n,
+                Err(e) => {
+                    println!("⚠️  Conflicts detected!");
+                    println!("💡 Resolve conflicts and run: torii cherry-pick --continue");
+                    return Err(e);
+                }
+            };
             if left > 0 {
                 println!("⚠️  Conflicts detected!");
                 println!("💡 Resolve conflicts and run: torii cherry-pick --continue");

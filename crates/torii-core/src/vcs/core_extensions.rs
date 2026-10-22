@@ -1439,7 +1439,15 @@ impl GitRepo {
                         .unwrap_or_else(|_| "HEAD".to_string()),
                     remote_label: branch_name.to_string(),
                 };
-                let left = resolve_with(&self.repo, &ctx, r)?;
+                let left = match resolve_with(&self.repo, &ctx, r) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        println!(
+                            "⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\""
+                        );
+                        return Err(e.into());
+                    }
+                };
                 if left > 0 {
                     println!(
                         "⚠️  Merge conflicts detected. Resolve them and run: torii save -m \"merge\""
@@ -1531,7 +1539,13 @@ impl GitRepo {
                     local_label: label,
                     remote_label: branch_name.to_string(),
                 };
-                let left = resolve_with(&self.repo, &ctx, r)?;
+                let left = match resolve_with(&self.repo, &ctx, r) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
+                        return Err(e.into());
+                    }
+                };
                 if left > 0 {
                     println!("⚠️  Rebase conflict. Resolve conflicts and run: torii history rebase --continue");
                     return Ok(IntegrateOutcome::Conflicts(left));

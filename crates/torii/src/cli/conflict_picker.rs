@@ -113,8 +113,16 @@ impl ConflictResolver for TerminalResolver {
         loop {
             let Event::Key(k) = event::read()? else { continue };
             match prompt_key(&k) {
-                Some(PromptKey::Local) => return Ok(Resolution::All(Side::Local)),
-                Some(PromptKey::Remote) => return Ok(Resolution::All(Side::Remote)),
+                Some(PromptKey::Local) => {
+                    write!(err, "Local wins in all {} conflicted file(s)…\r\n", files.len())?;
+                    err.flush()?;
+                    return Ok(Resolution::All(Side::Local));
+                }
+                Some(PromptKey::Remote) => {
+                    write!(err, "Remote wins in all {} conflicted file(s)…\r\n", files.len())?;
+                    err.flush()?;
+                    return Ok(Resolution::All(Side::Remote));
+                }
                 Some(PromptKey::Manual) => return Ok(Resolution::Manual),
                 Some(PromptKey::ByFile) => {
                     let r = run_selector(&mut err, files)?;
@@ -277,6 +285,11 @@ fn fit_path(s: &str, width: usize) -> String {
     std::iter::once('…').chain(s.chars().skip(n - keep)).collect()
 }
 
+/// Replace control characters so a hostile file name cannot inject escapes.
+fn sanitize(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() { '?' } else { c }).collect()
+}
+
 fn draw_selector(w: &mut impl Write, st: &PickerState) -> Result<()> {
     let (cols, rows) = terminal::size().unwrap_or((80, 24));
     // One column spare so a full line never triggers the terminal's auto-wrap.
@@ -289,7 +302,7 @@ fn draw_selector(w: &mut impl Write, st: &PickerState) -> Result<()> {
     for (i, (path, fs)) in st.files.iter().enumerate().take(end).skip(start) {
         let (label, color) = state_label(*fs);
         let mark = if i == st.cursor { ">" } else { " " };
-        let path = fit_path(path, width.saturating_sub(PREFIX_COLS));
+        let path = fit_path(&sanitize(path), width.saturating_sub(PREFIX_COLS));
         out.push(format!("{mark} {} {path}", label.with(color)));
     }
     let hidden_below = st.files.len() - end;
@@ -431,6 +444,12 @@ mod tests {
         assert_eq!(fit_path("abc", 6), "abc");
         assert_eq!(fit_start("abcdefghij", 6), "abcde…");
         assert_eq!(fit_start("abc", 6), "abc");
+    }
+
+    #[test]
+    fn sanitize_replaces_control_chars() {
+        assert_eq!(sanitize("a\x1b[31mb\nc\u{7}d\u{9b}e"), "a?[31mb?c?d?e");
+        assert_eq!(sanitize("src/ñ.rs"), "src/ñ.rs");
     }
 
     #[test]

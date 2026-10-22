@@ -259,11 +259,11 @@ enum Commands {
         preview: bool,
 
         /// On conflicts, keep local changes in conflicting hunks (no prompt)
-        #[arg(long, conflicts_with_all = ["remote", "preview", "pull", "push", "fetch", "force"])]
+        #[arg(long, requires = "branch", conflicts_with_all = ["remote", "preview", "pull", "push", "fetch", "force", "verify"])]
         local: bool,
 
         /// On conflicts, take incoming changes in conflicting hunks (no prompt)
-        #[arg(long, conflicts_with_all = ["preview", "pull", "push", "fetch", "force"])]
+        #[arg(long, requires = "branch", conflicts_with_all = ["preview", "pull", "push", "fetch", "force", "verify"])]
         remote: bool,
 
         /// Verify local vs remote head without pulling/pushing
@@ -1653,7 +1653,11 @@ mod tests {
         assert!(matches!(c.command, Commands::CherryPick { remote: true, .. }));
         assert!(parse(&["cherry-pick", "--continue", "--local"]).is_err());
         assert!(parse(&["cherry-pick", "--abort", "--remote"]).is_err());
-        for other in ["--preview", "--pull", "--push", "--fetch", "--force"] {
+        assert!(parse(&["sync", "--local"]).is_err());
+        assert!(parse(&["sync", "--remote"]).is_err());
+        assert!(parse(&["sync", "origin/main", "--verify", "--local"]).is_err());
+        assert!(parse(&["sync", "origin/main", "--verify", "--remote"]).is_err());
+        for other in ["--preview", "--pull", "--push", "--fetch", "--force", "--verify"] {
             assert!(parse(&["sync", "origin/main", other, "--local"]).is_err(), "{other}");
             assert!(parse(&["sync", "origin/main", other, "--remote"]).is_err(), "{other}");
         }
