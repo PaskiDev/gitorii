@@ -1,7 +1,5 @@
 # Security Policy
 
-**Read this in other languages**: [Español](docs/i18n/security/SECURITY.es.md) | [日本語](docs/i18n/security/SECURITY.ja.md) | [Deutsch](docs/i18n/security/SECURITY.de.md) | [Français](docs/i18n/security/SECURITY.fr.md)
-
 ## 🔒 Reporting a Vulnerability
 
 **Please DO NOT open a public issue for security vulnerabilities.**

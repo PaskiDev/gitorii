@@ -1,7 +1,5 @@
 # Contributing to Torii ⛩️
 
-**Read this in other languages**: [Español](docs/i18n/contributing/CONTRIBUTING.es.md) | [日本語](docs/i18n/contributing/CONTRIBUTING.ja.md) | [Deutsch](docs/i18n/contributing/CONTRIBUTING.de.md) | [Français](docs/i18n/contributing/CONTRIBUTING.fr.md)
-
 Thank you for your interest in contributing to Torii! 🎉
 
 ## 📋 Table of Contents

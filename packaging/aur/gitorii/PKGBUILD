@@ -51,5 +51,5 @@ package() {
 	install -Dm0644 LICENSE-MIT "$pkgdir/usr/share/licenses/$pkgname/LICENSE-MIT"
 	install -Dm0644 LICENSE-APACHE "$pkgdir/usr/share/licenses/$pkgname/LICENSE-APACHE"
 	install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
-	install -Dm0644 COMMANDS.md "$pkgdir/usr/share/doc/$pkgname/COMMANDS.md"
+	install -Dm0644 docs/commands.md "$pkgdir/usr/share/doc/$pkgname/commands.md"
 }
